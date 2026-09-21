@@ -1,0 +1,569 @@
+//! PostGIS v1 working-copy adapter. Uses one database transaction and locks all
+//! tracked tables in stable order. Triggers remain enabled during checkout.
+use fallible_iterator::FallibleIterator;
+use postgres::{Client, Config, Row, types::ToSql};
+use postgres_native_tls::MakeTlsConnector;
+use spatial_version_core::{adapter::*, *};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+    time::Duration,
+};
+
+pub struct PostgisProvider {
+    connection_string: String,
+}
+impl PostgisProvider {
+    pub fn new(connection_string: impl Into<String>) -> Self {
+        Self {
+            connection_string: connection_string.into(),
+        }
+    }
+    pub fn from_env(name: &str) -> Result<Self> {
+        std::env::var(name)
+            .map(Self::new)
+            .map_err(|_| Error::Invalid(format!("set {name} to a PostgreSQL connection string")))
+    }
+}
+// Intentionally no Debug: connection strings may contain passwords.
+fn pg_error(error: postgres::Error) -> Error {
+    match error.as_db_error() {
+        Some(db) => Error::Database(format!("SQLSTATE {}: {}", db.code().code(), db.message())),
+        None => Error::Database(
+            "connection or protocol failure; connection details are redacted".into(),
+        ),
+    }
+}
+fn ident(value: &str) -> Result<String> {
+    if value.is_empty() || value.len() > 63 || value.contains('\0') {
+        return Err(Error::Invalid("invalid PostgreSQL identifier".into()));
+    }
+    Ok(format!("\"{}\"", value.replace('"', "\"\"")))
+}
+fn table(schema: &str, name: &str) -> Result<String> {
+    Ok(format!("{}.{}", ident(schema)?, ident(name)?))
+}
+fn literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+fn native(field: &Field) -> Result<&str> {
+    field
+        .metadata
+        .get("postgres.type")
+        .map(String::as_str)
+        .ok_or_else(|| Error::Invalid("missing PostgreSQL type metadata".into()))
+}
+fn key_field(schema: &Schema) -> Result<&Field> {
+    schema
+        .fields
+        .iter()
+        .find(|f| f.name == schema.primary_key)
+        .ok_or_else(|| Error::Invalid("primary-key field is missing".into()))
+}
+fn projection(schema: &Schema) -> Result<String> {
+    schema
+        .fields
+        .iter()
+        .map(|f| {
+            let column = format!("r.{}", ident(&f.name)?);
+            Ok(if f.geometry {
+                format!("encode(ST_AsEWKB({column}, 'XDR'), 'hex')")
+            } else {
+                format!("{column}::text")
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|v| v.join(","))
+}
+fn decode(schema: &Schema, row: &Row) -> Result<Record> {
+    let mut fields = BTreeMap::new();
+    let mut key = None;
+    for (i, field) in schema.fields.iter().enumerate() {
+        let value: Option<String> = row.try_get(i).map_err(pg_error)?;
+        if field.name == schema.primary_key {
+            key = value.clone();
+        }
+        let cell = match value {
+            None => Cell::Null,
+            Some(v) if field.geometry => Cell::Geometry(v),
+            Some(v) => Cell::Text(v),
+        };
+        fields.insert(field.name.clone(), cell);
+    }
+    let record = Record {
+        key: key.ok_or_else(|| Error::Database("NULL primary key".into()))?,
+        fields,
+    };
+    schema.validate(&record)?;
+    Ok(record)
+}
+fn parameters(schema: &Schema, record: &Record) -> Result<Vec<Option<String>>> {
+    schema.validate(record)?;
+    schema
+        .fields
+        .iter()
+        .map(|f| match record.fields.get(&f.name) {
+            Some(Cell::Null) => Ok(None),
+            Some(Cell::Text(v) | Cell::Geometry(v)) => Ok(Some(v.clone())),
+            _ => Err(Error::Invalid("unsupported cell for PostGIS".into())),
+        })
+        .collect()
+}
+fn casts(schema: &Schema) -> Result<Vec<String>> {
+    schema
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let p = i + 1;
+            let value = if f.geometry {
+                format!("ST_GeomFromEWKB(decode(${p}::text,'hex'))")
+            } else {
+                format!("${p}::text")
+            };
+            Ok(format!("({value})::{}", native(f)?))
+        })
+        .collect()
+}
+
+struct PostgisTransaction {
+    client: Client,
+    repository_id: String,
+    active: bool,
+}
+impl WorkingCopyProvider for PostgisProvider {
+    fn name(&self) -> &'static str {
+        "postgis"
+    }
+    fn begin(
+        &self,
+        repository_id: &str,
+        initial_head: &ObjectId,
+        bindings: &BTreeMap<String, Binding>,
+        extra_table: Option<(&str, &str)>,
+    ) -> Result<Box<dyn WorkingCopyTransaction>> {
+        let mut config = Config::from_str(&self.connection_string).map_err(|_| {
+            Error::Invalid("invalid PostgreSQL connection string (redacted)".into())
+        })?;
+        config
+            .connect_timeout(Duration::from_secs(10))
+            .application_name("spatial-version");
+        let tls = native_tls::TlsConnector::builder()
+            .build()
+            .map_err(|_| Error::Database("failed to initialize TLS".into()))?;
+        let mut client = config
+            .connect(MakeTlsConnector::new(tls))
+            .map_err(pg_error)?;
+        client.batch_execute("BEGIN; SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='120s';
+            SET LOCAL timezone='UTC'; SET LOCAL datestyle='ISO, YMD'; SET LOCAL intervalstyle='iso_8601';
+            SET LOCAL bytea_output='hex'; SET LOCAL extra_float_digits=3;
+            SET LOCAL standard_conforming_strings=on;").map_err(pg_error)?;
+        let mut session = PostgisTransaction {
+            client,
+            repository_id: repository_id.into(),
+            active: true,
+        };
+        let exists: bool = session
+            .client
+            .query_one(
+                "SELECT to_regclass('_spatial_version.repositories') IS NOT NULL",
+                &[],
+            )
+            .map_err(pg_error)?
+            .get(0);
+        if !exists {
+            session
+                .client
+                .query_one("SELECT pg_advisory_xact_lock(1937142839::bigint)", &[])
+                .map_err(pg_error)?;
+            session
+                .client
+                .batch_execute(include_str!("bootstrap.sql"))
+                .map_err(pg_error)?;
+        }
+        let version: i32 = session
+            .client
+            .query_one("SELECT version FROM _spatial_version.format", &[])
+            .map_err(pg_error)?
+            .get(0);
+        if version != 1 {
+            return Err(Error::Unsupported("PostGIS tracking schema version".into()));
+        }
+        let hash = blake3::hash(repository_id.as_bytes());
+        let mut key_bytes = [0u8; 8];
+        key_bytes.copy_from_slice(&hash.as_bytes()[..8]);
+        let lock_key = i64::from_be_bytes(key_bytes);
+        session
+            .client
+            .query_one("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
+            .map_err(pg_error)?;
+        let marker = session
+            .client
+            .query_opt(
+                "SELECT head FROM _spatial_version.repositories WHERE id=$1",
+                &[&repository_id],
+            )
+            .map_err(pg_error)?;
+        if marker.is_none() {
+            if !bindings.is_empty() {
+                return Err(Error::Recovery(
+                    "this database is not the registered working copy".into(),
+                ));
+            }
+            session
+                .client
+                .execute(
+                    "INSERT INTO _spatial_version.repositories(id,head) VALUES($1,$2)",
+                    &[&repository_id, &initial_head.as_str()],
+                )
+                .map_err(pg_error)?;
+        }
+        let mut tables: BTreeSet<(String, String)> = bindings
+            .values()
+            .map(|b| (b.schema_name.clone(), b.table_name.clone()))
+            .collect();
+        if let Some((schema, name)) = extra_table {
+            tables.insert((schema.into(), name.into()));
+        }
+        for (schema, name) in tables {
+            session
+                .client
+                .batch_execute(&format!(
+                    "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
+                    table(&schema, &name)?
+                ))
+                .map_err(pg_error)?;
+        }
+        Ok(Box::new(session))
+    }
+}
+impl PostgisTransaction {
+    fn table_oid(&mut self, schema: &str, name: &str) -> Result<i64> {
+        self.client.query_opt("SELECT c.oid::bigint FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2",&[&schema,&name]).map_err(pg_error)?
+            .map(|r|r.get(0)).ok_or_else(||Error::NotFound(format!("table {schema}.{name}")))
+    }
+}
+impl WorkingCopyTransaction for PostgisTransaction {
+    fn marker(&mut self) -> Result<DatabaseMarker> {
+        let r = self
+            .client
+            .query_one(
+                "SELECT head,operation FROM _spatial_version.repositories WHERE id=$1",
+                &[&self.repository_id],
+            )
+            .map_err(pg_error)?;
+        Ok(DatabaseMarker {
+            head: r.get(0),
+            operation: r.get(1),
+        })
+    }
+    fn inspect(&mut self, schema_name: &str, table_name: &str) -> Result<Schema> {
+        table(schema_name, table_name)?;
+        if schema_name == "_spatial_version"
+            || schema_name.starts_with("pg_")
+            || schema_name == "information_schema"
+        {
+            return Err(Error::Invalid(
+                "system and tracking schemas cannot be imported".into(),
+            ));
+        }
+        let oid = self.table_oid(schema_name, table_name)?;
+        let flags = self.client.query_one("SELECT relkind::text,relrowsecurity,EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid=c.oid OR inhparent=c.oid) FROM pg_class c WHERE oid=$1::bigint::oid",&[&oid]).map_err(pg_error)?;
+        if flags.get::<_, String>(0) != "r" || flags.get::<_, bool>(1) || flags.get::<_, bool>(2) {
+            return Err(Error::Unsupported(
+                "views, partitioned/inherited tables and row-level security".into(),
+            ));
+        }
+        let foreign_keys: bool = self.client.query_one("SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE contype='f' AND (conrelid=$1::bigint::oid OR confrelid=$1::bigint::oid))",&[&oid]).map_err(pg_error)?.get(0);
+        if foreign_keys {
+            return Err(Error::Unsupported(
+                "foreign-key relationships in tracked tables".into(),
+            ));
+        }
+        let custom_triggers: bool = self.client.query_one("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=$1::bigint::oid AND NOT tgisinternal AND tgname NOT IN ('sv_track_row_v1','sv_reject_truncate_v1'))",&[&oid]).map_err(pg_error)?.get(0);
+        if custom_triggers {
+            return Err(Error::Unsupported("user triggers on tracked tables".into()));
+        }
+        let keys = self.client.query("SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=ANY(i.indkey) WHERE i.indrelid=$1::bigint::oid AND i.indisprimary ORDER BY a.attnum",&[&oid]).map_err(pg_error)?;
+        if keys.len() != 1 {
+            return Err(Error::Unsupported(
+                "exactly one primary-key column is required".into(),
+            ));
+        }
+        let primary_key: String = keys[0].get(0);
+        let columns=self.client.query("SELECT a.attname,t.typname,format_type(a.atttypid,a.atttypmod),NOT a.attnotnull,
+            a.attidentity::text,a.attgenerated::text,COALESCE(pg_get_expr(d.adbin,d.adrelid),'')
+            FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid
+            LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+            WHERE a.attrelid=$1::bigint::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum",&[&oid]).map_err(pg_error)?;
+        let mut fields = Vec::new();
+        let supported = [
+            "int2",
+            "int4",
+            "int8",
+            "float4",
+            "float8",
+            "numeric",
+            "bool",
+            "text",
+            "varchar",
+            "uuid",
+            "date",
+            "timestamp",
+            "timestamptz",
+            "jsonb",
+            "bytea",
+            "geometry",
+        ];
+        for r in columns {
+            let name: String = r.get(0);
+            let typ: String = r.get(1);
+            let native_type: String = r.get(2);
+            if !supported.contains(&typ.as_str()) {
+                return Err(Error::Unsupported(format!(
+                    "PostgreSQL type {typ} in field {name}"
+                )));
+            }
+            if !r.get::<_, String>(4).is_empty() || !r.get::<_, String>(5).is_empty() {
+                return Err(Error::Unsupported("identity/generated columns".into()));
+            }
+            if name == primary_key
+                && !["int2", "int4", "int8", "text", "varchar", "uuid"].contains(&typ.as_str())
+            {
+                return Err(Error::Unsupported(
+                    "primary key must be integer, text/varchar or UUID".into(),
+                ));
+            }
+            let geometry = typ == "geometry";
+            fields.push(Field {
+                name,
+                logical_type: typ,
+                codec: if geometry {
+                    "ewkb-xdr/v1".into()
+                } else {
+                    "postgres-text/v1".into()
+                },
+                nullable: r.get(3),
+                geometry,
+                metadata: BTreeMap::from([
+                    ("postgres.type".into(), native_type),
+                    ("postgres.default".into(), r.get(6)),
+                ]),
+            });
+        }
+        let constraints:Vec<String>=self.client.query("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid=$1::bigint::oid ORDER BY contype,pg_get_constraintdef(oid)",&[&oid]).map_err(pg_error)?.into_iter().map(|r|r.get(0)).collect();
+        Ok(Schema {
+            version: 1,
+            kind: if fields.iter().any(|f| f.geometry) {
+                DatasetKind::Vector
+            } else {
+                DatasetKind::Table
+            },
+            primary_key,
+            fields,
+            metadata: BTreeMap::from([(
+                "postgres.constraints".into(),
+                serde_json::to_string(&constraints)?,
+            )]),
+        })
+    }
+    fn register(&mut self, dataset: &str, binding: &Binding) -> Result<()> {
+        let oid = self.table_oid(&binding.schema_name, &binding.table_name)?;
+        if self.client.query_opt("SELECT repository_id FROM _spatial_version.tracked WHERE table_oid=$1::bigint::oid",&[&oid]).map_err(pg_error)?.is_some() {
+            return Err(Error::Conflict("table is already tracked by a repository".into()));
+        }
+        self.client.execute("INSERT INTO _spatial_version.tracked(table_oid,repository_id,dataset) VALUES($1::bigint::oid,$2,$3)",&[&oid,&self.repository_id,&dataset]).map_err(pg_error)?;
+        let table = table(&binding.schema_name, &binding.table_name)?;
+        self.client
+            .batch_execute(&format!(
+                "CREATE TRIGGER sv_track_row_v1 AFTER INSERT OR UPDATE OR DELETE ON {table}
+            FOR EACH ROW EXECUTE FUNCTION _spatial_version.track_row_v1({},{},{});
+            CREATE TRIGGER sv_reject_truncate_v1 BEFORE TRUNCATE ON {table}
+            FOR EACH STATEMENT EXECUTE FUNCTION _spatial_version.reject_truncate_v1();",
+                literal(&self.repository_id),
+                literal(dataset),
+                literal(&binding.schema.primary_key)
+            ))
+            .map_err(pg_error)?;
+        Ok(())
+    }
+    fn verify(&mut self, dataset: &str, binding: &Binding) -> Result<()> {
+        let actual = self.inspect(&binding.schema_name, &binding.table_name)?;
+        if actual != binding.schema {
+            return Err(Error::Unsupported(format!(
+                "schema drift in dataset {dataset}; DDL is not versioned"
+            )));
+        }
+        let oid = self.table_oid(&binding.schema_name, &binding.table_name)?;
+        let tracked=self.client.query_opt("SELECT repository_id,dataset FROM _spatial_version.tracked WHERE table_oid=$1::bigint::oid",&[&oid]).map_err(pg_error)?;
+        if tracked.is_none_or(|r| {
+            r.get::<_, String>(0) != self.repository_id || r.get::<_, String>(1) != dataset
+        }) {
+            return Err(Error::Recovery(format!(
+                "missing or mismatched tracking for {dataset}"
+            )));
+        }
+        let count:i64=self.client.query_one("SELECT count(*) FROM pg_trigger WHERE tgrelid=$1::bigint::oid AND tgenabled IN ('O','A') AND
+            ((tgname='sv_track_row_v1' AND tgfoid='_spatial_version.track_row_v1'::regproc AND tgtype=29) OR
+             (tgname='sv_reject_truncate_v1' AND tgfoid='_spatial_version.reject_truncate_v1'::regproc AND tgtype=34))",&[&oid]).map_err(pg_error)?.get(0);
+        if count != 2 {
+            return Err(Error::Recovery(format!(
+                "tracking triggers missing/disabled for {dataset}"
+            )));
+        }
+        Ok(())
+    }
+    fn scan(
+        &mut self,
+        binding: &Binding,
+        visit: &mut dyn FnMut(Record) -> Result<()>,
+    ) -> Result<()> {
+        let query = format!(
+            "SELECT {} FROM {} r ORDER BY r.{}::text COLLATE \"C\"",
+            projection(&binding.schema)?,
+            table(&binding.schema_name, &binding.table_name)?,
+            ident(&binding.schema.primary_key)?
+        );
+        let mut rows = self
+            .client
+            .query_raw(&query, std::iter::empty::<&(dyn ToSql + Sync)>())
+            .map_err(pg_error)?;
+        while let Some(row) = rows.next().map_err(pg_error)? {
+            visit(decode(&binding.schema, &row)?)?;
+        }
+        Ok(())
+    }
+    fn dirty_keys(&mut self, dataset: &str) -> Result<Vec<String>> {
+        Ok(self.client.query("SELECT pk FROM _spatial_version.dirty WHERE repository_id=$1 AND dataset=$2 ORDER BY pk COLLATE \"C\"",&[&self.repository_id,&dataset]).map_err(pg_error)?.into_iter().map(|r|r.get(0)).collect())
+    }
+    fn read(&mut self, binding: &Binding, key: &str) -> Result<Option<Record>> {
+        let query = format!(
+            "SELECT {} FROM {} r WHERE r.{}=($1::text)::{}",
+            projection(&binding.schema)?,
+            table(&binding.schema_name, &binding.table_name)?,
+            ident(&binding.schema.primary_key)?,
+            native(key_field(&binding.schema)?)?
+        );
+        self.client
+            .query_opt(&query, &[&key])
+            .map_err(pg_error)?
+            .map(|r| decode(&binding.schema, &r))
+            .transpose()
+    }
+    fn normalize(&mut self, binding: &Binding, record: &Record) -> Result<Record> {
+        let params = parameters(&binding.schema, record)?;
+        let refs: Vec<&(dyn ToSql + Sync)> =
+            params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
+        let expressions = casts(&binding.schema)?
+            .into_iter()
+            .zip(&binding.schema.fields)
+            .map(|(expr, field)| Ok(format!("{expr} AS {}", ident(&field.name)?)))
+            .collect::<Result<Vec<_>>>()?;
+        let query = format!(
+            "SELECT {} FROM (SELECT {}) r",
+            projection(&binding.schema)?,
+            expressions.join(",")
+        );
+        let row = self.client.query_one(&query, &refs).map_err(pg_error)?;
+        let normalized = decode(&binding.schema, &row)?;
+        if normalized.key != record.key {
+            return Err(Error::Invalid(
+                "custom resolution cannot change record identity".into(),
+            ));
+        }
+        Ok(normalized)
+    }
+    fn write(&mut self, binding: &Binding, key: &str, value: Option<&Record>) -> Result<()> {
+        let table = table(&binding.schema_name, &binding.table_name)?;
+        let pk = ident(&binding.schema.primary_key)?;
+        let Some(record) = value else {
+            self.client
+                .execute(
+                    &format!(
+                        "DELETE FROM {table} WHERE {pk}=($1::text)::{}",
+                        native(key_field(&binding.schema)?)?
+                    ),
+                    &[&key],
+                )
+                .map_err(pg_error)?;
+            return Ok(());
+        };
+        if record.key != key {
+            return Err(Error::Invalid("record key mismatch".into()));
+        }
+        let params = parameters(&binding.schema, record)?;
+        let refs: Vec<&(dyn ToSql + Sync)> =
+            params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
+        let columns = binding
+            .schema
+            .fields
+            .iter()
+            .map(|f| ident(&f.name))
+            .collect::<Result<Vec<_>>>()?;
+        let updates = binding
+            .schema
+            .fields
+            .iter()
+            .filter(|f| f.name != binding.schema.primary_key)
+            .map(|f| {
+                let n = ident(&f.name)?;
+                Ok(format!("{n}=EXCLUDED.{n}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let on_conflict = if updates.is_empty() {
+            "DO NOTHING".into()
+        } else {
+            format!("DO UPDATE SET {}", updates.join(","))
+        };
+        let query = format!(
+            "INSERT INTO {table} ({}) VALUES({}) ON CONFLICT({pk}) {on_conflict}",
+            columns.join(","),
+            casts(&binding.schema)?.join(",")
+        );
+        self.client.execute(&query, &refs).map_err(pg_error)?;
+        Ok(())
+    }
+    fn clear_dirty(&mut self) -> Result<()> {
+        self.client
+            .execute(
+                "DELETE FROM _spatial_version.dirty WHERE repository_id=$1",
+                &[&self.repository_id],
+            )
+            .map_err(pg_error)?;
+        Ok(())
+    }
+    fn mark(&mut self, operation: &str, head: &ObjectId) -> Result<()> {
+        self.client
+            .execute(
+                "UPDATE _spatial_version.repositories SET operation=$2,head=$3 WHERE id=$1",
+                &[&self.repository_id, &operation, &head.as_str()],
+            )
+            .map_err(pg_error)?;
+        Ok(())
+    }
+    fn commit(&mut self) -> Result<()> {
+        self.client.batch_execute("COMMIT").map_err(pg_error)?;
+        self.active = false;
+        Ok(())
+    }
+}
+impl Drop for PostgisTransaction {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.client.batch_execute("ROLLBACK");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn identifiers_are_quoted_not_interpolated() {
+        assert_eq!(
+            ident("roads\"; DROP TABLE x;--").ok(),
+            Some("\"roads\"\"; DROP TABLE x;--\"".into())
+        );
+        assert!(ident("a\0b").is_err());
+    }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "spatial-version-postgis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+spatial-version-core.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+postgres = "0.19"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
+fallible-iterator = "0.2"
+
+[lints]
+workspace = true

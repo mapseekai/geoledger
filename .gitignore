@@ -1,0 +1,6 @@
+/target/
+.env
+/demo-repo/
+/.spatial-version/
+*.log
+/.reference/

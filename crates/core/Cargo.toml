@@ -1,0 +1,16 @@
+[package]
+name = "spatial-version-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+
+[lints]
+workspace = true

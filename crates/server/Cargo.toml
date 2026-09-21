@@ -1,0 +1,33 @@
+[package]
+name = "spatial-version-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+spatial-version.workspace = true
+spatial-version-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+axum = "0.8"
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+tonic-reflection = "0.14"
+tokio-stream = { version = "0.1", features = ["net"] }
+subtle = "2"
+tracing = "0.1"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[lints]
+workspace = true
