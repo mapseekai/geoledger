@@ -8,7 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use spatial_version::Command;
 use spatial_version_core::Error;
 
@@ -67,13 +67,17 @@ impl IntoResponse for ApiError {
             .into_response()
     }
 }
-async fn run(service: Service, command: Command) -> Result<Json<Value>, ApiError> {
-    Ok(Json(service.execute(command).await?))
+async fn run(service: Service, command: Command) -> Result<Response, ApiError> {
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        service.execute_json(command).await?,
+    )
+        .into_response())
 }
 async fn execute(
     State(service): State<Service>,
     Json(command): Json<Command>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     run(service, command).await
 }
 #[derive(Deserialize)]
@@ -84,13 +88,10 @@ struct Page {
 fn default_limit() -> usize {
     100
 }
-async fn status(State(s): State<Service>, Query(p): Query<Page>) -> Result<Json<Value>, ApiError> {
+async fn status(State(s): State<Service>, Query(p): Query<Page>) -> Result<Response, ApiError> {
     run(s, Command::Status { limit: p.limit }).await
 }
-async fn conflicts(
-    State(s): State<Service>,
-    Query(p): Query<Page>,
-) -> Result<Json<Value>, ApiError> {
+async fn conflicts(State(s): State<Service>, Query(p): Query<Page>) -> Result<Response, ApiError> {
     run(s, Command::Conflicts { limit: p.limit }).await
 }
 #[derive(Deserialize)]
@@ -103,7 +104,7 @@ struct History {
 fn head() -> String {
     "HEAD".into()
 }
-async fn log(State(s): State<Service>, Query(p): Query<History>) -> Result<Json<Value>, ApiError> {
+async fn log(State(s): State<Service>, Query(p): Query<History>) -> Result<Response, ApiError> {
     run(
         s,
         Command::Log {
@@ -113,7 +114,7 @@ async fn log(State(s): State<Service>, Query(p): Query<History>) -> Result<Json<
     )
     .await
 }
-async fn branches(State(s): State<Service>) -> Result<Json<Value>, ApiError> {
+async fn branches(State(s): State<Service>) -> Result<Response, ApiError> {
     run(s, Command::Branches).await
 }
 #[derive(Deserialize)]
@@ -123,10 +124,7 @@ struct NewBranch {
     #[serde(default = "head")]
     from: String,
 }
-async fn branch(
-    State(s): State<Service>,
-    Json(p): Json<NewBranch>,
-) -> Result<Json<Value>, ApiError> {
+async fn branch(State(s): State<Service>, Json(p): Json<NewBranch>) -> Result<Response, ApiError> {
     run(
         s,
         Command::Branch {
@@ -146,10 +144,7 @@ struct NewCommit {
 fn unknown() -> String {
     "unknown".into()
 }
-async fn commit(
-    State(s): State<Service>,
-    Json(p): Json<NewCommit>,
-) -> Result<Json<Value>, ApiError> {
+async fn commit(State(s): State<Service>, Json(p): Json<NewCommit>) -> Result<Response, ApiError> {
     run(
         s,
         Command::Commit {
@@ -168,7 +163,7 @@ struct NewMerge {
     #[serde(default)]
     message: Option<String>,
 }
-async fn merge(State(s): State<Service>, Json(p): Json<NewMerge>) -> Result<Json<Value>, ApiError> {
+async fn merge(State(s): State<Service>, Json(p): Json<NewMerge>) -> Result<Response, ApiError> {
     run(
         s,
         Command::Merge {

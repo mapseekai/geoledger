@@ -4,12 +4,19 @@ pub mod graph;
 pub mod merge;
 pub mod model;
 pub mod object;
+pub mod schema;
 pub mod tree;
 
 pub use model::*;
 pub use object::{ObjectId, ObjectStore, load, save};
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Clone, Copy)]
+pub enum BackendKind {
+    Storage,
+    Database,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -23,7 +30,7 @@ pub enum Error {
     Dirty,
     #[error("repository is busy; retry after the active operation finishes")]
     Busy,
-    #[error("unsupported in format v1: {0}")]
+    #[error("unsupported: {0}")]
     Unsupported(String),
     #[error("storage error: {0}")]
     Storage(String),
@@ -31,6 +38,13 @@ pub enum Error {
     Database(String),
     #[error("recovery required: {0}")]
     Recovery(String),
+    #[error("{message}")]
+    Backend {
+        kind: BackendKind,
+        message: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -38,6 +52,27 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn storage_source(
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Backend {
+            kind: BackendKind::Storage,
+            message: message.into(),
+            source: Box::new(source),
+        }
+    }
+    pub fn database_source(
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Backend {
+            kind: BackendKind::Database,
+            message: message.into(),
+            source: Box::new(source),
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
             Self::Invalid(_) | Self::Json(_) => "invalid_argument",
@@ -47,8 +82,17 @@ impl Error {
             Self::Busy => "busy",
             Self::Unsupported(_) => "unsupported",
             Self::Recovery(_) => "recovery_required",
-            Self::Database(_) => "database_error",
-            Self::Storage(_) | Self::Io(_) => "storage_error",
+            Self::Backend {
+                kind: BackendKind::Database,
+                ..
+            }
+            | Self::Database(_) => "database_error",
+            Self::Backend {
+                kind: BackendKind::Storage,
+                ..
+            }
+            | Self::Storage(_)
+            | Self::Io(_) => "storage_error",
         }
     }
 }

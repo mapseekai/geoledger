@@ -1,5 +1,6 @@
 //! PostGIS v1 working-copy adapter. Uses one database transaction and locks all
 //! tracked tables in stable order. Triggers remain enabled during checkout.
+mod schema_ops;
 use fallible_iterator::FallibleIterator;
 use postgres::{Client, Config, Row, types::ToSql};
 use postgres_native_tls::MakeTlsConnector;
@@ -12,12 +13,46 @@ use std::{
 
 pub struct PostgisProvider {
     connection_string: String,
+    statement_timeout_ms: u32,
 }
 impl PostgisProvider {
     pub fn new(connection_string: impl Into<String>) -> Self {
         Self {
             connection_string: connection_string.into(),
+            statement_timeout_ms: 120_000,
         }
+    }
+    /// Set the transaction-local timeout for each SQL statement (default: 120 seconds).
+    ///
+    /// # Errors
+    /// Rejects durations outside 1..=i32::MAX milliseconds and fractional milliseconds.
+    /// Zero is rejected because PostgreSQL interprets it as disabling the timeout.
+    pub fn with_statement_timeout(mut self, timeout: Duration) -> Result<Self> {
+        let millis = timeout.as_millis();
+        if millis == 0
+            || millis > i32::MAX as u128
+            || !timeout.subsec_nanos().is_multiple_of(1_000_000)
+        {
+            return Err(Error::Invalid(
+                "statement timeout must be a whole number of milliseconds in 1..=2147483647".into(),
+            ));
+        }
+        self.statement_timeout_ms = millis as u32;
+        Ok(self)
+    }
+
+    fn start_transaction(&self, client: &mut Client) -> Result<()> {
+        client.batch_execute("BEGIN; SET LOCAL lock_timeout='5s';
+            SET LOCAL timezone='UTC'; SET LOCAL datestyle='ISO, YMD'; SET LOCAL intervalstyle='iso_8601';
+            SET LOCAL bytea_output='hex'; SET LOCAL extra_float_digits=3;
+            SET LOCAL standard_conforming_strings=on;").map_err(pg_error)?;
+        client
+            .query_one(
+                "SELECT set_config('statement_timeout', $1, true)",
+                &[&format!("{}ms", self.statement_timeout_ms)],
+            )
+            .map_err(pg_error)?;
+        Ok(())
     }
     pub fn from_env(name: &str) -> Result<Self> {
         std::env::var(name)
@@ -27,12 +62,11 @@ impl PostgisProvider {
 }
 // Intentionally no Debug: connection strings may contain passwords.
 fn pg_error(error: postgres::Error) -> Error {
-    match error.as_db_error() {
-        Some(db) => Error::Database(format!("SQLSTATE {}: {}", db.code().code(), db.message())),
-        None => Error::Database(
-            "connection or protocol failure; connection details are redacted".into(),
-        ),
-    }
+    let message = match error.as_db_error() {
+        Some(db) => format!("SQLSTATE {}: {}", db.code().code(), db.message()),
+        None => "connection or protocol failure; connection details are redacted".into(),
+    };
+    Error::database_source(message, error)
 }
 fn ident(value: &str) -> Result<String> {
     if value.is_empty() || value.len() > 63 || value.contains('\0') {
@@ -154,10 +188,7 @@ impl WorkingCopyProvider for PostgisProvider {
         let mut client = config
             .connect(MakeTlsConnector::new(tls))
             .map_err(pg_error)?;
-        client.batch_execute("BEGIN; SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='120s';
-            SET LOCAL timezone='UTC'; SET LOCAL datestyle='ISO, YMD'; SET LOCAL intervalstyle='iso_8601';
-            SET LOCAL bytea_output='hex'; SET LOCAL extra_float_digits=3;
-            SET LOCAL standard_conforming_strings=on;").map_err(pg_error)?;
+        self.start_transaction(&mut client)?;
         let mut session = PostgisTransaction {
             client,
             repository_id: repository_id.into(),
@@ -188,6 +219,21 @@ impl WorkingCopyProvider for PostgisProvider {
             .get(0);
         if version != 1 {
             return Err(Error::Unsupported("PostGIS tracking schema version".into()));
+        }
+        let ordered_index: bool = session
+            .client
+            .query_one(
+                "SELECT to_regclass('_spatial_version.dirty_pk_c_v1') IS NOT NULL",
+                &[],
+            )
+            .map_err(pg_error)?
+            .get(0);
+        if !ordered_index {
+            session
+                .client
+                .query_one("SELECT pg_advisory_xact_lock(1937142839::bigint)", &[])
+                .map_err(pg_error)?;
+            session.client.batch_execute("CREATE INDEX IF NOT EXISTS dirty_pk_c_v1 ON _spatial_version.dirty(repository_id,dataset,pk COLLATE \"C\")").map_err(pg_error)?;
         }
         let hash = blake3::hash(repository_id.as_bytes());
         let mut key_bytes = [0u8; 8];
@@ -244,6 +290,22 @@ impl PostgisTransaction {
     }
 }
 impl WorkingCopyTransaction for PostgisTransaction {
+    fn column_ids(&mut self, binding: &Binding) -> Result<BTreeMap<i16, String>> {
+        schema_ops::positions(self, binding)
+    }
+    fn current_schema(&mut self, binding: &Binding) -> Result<Schema> {
+        schema_ops::current(self, binding)
+    }
+    fn edit_schema(
+        &mut self,
+        binding: &Binding,
+        edit: &spatial_version_core::schema::SchemaEdit,
+    ) -> Result<Schema> {
+        schema_ops::edit(self, binding, edit)
+    }
+    fn replace_schema(&mut self, binding: &Binding, target: &Schema) -> Result<()> {
+        schema_ops::replace(self, binding, target)
+    }
     fn marker(&mut self) -> Result<DatabaseMarker> {
         let r = self
             .client
@@ -389,7 +451,9 @@ impl WorkingCopyTransaction for PostgisTransaction {
     }
     fn verify(&mut self, dataset: &str, binding: &Binding) -> Result<()> {
         let actual = self.inspect(&binding.schema_name, &binding.table_name)?;
-        if actual != binding.schema {
+        if binding.schema.version == 1
+            && !spatial_version_core::schema::equivalent(&actual, &binding.schema)
+        {
             return Err(Error::Unsupported(format!(
                 "schema drift in dataset {dataset}; DDL is not versioned"
             )));
@@ -436,6 +500,86 @@ impl WorkingCopyTransaction for PostgisTransaction {
     fn dirty_keys(&mut self, dataset: &str) -> Result<Vec<String>> {
         Ok(self.client.query("SELECT pk FROM _spatial_version.dirty WHERE repository_id=$1 AND dataset=$2 ORDER BY pk COLLATE \"C\"",&[&self.repository_id,&dataset]).map_err(pg_error)?.into_iter().map(|r|r.get(0)).collect())
     }
+    fn dirty_keys_page(
+        &mut self,
+        dataset: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        let limit = i64::try_from(limit)
+            .map_err(|_| Error::Invalid("dirty page limit too large".into()))?;
+        self.client.query("SELECT pk FROM _spatial_version.dirty WHERE repository_id=$1 AND dataset=$2 AND ($3::text IS NULL OR pk COLLATE \"C\" > $3 COLLATE \"C\") ORDER BY pk COLLATE \"C\" LIMIT $4", &[&self.repository_id, &dataset, &after, &limit])
+            .map_err(pg_error).map(|rows| rows.into_iter().map(|r| r.get(0)).collect())
+    }
+    fn projection_defaults(
+        &mut self,
+        from: &Schema,
+        to: &Schema,
+    ) -> Result<BTreeMap<String, Cell>> {
+        schema_ops::projection_defaults(self, from, to)
+    }
+    fn normalize_many(&mut self, binding: &Binding, records: &[Record]) -> Result<Vec<Record>> {
+        let schema = &binding.schema;
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut values = Vec::with_capacity(records.len());
+        for record in records {
+            schema.validate(record)?;
+            values.push(
+                record
+                    .fields
+                    .iter()
+                    .map(|(name, cell)| {
+                        (
+                            name.as_str(),
+                            match cell {
+                                Cell::Text(v) | Cell::Geometry(v) => Some(v.as_str()),
+                                _ => None,
+                            },
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>(),
+            );
+        }
+        let expressions = schema
+            .fields
+            .iter()
+            .map(|f| {
+                let value = format!("v->>{}", literal(&f.name));
+                let expr = if f.geometry {
+                    format!("ST_GeomFromEWKB(decode({value},'hex'))::{}", native(f)?)
+                } else {
+                    format!("({value})::{}", native(f)?)
+                };
+                Ok(format!("{expr} AS {}", ident(&f.name)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let query = format!(
+            "SELECT {} FROM jsonb_array_elements($1::text::jsonb) WITH ORDINALITY AS input(v,ordinal) CROSS JOIN LATERAL (SELECT {}) r ORDER BY input.ordinal",
+            projection(schema)?,
+            expressions.join(",")
+        );
+        let rows = self
+            .client
+            .query(&query, &[&serde_json::to_string(&values)?])
+            .map_err(pg_error)?;
+        if rows.len() != records.len() {
+            return Err(Error::Database("normalization row count mismatch".into()));
+        }
+        rows.iter()
+            .zip(records)
+            .map(|(row, original)| {
+                let normalized = decode(schema, row)?;
+                if normalized.key != original.key {
+                    return Err(Error::Invalid(
+                        "normalization changed record identity".into(),
+                    ));
+                }
+                Ok(normalized)
+            })
+            .collect()
+    }
     fn read(&mut self, binding: &Binding, key: &str) -> Result<Option<Record>> {
         let query = format!(
             "SELECT {} FROM {} r WHERE r.{}=($1::text)::{}",
@@ -449,6 +593,139 @@ impl WorkingCopyTransaction for PostgisTransaction {
             .map_err(pg_error)?
             .map(|r| decode(&binding.schema, &r))
             .transpose()
+    }
+    fn read_many(
+        &mut self,
+        binding: &Binding,
+        keys: &[String],
+    ) -> Result<BTreeMap<String, Record>> {
+        let schema = &binding.schema;
+        let query = format!(
+            "SELECT {} FROM {} r WHERE r.{} IN (SELECT v::{} FROM unnest($1::text[]) AS v)",
+            projection(schema)?,
+            table(&binding.schema_name, &binding.table_name)?,
+            ident(&schema.primary_key)?,
+            native(key_field(schema)?)?
+        );
+        let mut records = BTreeMap::new();
+        for keys in keys.chunks(1000) {
+            for row in self.client.query(&query, &[&keys]).map_err(pg_error)? {
+                let r = decode(schema, &row)?;
+                records.insert(r.key.clone(), r);
+            }
+        }
+        Ok(records)
+    }
+    fn read_many_bounded(
+        &mut self,
+        binding: &Binding,
+        keys: &[String],
+        byte_limit: usize,
+    ) -> Result<Vec<(String, Option<Record>)>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let schema = &binding.schema;
+        let pk_index = schema
+            .fields
+            .iter()
+            .position(|f| f.name == schema.primary_key)
+            .ok_or_else(|| Error::Invalid("primary-key field is missing".into()))?;
+        let query = format!(
+            "SELECT {} FROM unnest($1::text[]) WITH ORDINALITY AS requested(key,ordinal) LEFT JOIN {} r ON r.{} = requested.key::{} ORDER BY requested.ordinal",
+            projection(schema)?,
+            table(&binding.schema_name, &binding.table_name)?,
+            ident(&schema.primary_key)?,
+            native(key_field(schema)?)?
+        );
+        let params: [&(dyn ToSql + Sync); 1] = [&keys];
+        let mut rows = self.client.query_raw(&query, params).map_err(pg_error)?;
+        let mut batch = Vec::new();
+        let mut bytes = 0;
+        for key in keys {
+            let row = rows
+                .next()
+                .map_err(pg_error)?
+                .ok_or_else(|| Error::Database("bounded read row count mismatch".into()))?;
+            let pk: Option<String> = row.try_get(pk_index).map_err(pg_error)?;
+            let record = pk.map(|_| decode(schema, &row)).transpose()?;
+            bytes += key.len() + record.as_ref().map_or(0, Record::payload_bytes);
+            batch.push((key.clone(), record));
+            if bytes >= byte_limit {
+                break;
+            }
+        }
+        Ok(batch)
+    }
+    fn write_many(&mut self, binding: &Binding, values: &[(&str, Option<&Record>)]) -> Result<()> {
+        let schema = &binding.schema;
+        let table = table(&binding.schema_name, &binding.table_name)?;
+        let pk = ident(&schema.primary_key)?;
+        let mut deletes = Vec::new();
+        let mut inserts = Vec::new();
+        for (key, value) in values {
+            if let Some(record) = value {
+                schema.validate(record)?;
+                if record.key != *key {
+                    return Err(Error::Invalid("record key mismatch".into()));
+                }
+                let fields: BTreeMap<&str, Option<&str>> = record
+                    .fields
+                    .iter()
+                    .map(|(name, cell)| {
+                        let value = match cell {
+                            Cell::Text(v) | Cell::Geometry(v) => Some(v.as_str()),
+                            _ => None,
+                        };
+                        (name.as_str(), value)
+                    })
+                    .collect();
+                inserts.push(fields);
+            } else {
+                deletes.push(*key);
+            }
+        }
+        if !deletes.is_empty() {
+            self.client.execute(&format!("DELETE FROM {table} WHERE {pk} IN (SELECT v::{} FROM unnest($1::text[]) AS v)",native(key_field(schema)?)?),&[&deletes]).map_err(pg_error)?;
+        }
+        if !inserts.is_empty() {
+            let cols = schema
+                .fields
+                .iter()
+                .map(|f| ident(&f.name))
+                .collect::<Result<Vec<_>>>()?;
+            let exprs = schema
+                .fields
+                .iter()
+                .map(|f| {
+                    let value = format!("v->>{}", literal(&f.name));
+                    Ok(if f.geometry {
+                        format!("ST_GeomFromEWKB(decode({value},'hex'))::{}", native(f)?)
+                    } else {
+                        format!("({value})::{}", native(f)?)
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let updates = cols
+                .iter()
+                .filter(|c| **c != pk)
+                .map(|c| format!("{c}=excluded.{c}"))
+                .collect::<Vec<_>>();
+            let conflict = if updates.is_empty() {
+                "DO NOTHING".into()
+            } else {
+                format!("DO UPDATE SET {}", updates.join(","))
+            };
+            let query = format!(
+                "INSERT INTO {table} ({}) SELECT {} FROM jsonb_array_elements($1::text::jsonb) AS v ON CONFLICT ({pk}) {conflict}",
+                cols.join(","),
+                exprs.join(",")
+            );
+            self.client
+                .execute(&query, &[&serde_json::to_string(&inserts)?])
+                .map_err(pg_error)?;
+        }
+        Ok(())
     }
     fn normalize(&mut self, binding: &Binding, record: &Record) -> Result<Record> {
         let params = parameters(&binding.schema, record)?;
@@ -558,6 +835,78 @@ impl Drop for PostgisTransaction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn statement_timeout_cannot_be_disabled_or_overflow_postgres() {
+        for duration in [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::from_micros(1_001),
+            Duration::from_millis(i32::MAX as u64 + 1),
+            Duration::MAX,
+        ] {
+            assert!(
+                PostgisProvider::new("")
+                    .with_statement_timeout(duration)
+                    .is_err()
+            );
+        }
+        for duration in [
+            Duration::from_millis(1),
+            Duration::from_millis(i32::MAX as u64),
+        ] {
+            assert!(
+                PostgisProvider::new("")
+                    .with_statement_timeout(duration)
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn statement_timeout_is_enforced_and_transaction_local() {
+        let dsn = std::env::var("SV_TEST_DATABASE_URL").expect("set disposable test database URL");
+        let mut client = Client::connect(&dsn, postgres::NoTls).unwrap();
+        let database: String = client
+            .query_one("SELECT current_database()", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            database, "spatial_version_test",
+            "refusing a non-test database"
+        );
+        let setting = |client: &mut Client| -> String {
+            client
+                .query_one("SHOW statement_timeout", &[])
+                .unwrap()
+                .get(0)
+        };
+        let original = setting(&mut client);
+        PostgisProvider::new(&dsn)
+            .start_transaction(&mut client)
+            .unwrap();
+        assert_eq!(setting(&mut client), "2min");
+        client.batch_execute("ROLLBACK").unwrap();
+        let provider = PostgisProvider::new(&dsn)
+            .with_statement_timeout(Duration::from_secs(900))
+            .unwrap();
+        provider.start_transaction(&mut client).unwrap();
+        assert_eq!(setting(&mut client), "15min");
+        client.batch_execute("COMMIT").unwrap();
+        assert_eq!(setting(&mut client), original);
+        let provider = PostgisProvider::new(&dsn)
+            .with_statement_timeout(Duration::from_millis(20))
+            .unwrap();
+        provider.start_transaction(&mut client).unwrap();
+        let error = client.query_one("SELECT pg_sleep(0.2)", &[]).unwrap_err();
+        assert_eq!(
+            error.code(),
+            Some(&postgres::error::SqlState::QUERY_CANCELED)
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+        assert_eq!(setting(&mut client), original);
+    }
     #[test]
     fn identifiers_are_quoted_not_interpolated() {
         assert_eq!(

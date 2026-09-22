@@ -49,42 +49,93 @@ pub fn changed_fields(a: Option<&Record>, b: Option<&Record>) -> Vec<String> {
         .collect()
 }
 pub fn diff(store: &dyn ObjectStore, before: &Snapshot, after: &Snapshot) -> Result<Vec<Change>> {
+    Ok(diff_limited(store, before, after, usize::MAX)?.0)
+}
+
+/// Count every tree delta, but only decode record payloads for the requested page.
+/// Traversal streams deltas; only the requested record payloads are retained.
+pub fn diff_limited(
+    store: &dyn ObjectStore,
+    before: &Snapshot,
+    after: &Snapshot,
+    limit: usize,
+) -> Result<(Vec<Change>, usize)> {
+    diff_page(store, before, after, limit, usize::MAX)
+}
+
+/// Byte-bounded preview. The last decoded record may exceed the budget;
+/// exact total counting still visits every tree delta.
+pub fn diff_page(
+    store: &dyn ObjectStore,
+    before: &Snapshot,
+    after: &Snapshot,
+    limit: usize,
+    byte_limit: usize,
+) -> Result<(Vec<Change>, usize)> {
+    let mut bytes = 0usize;
     let names: BTreeSet<_> = before.keys().chain(after.keys()).collect();
     let mut result = Vec::new();
+    let mut total = 0;
     for name in names {
         let a = before.get(name);
         let b = after.get(name);
-        if let (Some(a), Some(b)) = (a, b)
-            && a.schema != b.schema
-        {
-            return Err(Error::Unsupported(format!("schema changed: {name}")));
-        }
-        for d in tree::diff(
+        tree::visit_diff(
             store,
             a.and_then(|d| d.root.as_ref()),
             b.and_then(|d| d.root.as_ref()),
-        )? {
-            let before = d
-                .before
-                .as_ref()
-                .map(|id| load::<Record>(store, "record/v1", id))
-                .transpose()?;
-            let after = d
-                .after
-                .as_ref()
-                .map(|id| load::<Record>(store, "record/v1", id))
-                .transpose()?;
-            let fields = changed_fields(before.as_ref(), after.as_ref());
-            result.push(Change {
-                dataset: name.clone(),
-                key: d.key,
-                before,
-                after,
-                fields,
-            });
-        }
+            &mut |d| {
+                total += 1;
+                if result.len() < limit && bytes < byte_limit {
+                    let change = decode_change(store, name, d)?;
+                    bytes = bytes
+                        .saturating_add(change.before.as_ref().map_or(0, Record::payload_bytes))
+                        .saturating_add(change.after.as_ref().map_or(0, Record::payload_bytes));
+                    result.push(change);
+                }
+                Ok(())
+            },
+        )?;
     }
-    Ok(result)
+
+    Ok((result, total))
+}
+
+fn decode_change(store: &dyn ObjectStore, name: &str, d: tree::Delta) -> Result<Change> {
+    let before: Option<Record> = d
+        .before
+        .as_ref()
+        .map(|id| load(store, "record/v1", id))
+        .transpose()?;
+    let after: Option<Record> = d
+        .after
+        .as_ref()
+        .map(|id| load(store, "record/v1", id))
+        .transpose()?;
+    let fields = changed_fields(before.as_ref(), after.as_ref());
+    Ok(Change {
+        dataset: name.into(),
+        key: d.key,
+        before,
+        after,
+        fields,
+    })
+}
+/// Visit one decoded change at a time, retaining no complete diff in memory.
+pub fn visit_diff(
+    store: &dyn ObjectStore,
+    before: &Snapshot,
+    after: &Snapshot,
+    visit: &mut dyn FnMut(Change) -> Result<()>,
+) -> Result<()> {
+    for name in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+        tree::visit_diff(
+            store,
+            before.get(name).and_then(|d| d.root.as_ref()),
+            after.get(name).and_then(|d| d.root.as_ref()),
+            &mut |d| visit(decode_change(store, name, d)?),
+        )?;
+    }
+    Ok(())
 }
 
 /// Row identity is the PK. Geometry is an atomic field, never merged by vertex.
@@ -149,6 +200,25 @@ pub fn three_way(
     ours: &Snapshot,
     theirs: &Snapshot,
 ) -> Result<(Snapshot, Vec<Conflict>)> {
+    three_way_with_defaults(
+        store,
+        base,
+        ours,
+        theirs,
+        &mut |_, _| Ok(Default::default()),
+    )
+}
+
+type ProjectionDefaults<'a> = dyn FnMut(&crate::Schema, &crate::Schema) -> Result<std::collections::BTreeMap<String, crate::Cell>>
+    + 'a;
+
+pub fn three_way_with_defaults(
+    store: &dyn ObjectStore,
+    base: &Snapshot,
+    ours: &Snapshot,
+    theirs: &Snapshot,
+    defaults: &mut ProjectionDefaults<'_>,
+) -> Result<(Snapshot, Vec<Conflict>)> {
     let names: BTreeSet<_> = base
         .keys()
         .chain(ours.keys())
@@ -175,7 +245,87 @@ pub fn three_way(
         let schemas: BTreeSet<&ObjectId> =
             [b, o, t].into_iter().flatten().map(|d| &d.schema).collect();
         if schemas.len() != 1 {
-            return Err(Error::Unsupported(format!("schema merge: {name}")));
+            let (Some(b), Some(o), Some(t)) = (b, o, t) else {
+                return Err(Error::Conflict(format!("schema/dataset conflict: {name}")));
+            };
+            let (bs, os, ts) = (
+                crate::schema::read(store, &b.schema)?,
+                crate::schema::read(store, &o.schema)?,
+                crate::schema::read(store, &t.schema)?,
+            );
+            let target = crate::schema::merge(&bs, &os, &ts)?;
+            let bp = crate::schema::Projection::new(&bs, &target, &defaults(&bs, &target)?);
+            let op = crate::schema::Projection::new(&os, &target, &defaults(&os, &target)?);
+            let tp = crate::schema::Projection::new(&ts, &target, &defaults(&ts, &target)?);
+            let target_ids: BTreeSet<_> =
+                target.fields.iter().map(crate::schema::column_id).collect();
+            let mut merged = o.clone();
+            merged.schema = crate::schema::store(store, &target)?;
+            if os != target {
+                let mut builder = tree::BulkBuilder::default();
+                tree::visit(store, o.root.as_ref(), &mut |key, id| {
+                    let r: Record = load(store, "record/v1", id)?;
+                    let r = op.apply(&r);
+                    builder.push(store, key.into(), save(store, "record/v1", &r)?)
+                })?;
+                merged.root = builder.finish(store)?;
+            }
+            let mut keys = BTreeSet::new();
+            for side in [o, t] {
+                keys.extend(
+                    tree::diff(store, b.root.as_ref(), side.root.as_ref())?
+                        .into_iter()
+                        .map(|d| d.key),
+                );
+            }
+            for key in keys {
+                let br = record(store, Some(b), &key)?;
+                let or = record(store, Some(o), &key)?;
+                let tr = record(store, Some(t), &key)?;
+                for f in bs
+                    .fields
+                    .iter()
+                    .filter(|f| !target_ids.contains(&crate::schema::column_id(f)))
+                {
+                    let id = crate::schema::column_id(f);
+                    for (schema, row) in [(&os, &or), (&ts, &tr)] {
+                        if let (Some(field), Some(row)) = (
+                            schema
+                                .fields
+                                .iter()
+                                .find(|f| crate::schema::column_id(f) == id),
+                            row,
+                        ) && match br.as_ref() {
+                            Some(base) => row.fields.get(&field.name) != base.fields.get(&f.name),
+                            None => row
+                                .fields
+                                .get(&field.name)
+                                .is_some_and(|v| !matches!(v, crate::Cell::Null)),
+                        } {
+                            return Err(Error::Conflict(format!(
+                                "column deletion versus data edit: {name}.{}",
+                                f.name
+                            )));
+                        }
+                    }
+                }
+                let br = br.as_ref().map(|r| bp.apply(r));
+                let or = or.as_ref().map(|r| op.apply(r));
+                let tr = tr.as_ref().map(|r| tp.apply(r));
+                match merge_record(br.as_ref(), or.as_ref(), tr.as_ref()) {
+                    Ok(value) => update(store, &mut merged, &key, value.as_ref())?,
+                    Err(fields) => conflicts.push(Conflict {
+                        dataset: name.clone(),
+                        key,
+                        base: br,
+                        ours: or,
+                        theirs: tr,
+                        fields,
+                    }),
+                }
+            }
+            result.insert(name.clone(), merged);
+            continue;
         }
         if b.is_some() && (o.is_none() || t.is_none()) {
             return Err(Error::Unsupported(format!(

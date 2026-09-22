@@ -1,7 +1,11 @@
 //! Application service. Synchronous by design: callers in an async runtime must
 //! use spawn_blocking (the provided HTTP/gRPC server and CLI do so).
+mod changes;
 mod command;
+mod merge_working;
+use changes::*;
 pub use command::{Command, Resolution};
+use merge_working::*;
 pub use spatial_version_core as core;
 
 use core::{adapter::*, graph, merge, tree, *};
@@ -45,6 +49,13 @@ impl Application {
         let recovered = self.recover_pending(&repo)?;
         let mut state = repo.state()?;
         match command {
+            Command::Schema { dataset, reference } => {
+                let snapshot = snapshot_at(&repo, &state.resolve(&reference)?)?;
+                let d = snapshot
+                    .get(&dataset)
+                    .ok_or_else(|| Error::NotFound(format!("dataset {dataset}")))?;
+                Ok(json!({"dataset":dataset,"schema":schema::read(&repo,&d.schema)?}))
+            }
             Command::Recover => Ok(json!({"recovered":recovered,"head":state.head()?})),
             Command::Log { reference, limit } => {
                 let id = state.resolve(&reference)?;
@@ -114,10 +125,15 @@ impl Application {
             } => {
                 let a = snapshot_at(&repo, &state.resolve(from.as_deref().unwrap_or("HEAD"))?)?;
                 let b = snapshot_at(&repo, &state.resolve(&to)?)?;
-                Ok(page("changes", &merge::diff(&repo, &a, &b)?, limit))
+                let limit = limit.clamp(1, 1000);
+                let (changes, total) = merge::diff_page(&repo, &a, &b, limit, PREVIEW_BYTES)?;
+                let mut result =
+                    json!({"changes":changes,"total":total,"truncated":total>changes.len()});
+                result["schema_changes"] = schema_changes(&repo, &a, &b)?;
+                Ok(result)
             }
             Command::Status { limit } if state.bindings.is_empty() => {
-                Ok(status(&state, &[], limit))
+                Ok(status(&state, &WorkingChanges::default(), limit))
             }
             other => self.execute_working(&repo, state, other),
         }
@@ -223,24 +239,68 @@ impl Application {
         repo.begin()?;
         let before_head = state.head()?.clone();
         let baseline = snapshot_at(repo, &before_head)?;
-        let changes = working_changes(repo, &state, &baseline, session.as_mut())?;
+        let mut schema_dirty = BTreeMap::new();
+        for (name, binding) in &state.bindings {
+            if binding.schema.version == 2 {
+                let actual = session.current_schema(binding)?;
+                if actual != binding.schema {
+                    schema_dirty.insert(name.clone(), actual);
+                }
+            }
+        }
+        if !schema_dirty.is_empty()
+            && !matches!(
+                command,
+                Command::Status { .. }
+                    | Command::Diff { .. }
+                    | Command::Commit { .. }
+                    | Command::Restore { .. }
+                    | Command::Reset { .. }
+            )
+        {
+            return Err(Error::Dirty);
+        }
+        let changes = working_changes(
+            repo,
+            &state.bindings,
+            &schema_dirty,
+            &baseline,
+            session.as_mut(),
+            &command,
+        )?;
         match command {
-            Command::Status { limit } => Ok(status(&state, &changes, limit)),
+            Command::Status { limit } => {
+                let mut result = status(&state, &changes, limit);
+                result["clean"] = json!(changes.is_empty() && schema_dirty.is_empty());
+                result["record_counts_complete"] = json!(schema_dirty.is_empty());
+                result["schema_changes"]=json!(schema_dirty.iter().map(|(name,after)|json!({"dataset":name,"before":state.bindings[name].schema,"after":after,"requires_full_scan":true})).collect::<Vec<_>>());
+                Ok(result)
+            }
             Command::Diff {
                 from,
                 to: None,
                 limit,
             } => {
+                if !schema_dirty.is_empty() {
+                    let mut result = changes.page(limit);
+                    result["record_counts_complete"] = json!(false);
+                    result["schema_changes"]=json!(schema_dirty.iter().map(|(name,after)|json!({"dataset":name,"before":state.bindings[name].schema,"after":after,"requires_full_scan":true})).collect::<Vec<_>>());
+                    if from.is_some() {
+                        return Err(Error::Unsupported(
+                            "historical diff with uncommitted schema changes; commit first".into(),
+                        ));
+                    }
+                    return Ok(result);
+                }
                 if let Some(reference) = from {
                     let source = snapshot_at(repo, &state.resolve(&reference)?)?;
-                    let actual = capture(repo, &state, &baseline, &changes)?;
-                    Ok(page(
-                        "changes",
-                        &merge::diff(repo, &source, &actual)?,
-                        limit,
-                    ))
+                    let actual = changes.snapshot.clone();
+                    let limit = limit.clamp(1, 1000);
+                    let (changes, total) =
+                        merge::diff_page(repo, &source, &actual, limit, PREVIEW_BYTES)?;
+                    Ok(json!({"changes":changes,"total":total,"truncated":total>changes.len()}))
                 } else {
-                    Ok(page("changes", &changes, limit))
+                    Ok(changes.page(limit))
                 }
             }
             Command::Import {
@@ -257,13 +317,16 @@ impl Application {
                 if state.bindings.contains_key(&dataset) {
                     return Err(Error::Conflict("dataset is already registered".into()));
                 }
-                let schema_def = session.inspect(&schema, &table)?;
-                let binding = Binding {
+                let schema_def = schema::with_identities(session.inspect(&schema, &table)?);
+                let mut binding = Binding {
                     provider: provider.name().into(),
                     schema_name: schema,
                     table_name: table,
                     schema: schema_def,
+                    column_ids: BTreeMap::new(),
                 };
+                binding.column_ids = session.column_ids(&binding)?;
+                binding.schema = session.current_schema(&binding)?;
                 session.register(&dataset, &binding)?;
                 let mut tree = tree::BulkBuilder::default();
                 let mut records = 0u64;
@@ -274,13 +337,14 @@ impl Application {
                     Ok(())
                 })?;
                 let imported = Dataset {
-                    schema: save(repo, "schema/v1", &binding.schema)?,
+                    schema: schema::store(repo, &binding.schema)?,
                     root: tree.finish(repo)?,
                     records,
                 };
                 let mut snapshot = baseline;
                 snapshot.insert(dataset.clone(), imported);
                 state.bindings.insert(dataset.clone(), binding);
+                state.version = 2;
                 let message = message.unwrap_or_else(|| format!("Import {dataset}"));
                 let id = create_commit(
                     repo,
@@ -294,10 +358,22 @@ impl Application {
                 Ok(json!({"commit":id,"dataset":dataset,"records":records}))
             }
             Command::Commit { message, author } => {
-                if changes.is_empty() {
+                if changes.is_empty() && schema_dirty.is_empty() {
                     return Err(Error::Conflict("nothing to commit".into()));
                 }
-                let snapshot = capture(repo, &state, &baseline, &changes)?;
+                let mut snapshot = changes.snapshot.clone();
+                for (name, actual) in &schema_dirty {
+                    let binding = state
+                        .bindings
+                        .get_mut(name)
+                        .ok_or_else(|| Error::Storage("missing binding".into()))?;
+                    binding.schema = actual.clone();
+                    binding.column_ids = session.column_ids(binding)?;
+                    snapshot.insert(
+                        name.clone(),
+                        capture_dataset(repo, binding, session.as_mut())?,
+                    );
+                }
                 let id = create_commit(
                     repo,
                     &snapshot,
@@ -307,7 +383,74 @@ impl Application {
                 )?;
                 state.branches.insert(state.branch.clone(), id.clone());
                 finish(repo, session.as_mut(), &before_head, &state)?;
-                Ok(json!({"commit":id,"changed_records":changes.len()}))
+                Ok(
+                    json!({"commit":id,"changed_records":if schema_dirty.is_empty(){Some(changes.len())}else{None},"incremental_changed_records":changes.len(),"rescanned_records":schema_dirty.keys().map(|name|snapshot[name].records).sum::<u64>(),"schema_changed_datasets":schema_dirty.keys().collect::<Vec<_>>(),"schema_datasets_rescanned":!schema_dirty.is_empty()}),
+                )
+            }
+            Command::Upgrade => {
+                ensure_clean(&changes)?;
+                if state.version == 2 && state.bindings.values().all(|b| b.schema.version == 2) {
+                    return Ok(
+                        json!({"format_version":2,"already_current":true,"head":before_head}),
+                    );
+                }
+                let mut snapshot = baseline.clone();
+                for (name, binding) in &mut state.bindings {
+                    if binding.schema.version == 1 {
+                        binding.schema = schema::with_identities(binding.schema.clone());
+                        binding.column_ids = session.column_ids(binding)?;
+                        binding.schema = session.current_schema(binding)?;
+                        if let Some(d) = snapshot.get_mut(name) {
+                            d.schema = schema::store(repo, &binding.schema)?;
+                        }
+                    }
+                }
+                let id = create_commit(
+                    repo,
+                    &snapshot,
+                    vec![before_head.clone()],
+                    "migration",
+                    "Upgrade schema tracking to format v2",
+                )?;
+                state.version = 2;
+                state.branches.insert(state.branch.clone(), id.clone());
+                finish(repo, session.as_mut(), &before_head, &state)?;
+                Ok(json!({"commit":id,"format_version":2}))
+            }
+            Command::AlterSchema {
+                dataset,
+                change,
+                author,
+                message,
+            } => {
+                ensure_clean(&changes)?;
+                let binding = state
+                    .bindings
+                    .get_mut(&dataset)
+                    .ok_or_else(|| Error::NotFound(format!("dataset {dataset}")))?;
+                if binding.schema.version != 2 {
+                    return Err(Error::Unsupported(
+                        "run upgrade before editing schema in a v1 dataset".into(),
+                    ));
+                }
+                binding.schema = session.edit_schema(binding, &change)?;
+                binding.column_ids = session.column_ids(binding)?;
+                let mut snapshot = baseline.clone();
+                snapshot.insert(
+                    dataset.clone(),
+                    capture_dataset(repo, binding, session.as_mut())?,
+                );
+                let id = create_commit(
+                    repo,
+                    &snapshot,
+                    vec![before_head.clone()],
+                    &author,
+                    &message.unwrap_or_else(|| format!("Alter schema of {dataset}")),
+                )?;
+                state.version = 2;
+                state.branches.insert(state.branch.clone(), id.clone());
+                finish(repo, session.as_mut(), &before_head, &state)?;
+                Ok(json!({"commit":id,"dataset":dataset,"schema":state.bindings[&dataset].schema}))
             }
             Command::Switch { branch } => {
                 ensure_clean(&changes)?;
@@ -317,7 +460,7 @@ impl Application {
                     .cloned()
                     .ok_or_else(|| Error::NotFound(format!("branch {branch}")))?;
                 let snapshot = snapshot_at(repo, &target)?;
-                apply_snapshot(repo, &state, &baseline, &snapshot, session.as_mut())?;
+                apply_snapshot(repo, &mut state, &baseline, &snapshot, session.as_mut())?;
                 state.branch = branch;
                 finish(repo, session.as_mut(), &before_head, &state)?;
                 Ok(json!({"branch":state.branch,"head":target}))
@@ -328,7 +471,7 @@ impl Application {
                         "restore requires explicit discard=true / --discard".into(),
                     ));
                 }
-                restore_changes(&state, &changes, session.as_mut())?;
+                restore_schema_edits(repo, &mut state, &baseline, &schema_dirty, session.as_mut())?;
                 finish(repo, session.as_mut(), &before_head, &state)?;
                 Ok(json!({"restored_records":changes.len(),"head":before_head}))
             }
@@ -341,8 +484,8 @@ impl Application {
                 }
                 let target = state.resolve(&target)?;
                 let snapshot = snapshot_at(repo, &target)?;
-                restore_changes(&state, &changes, session.as_mut())?;
-                apply_snapshot(repo, &state, &baseline, &snapshot, session.as_mut())?;
+                restore_schema_edits(repo, &mut state, &baseline, &schema_dirty, session.as_mut())?;
+                apply_snapshot(repo, &mut state, &baseline, &snapshot, session.as_mut())?;
                 state.branches.insert(state.branch.clone(), target.clone());
                 finish(repo, session.as_mut(), &before_head, &state)?;
                 Ok(
@@ -362,14 +505,19 @@ impl Application {
                 }
                 let other = snapshot_at(repo, &theirs)?;
                 if base == before_head {
-                    apply_snapshot(repo, &state, &baseline, &other, session.as_mut())?;
+                    apply_snapshot(repo, &mut state, &baseline, &other, session.as_mut())?;
                     state.branches.insert(state.branch.clone(), theirs.clone());
                     finish(repo, session.as_mut(), &before_head, &state)?;
                     return Ok(json!({"commit":theirs,"fast_forward":true}));
                 }
                 let base_snapshot = snapshot_at(repo, &base)?;
-                let (snapshot, conflicts) =
-                    merge::three_way(repo, &base_snapshot, &baseline, &other)?;
+                let (snapshot, conflicts) = merge::three_way_with_defaults(
+                    repo,
+                    &base_snapshot,
+                    &baseline,
+                    &other,
+                    &mut |from, to| session.projection_defaults(from, to),
+                )?;
                 let merge_state = MergeState {
                     base,
                     ours: before_head.clone(),
@@ -398,11 +546,12 @@ impl Application {
                     ));
                 }
                 let parent = commit.parents[0].clone();
-                let (snapshot, conflicts) = merge::three_way(
+                let (snapshot, conflicts) = merge::three_way_with_defaults(
                     repo,
                     &snapshot_at(repo, &target)?,
                     &baseline,
                     &snapshot_at(repo, &parent)?,
+                    &mut |from, to| session.projection_defaults(from, to),
                 )?;
                 let merge_state = MergeState {
                     base: target.clone(),
@@ -453,7 +602,15 @@ impl Application {
                 };
                 let selected = selected
                     .as_ref()
-                    .map(|r| session.normalize(binding, r))
+                    .map(|r| {
+                        let mut target_binding = binding.clone();
+                        let target = pending
+                            .snapshot
+                            .get(&dataset)
+                            .ok_or_else(|| Error::Storage("missing merge dataset".into()))?;
+                        target_binding.schema = schema::read(repo, &target.schema)?;
+                        session.normalize(&target_binding, r)
+                    })
                     .transpose()?;
                 if selected.as_ref().is_some_and(|r| r.key != key) {
                     return Err(Error::Invalid("resolution cannot change key".into()));
@@ -535,101 +692,122 @@ fn ensure_not_merging(state: &RepositoryState) -> Result<()> {
         Ok(())
     }
 }
-fn ensure_clean(changes: &[Change]) -> Result<()> {
+fn ensure_clean(changes: &WorkingChanges) -> Result<()> {
     if changes.is_empty() {
         Ok(())
     } else {
         Err(Error::Dirty)
     }
 }
-fn working_changes(
-    repo: &dyn ObjectStore,
-    state: &RepositoryState,
-    baseline: &Snapshot,
+fn record_size(record: &Record) -> usize {
+    record.payload_bytes()
+}
+fn capture_dataset(
+    repo: &Repository,
+    binding: &Binding,
     session: &mut dyn WorkingCopyTransaction,
-) -> Result<Vec<Change>> {
+) -> Result<Dataset> {
+    repo.bulk_write(|store| {
+        let mut tree = tree::BulkBuilder::default();
+        let mut records = 0;
+        session.scan(binding, &mut |record| {
+            let id = save(store, "record/v1", &record)?;
+            tree.push(store, record.key, id)?;
+            records += 1;
+            Ok(())
+        })?;
+        Ok(Dataset {
+            schema: schema::store(store, &binding.schema)?,
+            root: tree.finish(store)?,
+            records,
+        })
+    })
+}
+fn schema_changes(repo: &dyn ObjectStore, before: &Snapshot, after: &Snapshot) -> Result<Value> {
     let mut changes = Vec::new();
-    for (dataset, binding) in &state.bindings {
-        for key in session.dirty_keys(dataset)? {
-            let before = merge::record(repo, baseline.get(dataset), &key)?;
-            let after = session.read(binding, &key)?;
-            if before != after {
-                let fields = merge::changed_fields(before.as_ref(), after.as_ref());
-                changes.push(Change {
-                    dataset: dataset.clone(),
-                    key,
-                    before,
-                    after,
-                    fields,
-                });
-            }
+    for name in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+        let a = before.get(name).map(|d| &d.schema);
+        let b = after.get(name).map(|d| &d.schema);
+        if a != b {
+            changes.push(json!({"dataset":name,"before":a.map(|id|schema::read(repo,id)).transpose()?,"after":b.map(|id|schema::read(repo,id)).transpose()?}));
         }
     }
-    Ok(changes)
+    Ok(json!(changes))
 }
-fn capture(
+fn restore_schema_edits(
     repo: &dyn ObjectStore,
-    state: &RepositoryState,
+    state: &mut RepositoryState,
     baseline: &Snapshot,
-    changes: &[Change],
-) -> Result<Snapshot> {
-    let mut snapshot = baseline.clone();
-    for change in changes {
-        let binding = state
-            .bindings
-            .get(&change.dataset)
-            .ok_or_else(|| Error::Storage("missing working-copy binding".into()))?;
-        let schema = save(repo, "schema/v1", &binding.schema)?;
-        let dataset = snapshot.entry(change.dataset.clone()).or_insert(Dataset {
-            schema,
-            root: None,
-            records: 0,
-        });
-        merge::update(repo, dataset, &change.key, change.after.as_ref())?;
-    }
-    Ok(snapshot)
-}
-fn restore_changes(
-    state: &RepositoryState,
-    changes: &[Change],
+    dirty: &BTreeMap<String, Schema>,
     session: &mut dyn WorkingCopyTransaction,
 ) -> Result<()> {
-    for change in changes {
+    if dirty.is_empty() {
+        return Ok(());
+    }
+    for (name, schema) in dirty {
         let binding = state
             .bindings
-            .get(&change.dataset)
+            .get_mut(name)
             .ok_or_else(|| Error::Storage("missing binding".into()))?;
-        session.write(binding, &change.key, change.before.as_ref())?;
+        binding.schema = schema.clone();
+        binding.column_ids = session.column_ids(binding)?;
     }
-    Ok(())
+    apply_snapshot(repo, state, baseline, baseline, session)
 }
 fn apply_snapshot(
     repo: &dyn ObjectStore,
-    state: &RepositoryState,
+    state: &mut RepositoryState,
     before: &Snapshot,
     after: &Snapshot,
     session: &mut dyn WorkingCopyTransaction,
 ) -> Result<()> {
+    let mut rewritten = BTreeSet::new();
     for (name, dataset) in after {
         let binding = state
             .bindings
-            .get(name)
+            .get_mut(name)
             .ok_or_else(|| Error::Unsupported(format!("no working-copy binding for {name}")))?;
-        let schema: Schema = load(repo, "schema/v1", &dataset.schema)?;
+        let schema: Schema = schema::read(repo, &dataset.schema)?;
         if schema != binding.schema {
-            return Err(Error::Unsupported(format!(
-                "schema version checkout: {name}"
-            )));
+            session.replace_schema(binding, &schema)?;
+            binding.schema = schema;
+            binding.column_ids = session.column_ids(binding)?;
+            let mut batch = Vec::<Record>::new();
+            let mut bytes = 0usize;
+            tree::visit(repo, dataset.root.as_ref(), &mut |_, id| {
+                let record: Record = load(repo, "record/v1", id)?;
+                bytes += record_size(&record);
+                batch.push(record);
+                if batch.len() >= 1000 || bytes >= 8 * 1024 * 1024 {
+                    session.write_many(
+                        binding,
+                        &batch
+                            .iter()
+                            .map(|r| (r.key.as_str(), Some(r)))
+                            .collect::<Vec<_>>(),
+                    )?;
+                    batch.clear();
+                    bytes = 0;
+                }
+                Ok(())
+            })?;
+            if !batch.is_empty() {
+                session.write_many(
+                    binding,
+                    &batch
+                        .iter()
+                        .map(|r| (r.key.as_str(), Some(r)))
+                        .collect::<Vec<_>>(),
+                )?;
+            }
+            rewritten.insert(name.clone());
         }
     }
-    for change in merge::diff(repo, before, after)? {
-        let binding = state
-            .bindings
-            .get(&change.dataset)
-            .ok_or_else(|| Error::Storage("missing binding".into()))?;
-        session.write(binding, &change.key, change.after.as_ref())?;
-    }
-    Ok(())
+    let mut before = before.clone();
+    let mut after = after.clone();
+    before.retain(|n, _| !rewritten.contains(n));
+    after.retain(|n, _| !rewritten.contains(n));
+    write_snapshot_diff(repo, state, &before, &after, session)
 }
 fn finish(
     repo: &Repository,
@@ -675,6 +853,7 @@ fn complete_or_stage(
             json!({"state":"merging","conflicts":count,"working_copy_changed":false,"head":state.head()?}),
         );
     }
+    validate_merge_records(repo, state, baseline, &pending.snapshot, session)?;
     let before = state.head()?.clone();
     let id = create_commit(
         repo,
@@ -693,15 +872,13 @@ fn page<T: serde::Serialize>(key: &str, values: &[T], limit: usize) -> Value {
     let limit = limit.clamp(1, 1000);
     json!({key:values.iter().take(limit).collect::<Vec<_>>(),"total":values.len(),"truncated":values.len()>limit})
 }
-fn status(state: &RepositoryState, changes: &[Change], limit: usize) -> Value {
-    let inserted = changes.iter().filter(|c| c.before.is_none()).count();
-    let deleted = changes.iter().filter(|c| c.after.is_none()).count();
+fn status(state: &RepositoryState, changes: &WorkingChanges, limit: usize) -> Value {
     json!({"repository_id":state.repository_id,"branch":state.branch,"head":state.head().ok(),"clean":changes.is_empty(),
         "state":if state.merging.is_some(){"merging"}else{"normal"},
         "unresolved_conflicts":state.merging.as_ref().map(|m|m.conflicts.len()).unwrap_or(0),
         "datasets":state.bindings.keys().collect::<Vec<_>>(),
-        "summary":{"inserted":inserted,"updated":changes.len()-inserted-deleted,"deleted":deleted},
-        "diff":page("changes",changes,limit)})
+        "summary":{"inserted":changes.inserted,"updated":changes.len()-changes.inserted-changes.deleted,"deleted":changes.deleted},
+        "diff":changes.page(limit)})
 }
 fn fsck(repo: &Repository, state: &RepositoryState) -> Result<Value> {
     let objects = repo.verify_objects()?;
@@ -724,7 +901,7 @@ fn fsck(repo: &Repository, state: &RepositoryState) -> Result<Value> {
             )) {
                 continue;
             }
-            let schema: Schema = load(repo, "schema/v1", &dataset.schema)?;
+            let schema: Schema = schema::read(repo, &dataset.schema)?;
             let mut count = 0;
             tree::visit(repo, dataset.root.as_ref(), &mut |key, id| {
                 let row: Record = load(repo, "record/v1", id)?;

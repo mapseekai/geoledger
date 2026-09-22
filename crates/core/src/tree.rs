@@ -3,7 +3,6 @@
 //! without persisting the intermediate roots of N individual insertions.
 use crate::{Error, ObjectId, ObjectStore, Result, load, save};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 const MAX_DEPTH: usize = 512;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,53 +206,116 @@ pub fn diff(
     after: Option<&ObjectId>,
 ) -> Result<Vec<Delta>> {
     let mut out = Vec::new();
-    diff_inner(store, before, after, &mut out, 0)?;
+    visit_diff(store, before, after, &mut |delta| {
+        out.push(delta);
+        Ok(())
+    })?;
     Ok(out)
 }
-fn diff_inner(
+
+enum DiffTask {
+    Tree(ObjectId, usize),
+    Entry(String, ObjectId),
+}
+fn expand(stack: &mut Vec<DiffTask>, n: Node, depth: usize) -> Result<()> {
+    depth_guard(depth)?;
+    stack.pop();
+    if let Some(id) = n.right {
+        stack.push(DiffTask::Tree(id, depth + 1));
+    }
+    stack.push(DiffTask::Entry(n.key, n.value));
+    if let Some(id) = n.left {
+        stack.push(DiffTask::Tree(id, depth + 1));
+    }
+    Ok(())
+}
+
+/// Stream sorted deltas with O(tree depth) traversal memory. Equal subtrees are
+/// skipped before decoding, including when an insertion rotates the root.
+pub fn visit_diff(
     store: &dyn ObjectStore,
     before: Option<&ObjectId>,
     after: Option<&ObjectId>,
-    out: &mut Vec<Delta>,
-    depth: usize,
+    visit: &mut dyn FnMut(Delta) -> Result<()>,
 ) -> Result<()> {
-    depth_guard(depth)?;
-    if before == after {
-        return Ok(());
-    }
-    if let (Some(a), Some(b)) = (before, after) {
-        let a = node(store, a)?;
-        let b = node(store, b)?;
-        if a.key == b.key {
-            diff_inner(store, a.left.as_ref(), b.left.as_ref(), out, depth + 1)?;
-            if a.value != b.value {
-                out.push(Delta {
-                    key: a.key,
-                    before: Some(a.value),
-                    after: Some(b.value),
-                });
+    let mut a: Vec<_> = before
+        .into_iter()
+        .map(|id| DiffTask::Tree(id.clone(), 0))
+        .collect();
+    let mut b: Vec<_> = after
+        .into_iter()
+        .map(|id| DiffTask::Tree(id.clone(), 0))
+        .collect();
+    loop {
+        match (a.last(), b.last()) {
+            (None, None) => return Ok(()),
+            (Some(DiffTask::Tree(x, _)), Some(DiffTask::Tree(y, _))) if x == y => {
+                a.pop();
+                b.pop();
             }
-            diff_inner(store, a.right.as_ref(), b.right.as_ref(), out, depth + 1)?;
-            return Ok(());
+            (Some(DiffTask::Tree(x, dx)), Some(DiffTask::Tree(y, dy))) => {
+                depth_guard(*dx)?;
+                depth_guard(*dy)?;
+                let (x, y, dx, dy) = (node(store, x)?, node(store, y)?, *dx, *dy);
+                // Expand the root with the earlier treap priority first. Keeping
+                // the other subtree intact allows shared children to align.
+                let order = priority(&x.key).cmp(&priority(&y.key));
+                if !order.is_gt() {
+                    expand(&mut a, x, dx)?;
+                }
+                if !order.is_lt() {
+                    expand(&mut b, y, dy)?;
+                }
+            }
+            (Some(DiffTask::Tree(id, depth)), _) => {
+                let (n, depth) = (node(store, id)?, *depth);
+                expand(&mut a, n, depth)?;
+            }
+            (_, Some(DiffTask::Tree(id, depth))) => {
+                let (n, depth) = (node(store, id)?, *depth);
+                expand(&mut b, n, depth)?;
+            }
+            (Some(DiffTask::Entry(x, _)), Some(DiffTask::Entry(y, _))) if x == y => {
+                if let (Some(DiffTask::Entry(key, before)), Some(DiffTask::Entry(_, after))) =
+                    (a.pop(), b.pop())
+                    && before != after
+                {
+                    visit(Delta {
+                        key,
+                        before: Some(before),
+                        after: Some(after),
+                    })?;
+                }
+            }
+            (Some(DiffTask::Entry(x, _)), Some(DiffTask::Entry(y, _))) if x < y => {
+                if let Some(DiffTask::Entry(key, value)) = a.pop() {
+                    visit(Delta {
+                        key,
+                        before: Some(value),
+                        after: None,
+                    })?;
+                }
+            }
+            (Some(DiffTask::Entry(_, _)), None) => {
+                if let Some(DiffTask::Entry(key, value)) = a.pop() {
+                    visit(Delta {
+                        key,
+                        before: Some(value),
+                        after: None,
+                    })?;
+                }
+            }
+            _ => {
+                if let Some(DiffTask::Entry(key, value)) = b.pop() {
+                    visit(Delta {
+                        key,
+                        before: None,
+                        after: Some(value),
+                    })?;
+                }
+            }
         }
     }
-    // Rotated roots use a bounded-by-subtree comparison in this MVP. A future
-    // range-aware iterator can eliminate this materialization without a format change.
-    let mut values = BTreeMap::<String, (Option<ObjectId>, Option<ObjectId>)>::new();
-    visit(store, before, &mut |k, id| {
-        values.entry(k.into()).or_default().0 = Some(id.clone());
-        Ok(())
-    })?;
-    visit(store, after, &mut |k, id| {
-        values.entry(k.into()).or_default().1 = Some(id.clone());
-        Ok(())
-    })?;
-    for (key, (before, after)) in values {
-        if before != after {
-            out.push(Delta { key, before, after });
-        }
-    }
-    Ok(())
 }
 
 #[derive(Default)]

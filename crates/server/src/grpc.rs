@@ -24,10 +24,12 @@ impl Rpc {
         }
     }
     async fn run(&self, command: Command) -> Result<Response<JsonReply>, Status> {
-        let value = self.service.execute(command).await.map_err(map_error)?;
-        Ok(Response::new(JsonReply {
-            json: value.to_string(),
-        }))
+        let json = self
+            .service
+            .execute_json(command)
+            .await
+            .map_err(map_error)?;
+        Ok(Response::new(JsonReply { json }))
     }
 }
 fn map_error(e: Error) -> Status {

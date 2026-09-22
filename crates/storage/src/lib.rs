@@ -7,6 +7,7 @@ use spatial_version_core::{
     Error, ObjectId, ObjectStore, PendingOperation, RepositoryState, Result, object::digest,
 };
 use std::{
+    cell::RefCell,
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     time::Duration,
@@ -15,11 +16,13 @@ use std::{
 const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
 const APPLICATION_ID: i64 = 0x53565031;
 fn db_error(e: rusqlite::Error) -> Error {
-    Error::Storage(e.to_string())
+    Error::storage_source(e.to_string(), e)
 }
 
 pub struct Repository {
     connection: Connection,
+    compressor: RefCell<zstd::bulk::Compressor<'static>>,
+    decompressor: RefCell<zstd::bulk::Decompressor<'static>>,
     _lock: File,
     pub directory: PathBuf,
 }
@@ -63,7 +66,7 @@ impl Repository {
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if app != APPLICATION_ID || version != 1 {
+        if app != APPLICATION_ID || !matches!(version, 1 | 2) {
             return Err(Error::Unsupported("repository storage format".into()));
         }
         Ok(repo)
@@ -95,13 +98,18 @@ impl Repository {
         connection
             .busy_timeout(Duration::from_secs(5))
             .map_err(db_error)?;
+        connection.set_prepared_statement_cache_capacity(32);
         connection
             .execute_batch(
-                "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
+                "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
+                 PRAGMA cache_size=-65536; PRAGMA mmap_size=268435456;
+                 PRAGMA temp_store=FILE; PRAGMA temp.cache_size=-16384;",
             )
             .map_err(db_error)?;
         Ok(Self {
             connection,
+            compressor: RefCell::new(zstd::bulk::Compressor::new(3)?),
+            decompressor: RefCell::new(zstd::bulk::Decompressor::new()?),
             _lock: lock,
             directory,
         })
@@ -110,6 +118,52 @@ impl Repository {
         self.connection
             .execute_batch("BEGIN IMMEDIATE")
             .map_err(db_error)
+    }
+    /// Stage a full scan in an append-oriented temporary table, then insert in
+    /// hash order. This avoids repeatedly spilling randomly modified main pages.
+    /// The caller's transaction still owns durability and the journal boundary.
+    pub fn bulk_write<T>(&self, write: impl FnOnce(&dyn ObjectStore) -> Result<T>) -> Result<T> {
+        if self.connection.is_autocommit() {
+            return Err(Error::Storage("bulk write requires a transaction".into()));
+        }
+        self.connection
+            .execute_batch("SAVEPOINT bulk_objects")
+            .map_err(db_error)?;
+        let result = (|| {
+            self.connection.execute_batch(
+                "CREATE TEMP TABLE bulk_objects(id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload BLOB NOT NULL);"
+            ).map_err(db_error)?;
+            let value = write(&BulkStore(self))?;
+            self.connection
+                .execute_batch(
+                    "INSERT OR IGNORE INTO objects(id,kind,payload)
+                 SELECT id,kind,payload FROM temp.bulk_objects ORDER BY id;
+                 DROP TABLE temp.bulk_objects;",
+                )
+                .map_err(db_error)?;
+            Ok(value)
+        })();
+        if result.is_err() {
+            self.connection
+                .execute_batch("ROLLBACK TO bulk_objects")
+                .map_err(db_error)?;
+        }
+        self.connection
+            .execute_batch("RELEASE bulk_objects")
+            .map_err(db_error)?;
+        result
+    }
+    fn decompress(&self, data: &[u8]) -> Result<Vec<u8>> {
+        let size = zstd::zstd_safe::get_frame_content_size(data)
+            .map_err(|_| Error::Storage("invalid compressed object header".into()))?
+            .unwrap_or(MAX_OBJECT_BYTES as u64);
+        if size > MAX_OBJECT_BYTES as u64 {
+            return Err(Error::Storage("object exceeds decompression limit".into()));
+        }
+        self.decompressor
+            .borrow_mut()
+            .decompress(data, size as usize)
+            .map_err(|e| Error::storage_source(e.to_string(), e))
     }
     pub fn commit(&self) -> Result<()> {
         self.connection.execute_batch("COMMIT").map_err(db_error)
@@ -141,13 +195,18 @@ impl Repository {
         let state: RepositoryState = self
             .read_meta("state")?
             .ok_or_else(|| Error::Storage("missing repository state".into()))?;
-        if state.version != 1 {
+        if !matches!(state.version, 1 | 2) {
             return Err(Error::Unsupported("repository state format".into()));
         }
         state.head()?;
         Ok(state)
     }
     pub fn save_state(&self, state: &RepositoryState) -> Result<()> {
+        if state.version == 2 {
+            self.connection
+                .execute_batch("PRAGMA user_version=2")
+                .map_err(db_error)?;
+        }
         let previous: Option<RepositoryState> = self.read_meta("state")?;
         let old_head = previous.as_ref().map(|s| s.head().cloned()).transpose()?;
         let new_head = state.head()?;
@@ -171,6 +230,11 @@ impl Repository {
         self.read_meta("pending")
     }
     pub fn prepare(&self, operation: &PendingOperation) -> Result<()> {
+        if operation.after.version == 2 {
+            self.connection
+                .execute_batch("PRAGMA user_version=2")
+                .map_err(db_error)?;
+        }
         if self.pending()?.is_some() {
             return Err(Error::Recovery("an operation is already pending".into()));
         }
@@ -208,8 +272,7 @@ impl Repository {
             let id: String = row.get(0).map_err(db_error)?;
             let kind: String = row.get(1).map_err(db_error)?;
             let data: Vec<u8> = row.get(2).map_err(db_error)?;
-            let bytes = zstd::bulk::decompress(&data, MAX_OBJECT_BYTES)
-                .map_err(|e| Error::Storage(e.to_string()))?;
+            let bytes = self.decompress(&data)?;
             if digest(&kind, &bytes).as_str() != id {
                 return Err(Error::Storage(format!("corrupt object {id}")));
             }
@@ -220,38 +283,63 @@ impl Repository {
 }
 impl ObjectStore for Repository {
     fn put(&self, kind: &str, bytes: &[u8]) -> Result<ObjectId> {
+        self.put_into(kind, bytes, false)
+    }
+    fn get(&self, id: &ObjectId, expected_kind: &str) -> Result<Vec<u8>> {
+        self.get_from(id, expected_kind, false)
+    }
+}
+impl Repository {
+    fn put_into(&self, kind: &str, bytes: &[u8], bulk: bool) -> Result<ObjectId> {
         if bytes.len() > MAX_OBJECT_BYTES {
             return Err(Error::Invalid("object exceeds 64 MiB limit".into()));
         }
         let id = digest(kind, bytes);
-        let payload = zstd::bulk::compress(bytes, 3).map_err(|e| Error::Storage(e.to_string()))?;
+        let payload = self
+            .compressor
+            .borrow_mut()
+            .compress(bytes)
+            .map_err(|e| Error::storage_source(e.to_string(), e))?;
         self.connection
-            .execute(
-                "INSERT INTO objects(id,kind,payload) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING",
-                params![id.as_str(), kind, payload],
-            )
+            .prepare_cached(if bulk {
+                "INSERT INTO temp.bulk_objects(id,kind,payload) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING"
+            } else {
+                "INSERT INTO objects(id,kind,payload) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING"
+            })
+            .map_err(db_error)?
+            .execute(params![id.as_str(), kind, payload])
             .map_err(db_error)?;
         Ok(id)
     }
-    fn get(&self, id: &ObjectId, expected_kind: &str) -> Result<Vec<u8>> {
+    fn get_from(&self, id: &ObjectId, expected_kind: &str, bulk: bool) -> Result<Vec<u8>> {
         let row: Option<(String, Vec<u8>)> = self
             .connection
-            .query_row(
-                "SELECT kind,payload FROM objects WHERE id=?1",
-                [id.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .prepare_cached(if bulk {
+                "SELECT kind,payload FROM temp.bulk_objects WHERE id=?1 UNION ALL SELECT kind,payload FROM objects WHERE id=?1 LIMIT 1"
+            } else {
+                "SELECT kind,payload FROM objects WHERE id=?1"
+            })
+            .map_err(db_error)?
+            .query_row([id.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()
             .map_err(db_error)?;
         let (kind, data) = row.ok_or_else(|| Error::NotFound(format!("object {id}")))?;
-        let bytes = zstd::bulk::decompress(&data, MAX_OBJECT_BYTES)
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let bytes = self.decompress(&data)?;
         if kind != expected_kind || digest(&kind, &bytes) != *id {
             return Err(Error::Storage(format!(
                 "type or checksum mismatch for {id}"
             )));
         }
         Ok(bytes)
+    }
+}
+struct BulkStore<'a>(&'a Repository);
+impl ObjectStore for BulkStore<'_> {
+    fn put(&self, kind: &str, bytes: &[u8]) -> Result<ObjectId> {
+        self.0.put_into(kind, bytes, true)
+    }
+    fn get(&self, id: &ObjectId, expected_kind: &str) -> Result<Vec<u8>> {
+        self.0.get_from(id, expected_kind, true)
     }
 }
 impl Drop for Repository {

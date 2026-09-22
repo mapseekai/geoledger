@@ -8,11 +8,17 @@
 
 ## 统一命令协议
 
-HTTP `POST /v1/commands` 接受以下 JSON。相同对象可通过 gRPC ExecuteRequest.command_json 传入。未知字段会拒绝。author 默认 unknown；schema 默认 public；reference/from 分支起点默认 HEAD；limit 默认 100，列表最多返回 1000 项。
+HTTP `POST /v1/commands` 接受以下 JSON。相同对象可通过 gRPC ExecuteRequest.command_json 传入。未知字段会拒绝。author 默认 unknown；schema 默认 public；reference/from 分支起点默认 HEAD；limit 默认 100，列表最多返回 1000 项。status/diff 预览另受约 8 MiB 载荷预算约束（单条超大记录除外），所以返回条数可以小于 limit，truncated 根据实际返回数计算；total 仍为精确记录数，结构漂移时以 record_counts_complete 为准。
 
 ```json
 {"op":"init","author":"Alan"}
 {"op":"import","dataset":"roads","schema":"public","table":"roads","author":"Alan","message":"初始导入"}
+{"op":"upgrade"}
+{"op":"schema","dataset":"roads","reference":"HEAD"}
+{"op":"alter_schema","dataset":"roads","change":{"action":"add","name":"note","data_type":"text"}}
+{"op":"alter_schema","dataset":"roads","change":{"action":"rename","name":"note","new_name":"memo"}}
+{"op":"alter_schema","dataset":"roads","change":{"action":"alter_type","name":"memo","data_type":"varchar(200)"}}
+{"op":"alter_schema","dataset":"roads","change":{"action":"drop","name":"memo","discard":true}}
 {"op":"status","limit":100}
 {"op":"diff","from":"main","to":"draft","limit":100}
 {"op":"diff","limit":100}
@@ -77,6 +83,8 @@ HTTP `POST /v1/commands` 接受以下 JSON。相同对象可通过 gRPC ExecuteR
 
 status 的记录差异在 `diff.changes`，汇总在 `summary`，而不是顶层 changes。diff / conflicts 返回对应数组、total 与 truncated。列表没有游标或 offset；需要完整大结果时，应先扩展分页接口，不能静默接受 truncated。
 
+字段命令自动提交，可提供 author/message。外部 DDL 通过 status/diff 的 `schema_changes` 展示并由 commit 记录；`record_counts_complete: false` 表示结构变化数据集尚未计算行统计。此类 commit 的 `changed_records` 为 null，`rescanned_records` 是全扫描行数，`incremental_changed_records` 是其他数据集的增量数。限制和升级步骤见 [字段结构版本管理](schema-evolution.md)。新字段命令经 gRPC Execute 调用，暂不提供专用类型化 RPC。
+
 ## gRPC
 
 协议：`crates/server/proto/spatial_version.proto`，包 `spatial.version.v1`，服务 `SpatialVersion`。提供 Execute、Status、Import、Commit、Log、Diff、Branch、Switch、Merge、Revert、Reset、Restore、Continue、Abort、Recover。
@@ -100,6 +108,6 @@ grpcurl -plaintext -import-path crates/server/proto -proto spatial_version.proto
 
 Bearer token 应是至少 24 字节的随机值，HTTP/gRPC 使用同一令牌。仓库路径和数据库连接在服务启动时绑定，调用者不能通过请求指定任意路径或数据库。没有租户隔离和用户权限分级。
 
-请求大小上限 4 MiB，回复序列化上限 16 MiB，同时执行槽位 8。跨进程仓库文件锁使同仓库操作串行，竞争时可返回 busy；初版不要把并发槽位当成多分支并发写能力。数据库等待表锁上限 5 秒、语句上限 120 秒。初始导入仍可能执行多条语句，并无统一总任务时限。
+请求大小上限 4 MiB，回复序列化上限 16 MiB，同时执行槽位 8。回复在阻塞工作线程中使用有界 writer 编码一次，HTTP/gRPC 复用编码结果；槽位在编码完成后才释放。跨进程仓库文件锁使同仓库操作串行，竞争时可返回 busy；初版不要把并发槽位当成多分支并发写能力。数据库等待表锁上限 5 秒、语句超时默认 120 秒，可用 SV_STATEMENT_TIMEOUT_SECS 配置。初始导入仍可能执行多条语句，并无统一总任务时限。
 
 客户端断开不表示数据库操作被取消。不要自动重试可能已经成功的非幂等写入；先查询状态、历史与 recover。服务尚无请求幂等键，也没有 HTTP OpenAPI 自动生成文件。

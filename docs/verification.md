@@ -78,3 +78,32 @@ cargo test -p spatial-version --test postgis -- --ignored --test-threads=1
 
 本次目录迁移未重新启动 PostGIS 测试容器，也未重新执行六项数据库集成测试；首次数据库与四入口端到端验证结果仍单独记录在上文，不计入本次复验通过数量。
 迁移复验日志保存在 `.reference/root-verification.log`。本次未提交或推送 Git。
+
+## 真实大数据与超时配置复验：2026-09-22
+
+新增可配置的事务级 PostGIS 语句超时，默认仍为 120 秒。本地真实数据库上 28 项测试（含显式启用的集成测试）全部通过，格式与 Clippy 检查通过。
+
+用户提供的 lucc.geojson（9,384 条）完成版本操作与全表校验；big.geojson（483,268 条、23,040,506 个顶点）首次触发 120 秒超时，回滚一致性检查通过。配置 900 秒后完整初始版本导入用时 123.575 秒，10,000 条增量提交用时 119.086 秒，切换、合并、revert、全表校验均通过，fsck 校验 1,207,551 个对象用时 498.086 秒。
+
+完整规模、计时、内存测量范围、日志位置与未测边界见 [大数据验证记录](big-data-verification.md)。此结果不代表全量修改或并发性能保证。
+
+## 字段结构与性能优化回归：2026-09-22
+
+完整工作区测试显式启用专用 PostGIS 测试后 **40 项通过、0 项失败、0 项忽略**，其中 16 项是 Application → 真实 PostGIS 集成测试。格式检查、Clippy（warnings as errors）通过。日志保留在 `.reference/schema-final-tests.log` 和 `.reference/schema-final-clippy.log`。
+
+新增验证覆盖：四种工具字段命令；外部 DDL 检测/提交/丢弃；稳定 ID 改名和同名删除后重建；删列值恢复；numeric → integer 后精确小数恢复；类型转换/注入输入/主键/索引依赖拒绝及回滚；保留字列名与 UNIQUE；结构改名结合另一分支数据编辑；独立新增字段合并；不兼容改名和删列/数据编辑冲突拒绝；数据库已提交、本地状态未发布的 journal 恢复；v1 数据集升级；超过单批的插入/更新/删除；历史 diff 截断与结构差异；对象压缩复用下空对象和损坏载荷校验。
+
+上文首次验证中的“新增字段导致漂移时拒绝”是旧版行为；现在 v2 支持受控字段演进，测试改为拒绝未支持的可空性变化。新命令共用 HTTP/gRPC 的 Command 路由，但本轮字段操作未另做网络传输端到端测试。真实大表数据与字段计时继续记录在 [大数据验证记录](big-data-verification.md)。
+
+整表对象批写另验证临时对象读取、对象类型校验、重复对象去重、扫描失败后可重试、外层事务回滚及重新打开仓库后的持久性。临时表和排序写入不改变不可变对象编码，也不放宽 synchronous=FULL。
+
+另用真实旧二进制创建 v1 小仓库，再运行新二进制 upgrade、字段改名并 reset 到原始提交：原值恢复、status 干净、fsck 通过；旧二进制打开升级后的仓库明确返回不支持的仓库格式。记录位于 `.reference/schema_legacy_9d78384d/results.json`。
+
+48 万条 big 数据上的四种字段命令、删列值历史恢复、外部新增字段/status/commit、历史 diff 限量输出均通过。最终全表摘要匹配初始数据，工作副本干净；fsck 校验 4,109,530 个对象并成功。续测记录为 `.reference/large-data-20260922/big_optimized_cacb7424/schema_optimized/results.json`（verified=true）。结构回填、完整结构差异遍历和历史库增长的成本已在大数据记录中单独披露。
+
+
+## Rust 审查修复回归（2026-09-22）
+
+当前完整工作区显式启用 PostGIS 测试后 **50 项通过、0 失败、0 忽略**，包含 21 项 Application → PostGIS 测试。fmt、Clippy warnings-as-errors、Rust 1.88 全目标编译检查通过。四个原始错误复现已重跑，并增加分页字节预算/恢复、合并基点读取规模、树根变化差异和错误来源/编码边界回归。
+
+同一组 10,000 条脏记录、每条 8 KiB 文本的 debug `status --limit 1` 实测，峰值 RSS 从 184.30 MiB 降到 33.56 MiB，耗时基本持平。详细行为、自动合并的保守转换策略、查询索引补建以及测试边界见 [Rust 审查修复记录](rust-review-fixes.md)。证据目录为 `.reference/reviews/rust-fixes-20260922/`。

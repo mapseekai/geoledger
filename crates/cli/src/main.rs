@@ -19,11 +19,53 @@ struct Cli {
     /// Name of an environment variable; credentials are never stored in the repository.
     #[arg(long, global = true, default_value = "SV_DATABASE_URL")]
     database_env: String,
+    /// Per-statement PostGIS timeout, including streaming reads during import.
+    #[arg(long, global = true, env = "SV_STATEMENT_TIMEOUT_SECS", default_value_t = 120,
+        value_parser = clap::value_parser!(u64).range(1..=2_147_483))]
+    statement_timeout_secs: u64,
     #[command(subcommand)]
     command: Action,
 }
 #[derive(Subcommand)]
 enum Action {
+    /// Upgrade legacy datasets to stable column identity tracking (format v2).
+    Upgrade,
+    Schema {
+        dataset: String,
+        #[arg(long, default_value = "HEAD")]
+        reference: String,
+    },
+    AddField {
+        dataset: String,
+        name: String,
+        #[arg(long = "type")]
+        data_type: String,
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+    DropField {
+        dataset: String,
+        name: String,
+        #[arg(long)]
+        discard: bool,
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+    RenameField {
+        dataset: String,
+        name: String,
+        new_name: String,
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+    AlterFieldType {
+        dataset: String,
+        name: String,
+        #[arg(long = "type")]
+        data_type: String,
+        #[arg(short, long)]
+        message: Option<String>,
+    },
     Init,
     Import {
         dataset: String,
@@ -154,10 +196,58 @@ async fn main() -> std::process::ExitCode {
 async fn run(cli: Cli) -> Result<()> {
     let mut app = Application::new(cli.repo);
     if let Ok(dsn) = std::env::var(&cli.database_env) {
-        app = app.with_provider(Arc::new(PostgisProvider::new(dsn)));
+        app = app.with_provider(Arc::new(PostgisProvider::new(dsn).with_statement_timeout(
+            std::time::Duration::from_secs(cli.statement_timeout_secs),
+        )?));
     }
     let author = cli.author;
     let command = match cli.command {
+        Action::Upgrade => Command::Upgrade,
+        Action::Schema { dataset, reference } => Command::Schema { dataset, reference },
+        Action::AddField {
+            dataset,
+            name,
+            data_type,
+            message,
+        } => Command::AlterSchema {
+            dataset,
+            change: spatial_version::core::schema::SchemaEdit::Add { name, data_type },
+            author,
+            message,
+        },
+        Action::DropField {
+            dataset,
+            name,
+            discard,
+            message,
+        } => Command::AlterSchema {
+            dataset,
+            change: spatial_version::core::schema::SchemaEdit::Drop { name, discard },
+            author,
+            message,
+        },
+        Action::RenameField {
+            dataset,
+            name,
+            new_name,
+            message,
+        } => Command::AlterSchema {
+            dataset,
+            change: spatial_version::core::schema::SchemaEdit::Rename { name, new_name },
+            author,
+            message,
+        },
+        Action::AlterFieldType {
+            dataset,
+            name,
+            data_type,
+            message,
+        } => Command::AlterSchema {
+            dataset,
+            change: spatial_version::core::schema::SchemaEdit::AlterType { name, data_type },
+            author,
+            message,
+        },
         Action::Init => Command::Init { author },
         Action::Import {
             dataset,
@@ -264,7 +354,7 @@ async fn run(cli: Cli) -> Result<()> {
     };
     let result = tokio::task::spawn_blocking(move || app.execute(command))
         .await
-        .map_err(|_| Error::Storage("operation worker failed".into()))??;
+        .map_err(|e| Error::storage_source("operation worker failed", e))??;
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }

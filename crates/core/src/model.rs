@@ -11,6 +11,25 @@ pub struct Record {
     pub fields: BTreeMap<String, Cell>,
 }
 
+impl Record {
+    /// Approximate owned payload bytes for I/O batching, not allocator accounting.
+    pub fn payload_bytes(&self) -> usize {
+        self.key.len()
+            + self
+                .fields
+                .iter()
+                .map(|(name, value)| {
+                    name.len()
+                        + match value {
+                            Cell::Text(v) | Cell::Geometry(v) => v.len(),
+                            Cell::Blob(_) => 64,
+                            Cell::Null => 0,
+                        }
+                })
+                .sum::<usize>()
+    }
+}
+
 /// Scalar text is interpreted using the field's explicit codec, never as f64.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
@@ -113,6 +132,9 @@ pub struct Binding {
     pub schema_name: String,
     pub table_name: String,
     pub schema: Schema,
+    /// Working-copy column positions, not part of the historical schema encoding.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub column_ids: BTreeMap<i16, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

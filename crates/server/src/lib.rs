@@ -38,25 +38,67 @@ impl Service {
         bool::from(candidate.as_bytes().ct_eq(token.as_bytes()))
     }
     pub async fn execute(&self, command: Command) -> Result<Value> {
+        self.execute_with(command, |value| {
+            encode_limited(&value, None)?;
+            Ok(value)
+        })
+        .await
+    }
+    /// Serialize once on the blocking worker. Transports reuse this exact JSON.
+    pub async fn execute_json(&self, command: Command) -> Result<String> {
+        self.execute_with(command, |value| {
+            let bytes = encode_limited(&value, Some(Vec::new()))?;
+            String::from_utf8(bytes).map_err(|e| Error::storage_source("invalid JSON encoding", e))
+        })
+        .await
+    }
+    async fn execute_with<T: Send + 'static>(
+        &self,
+        command: Command,
+        encode: impl FnOnce(Value) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
         let permit = self
             .permits
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Busy)?;
         let app = self.application.clone();
-        let value = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            app.execute(command)
+            encode(app.execute(command)?)
         })
         .await
-        .map_err(|_| Error::Storage("operation worker failed".into()))??;
-        if serde_json::to_vec(&value)?.len() > MAX_RESPONSE_BYTES {
-            return Err(Error::Unsupported(
-                "response exceeds 16 MiB; request fewer results or use the in-process API".into(),
-            ));
-        }
-        Ok(value)
+        .map_err(|e| Error::storage_source("operation worker failed", e))?
     }
+}
+
+struct LimitedJson {
+    bytes: Option<Vec<u8>>,
+    length: usize,
+}
+impl std::io::Write for LimitedJson {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > MAX_RESPONSE_BYTES.saturating_sub(self.length) {
+            return Err(std::io::Error::other("response size limit exceeded"));
+        }
+        self.length += bytes.len();
+        if let Some(out) = &mut self.bytes {
+            out.extend_from_slice(bytes);
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn encode_limited(value: &Value, bytes: Option<Vec<u8>>) -> Result<Vec<u8>> {
+    let mut writer = LimitedJson { bytes, length: 0 };
+    serde_json::to_writer(&mut writer, value).map_err(|_| {
+        Error::Unsupported(
+            "response exceeds 16 MiB; request fewer results or use the in-process API".into(),
+        )
+    })?;
+    Ok(writer.bytes.unwrap_or_default())
 }
 
 pub struct ServerConfig {
@@ -90,7 +132,7 @@ pub async fn serve(application: Application, config: ServerConfig) -> Result<()>
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(DESCRIPTOR)
         .build_v1()
-        .map_err(|e| Error::Storage(e.to_string()))?;
+        .map_err(|e| Error::storage_source(e.to_string(), e))?;
     let rpc = grpc::server(service.clone());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut http_shutdown = shutdown_rx.clone();
@@ -118,13 +160,13 @@ pub async fn serve(application: Application, config: ServerConfig) -> Result<()>
         },
         result=&mut grpc_task=>{
             let _=shutdown_tx.send(true);let _=http_task.await;
-            result.map_err(|_|Error::Storage("gRPC task failed".into()))?.map_err(|e|Error::Storage(e.to_string()))?;
+            result.map_err(|_|Error::Storage("gRPC task failed".into()))?.map_err(|e|Error::storage_source(e.to_string(), e))?;
         },
         _=tokio::signal::ctrl_c()=>{
             let _=shutdown_tx.send(true);
             let (h,g)=tokio::join!(http_task,grpc_task);
             h.map_err(|_|Error::Storage("HTTP shutdown failed".into()))??;
-            g.map_err(|_|Error::Storage("gRPC shutdown failed".into()))?.map_err(|e|Error::Storage(e.to_string()))?;
+            g.map_err(|_|Error::Storage("gRPC shutdown failed".into()))?.map_err(|e|Error::storage_source(e.to_string(), e))?;
         }
     }
     Ok(())
@@ -132,10 +174,30 @@ pub async fn serve(application: Application, config: ServerConfig) -> Result<()>
 
 pub(crate) fn public_message(error: &Error) -> String {
     match error {
-        Error::Database(_) | Error::Storage(_) | Error::Io(_) => {
+        Error::Backend { .. } | Error::Database(_) | Error::Storage(_) | Error::Io(_) => {
             tracing::error!(error=%error,"operation failed");
             "operation failed; inspect the server log for details".into()
         }
         _ => error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+    #[test]
+    fn bounded_encoding_handles_escaping_and_rejects_before_exceeding_capacity() -> Result<()> {
+        let value = serde_json::json!({"text":"a\n\"中"});
+        let encoded = encode_limited(&value, Some(Vec::new()))?;
+        assert_eq!(serde_json::from_slice::<Value>(&encoded)?, value);
+        assert!(encode_limited(&Value::String("a".repeat(MAX_RESPONSE_BYTES)), None).is_err());
+        assert!(
+            encode_limited(
+                &Value::String("a".repeat(MAX_RESPONSE_BYTES)),
+                Some(Vec::new())
+            )
+            .is_err()
+        );
+        Ok(())
     }
 }

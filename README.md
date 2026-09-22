@@ -11,6 +11,7 @@ PostGIS-first 的 Rust 空间数据版本控制引擎，实验性版本 **0.1.0*
 | 类别 | 已实现 |
 |---|---|
 | 数据 | 注册现有 PostGIS 普通表；单列主键；普通属性、多个 geometry 列；增删改跟踪 |
+| 字段 | 新增、删除、改名、修改类型；工具命令或外部 DDL；结构与数据一起提交和回退 |
 | 历史 | init、import、status、diff、commit、log、show、reflog、fsck |
 | 分支 | branch、switch / checkout；单仓库共享一个数据库工作副本 |
 | 回退 | restore 丢弃未提交修改；reset --hard 移动分支并还原；revert 生成反向提交 |
@@ -18,7 +19,7 @@ PostGIS-first 的 Rust 空间数据版本控制引擎，实验性版本 **0.1.0*
 | 恢复 | 数据库操作标记与本地 pending journal；recover 检查并协调未完成操作 |
 | 服务 | CLI、同步 Rust API、HTTP API、真正基于 HTTP/2 + Protobuf 的 gRPC |
 
-不支持：schema 迁移、复合主键、identity / generated 列、外键、RLS、分区表、用户自定义触发器、远程 push/pull、Git 兼容、栅格/点云读写、几何顶点或拓扑自动合并、暂存区、对象垃圾回收。检测到不支持的表结构会拒绝，而不是静默降级。
+字段变更的支持范围和旧仓库升级步骤见 [字段结构版本管理](docs/schema-evolution.md)。本轮正确性与内存/算法修复见 [Rust 审查修复记录](docs/rust-review-fixes.md)。不支持：主键结构修改、任意约束/默认表达式迁移、复合主键、identity / generated 列、外键、RLS、分区表、用户自定义触发器、远程 push/pull、Git 兼容、栅格/点云读写、几何顶点或拓扑自动合并、暂存区、对象垃圾回收。检测到不支持的表结构会拒绝。
 
 ## 目录与依赖方向
 
@@ -60,6 +61,8 @@ export SV_AUTHOR='Alan'
 
 连接串只从环境变量或 Rust provider 参数获取，不持久化进仓库。`--database-env NAME` 可改环境变量名称。数据仓库存储在指定目录的 `.spatial-version/repository.sqlite`，不是源代码 Git 仓库。
 
+大数据导入可显式设置 `SV_STATEMENT_TIMEOUT_SECS=900` 或全局参数 `--statement-timeout-secs 900`（秒）。默认仍为 120 秒，允许 1–2147483 秒，不能用 0 禁用。设置对当前 CLI 操作或 `serve` 创建的 provider 生效，仅作用于每个数据库事务中的单条 SQL；包含流式读取等待客户端处理的时间，不是整个命令的总超时。Rust API 使用 `PostgisProvider::with_statement_timeout(Duration)`。锁等待超时仍为 5 秒；提高语句超时可能延长注册表被锁定的时间。
+
 随后可通过 QGIS / SQL 编辑注册表：
 
 ```bash
@@ -73,6 +76,19 @@ export SV_AUTHOR='Alan'
 ```
 
 存在未提交修改时，switch / merge 默认拒绝。每个仓库只有一个工作副本；switch 会实际修改注册表中的数据，不能让不同用户同时把同一组表当成不同分支。
+
+字段命令要求干净工作副本，每次操作自动生成提交：
+
+```bash
+# 旧 v1 仓库先在干净状态升级；新导入的数据集已经使用 v2。
+./target/debug/spatial-version --repo ./demo-repo upgrade
+./target/debug/spatial-version --repo ./demo-repo add-field roads note --type text
+./target/debug/spatial-version --repo ./demo-repo rename-field roads note memo
+./target/debug/spatial-version --repo ./demo-repo alter-field-type roads memo --type 'varchar(200)'
+./target/debug/spatial-version --repo ./demo-repo drop-field roads memo --discard
+```
+
+也可通过 SQL / QGIS 执行受支持的字段 DDL，再运行 `status`、`diff` 和 `commit`。`schema roads --reference HEAD` 查看某版本的结构。结构变更提交会扫描整个数据集；跨结构版本切换会重建表内数据并保留跟踪触发器，需预留执行时间和空间。
 
 ## 合并与回退
 
@@ -136,11 +152,13 @@ cargo test --workspace
 # 仅连接名为 spatial_version_test 的隔离数据库：
 SV_TEST_DATABASE_URL='postgresql://...' \
   cargo test -p spatial-version --test postgis -- --ignored --test-threads=1
+# 含事务级超时测试在内的完整检查：
+SV_TEST_DATABASE_URL='postgresql://...' ./scripts/check.sh
 ```
 
 PostGIS 测试默认明确标记为 ignored，不会自动连接数据库；显式运行时要求测试库名称匹配，建立随机 schema，测试数据保留在隔离库内。具体实测结果与未测事项见 [验证记录](docs/verification.md)。
 
-初版会锁定注册表，防止提交/切换期间外部写入；这会阻塞写入，不适合直接套在高并发业务主表上。初始导入按主键排序并流式读取；对象树支持路径复用，但旋转子树 diff 有内存化回退，大批 dirty 记录仍逐条查询，尚无百万/千万要素性能保证。所有列表限制最多 1000 项并标记截断，尚无完整游标分页。没有 GC，长期仓库会增长。
+初版会锁定注册表，防止提交/切换期间外部写入；这会阻塞写入，不适合直接套在高并发业务主表上。初始导入按主键排序并流式读取；dirty 主键按游标分页，记录按约 8 MiB 分批读取，普通提交/恢复逐批处理；对象树 diff 跳过相同子树并流式输出。结构合并仍可能保存较多候选键和冲突。列表最多返回 1000 项；status/diff 预览另有约 8 MiB 载荷预算，单条超大记录可超过预算，实际截断以 truncated 为准。尚无客户端完整游标分页。没有 GC，长期仓库会增长。48 万条真实数据测量见 [大数据验证记录](docs/big-data-verification.md)，尚无百万/千万要素性能保证。
 
 `fsck` 检查仓库对象、提交图和数据树，不等于全表核对数据库。被特权用户绕过的触发器写入、数据库备份恢复、任意 DDL 和进程崩溃窗口仍需要更完整的故障注入及审计测试。现在只应作为开发验证版使用。
 

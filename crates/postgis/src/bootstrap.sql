@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS _spatial_version.dirty (
     PRIMARY KEY(repository_id, dataset, pk)
 );
 
+CREATE INDEX IF NOT EXISTS dirty_pk_c_v1 ON _spatial_version.dirty(repository_id,dataset,pk COLLATE "C");
+
 CREATE OR REPLACE FUNCTION _spatial_version.track_row_v1() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, _spatial_version AS $$
 BEGIN

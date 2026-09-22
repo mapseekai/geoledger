@@ -18,6 +18,20 @@ fn public() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    Upgrade,
+    AlterSchema {
+        dataset: String,
+        change: spatial_version_core::schema::SchemaEdit,
+        #[serde(default = "author")]
+        author: String,
+        #[serde(default)]
+        message: Option<String>,
+    },
+    Schema {
+        dataset: String,
+        #[serde(default = "head")]
+        reference: String,
+    },
     Init {
         #[serde(default = "author")]
         author: String,
