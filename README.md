@@ -2,7 +2,7 @@
 
 PostGIS-first 的 Rust 空间数据版本控制引擎，实验性版本 **0.1.0**。
 
-本工作区提供 Rust 库 API、CLI、HTTP JSON API、gRPC 四种入口；它们共用同一个应用层，而不是相互调用命令行。当前版本是可运行、可测试的基础实现，不是生产级 Kart 替代品，也不兼容 Git/Kart 仓库格式。
+本工作区提供 Rust 库 API、CLI、HTTP JSON API、gRPC、Volo Thrift 五种入口；它们共用同一个应用层，而不是相互调用命令行。当前版本是可运行、可测试的基础实现，不是生产级 Kart 替代品，也不兼容 Git/Kart 仓库格式。
 
 > 项目根目录为 `/Users/zhang/code/spatial-version`，也是唯一的 Cargo workspace 根目录。下面所有命令均在项目根目录执行。
 
@@ -17,7 +17,7 @@ PostGIS-first 的 Rust 空间数据版本控制引擎，实验性版本 **0.1.0*
 | 回退 | restore 丢弃未提交修改；reset --hard 移动分支并还原；revert 生成反向提交 |
 | 合并 | 快进、三方字段级合并、冲突列表、选择/自定义解决、继续、取消 |
 | 恢复 | 数据库操作标记与本地 pending journal；recover 检查并协调未完成操作 |
-| 服务 | CLI、同步 Rust API、HTTP API、真正基于 HTTP/2 + Protobuf 的 gRPC |
+| 服务 | CLI、同步 Rust API、HTTP API、真正基于 HTTP/2 + Protobuf 的 gRPC、Volo Thrift |
 
 字段变更的支持范围和旧仓库升级步骤见 [字段结构版本管理](docs/schema-evolution.md)。本轮正确性与内存/算法修复见 [Rust 审查修复记录](docs/rust-review-fixes.md)。不支持：主键结构修改、任意约束/默认表达式迁移、复合主键、identity / generated 列、外键、RLS、分区表、用户自定义触发器、远程 push/pull、Git 兼容、栅格/点云读写、几何顶点或拓扑自动合并、暂存区、对象垃圾回收。检测到不支持的表结构会拒绝。
 
@@ -28,11 +28,12 @@ crates/core       数据模型、对象协议、持久化树、DAG、diff / merg
 crates/storage    SQLite WAL 对象库、Zstd、文件锁、仓库状态、恢复日志
 crates/postgis    表结构识别、EWKB 编码、脏主键触发器、数据库事务
 crates/app        统一 Application / Command；提交、分支、回退、合并编排
-crates/server     Axum HTTP API、Tonic gRPC、鉴权和阻塞任务隔离
+crates/server     Axum HTTP API、Tonic gRPC、Volo Thrift、鉴权和阻塞任务隔离
+crates/thrift-gen Volo 自动生成的 Thrift 客户端/服务端绑定
 crates/cli        Clap 命令行与服务启动
 ```
 
-core 不依赖 PostGIS、SQL、HTTP 或 gRPC。未来的数据格式通过 `WorkingCopyProvider` / `WorkingCopyTransaction` 扩展；存储通过 `ObjectStore` 扩展。`DatasetKind::Raster/PointCloud` 和 `Cell::Blob` 只是预留模型，尚无相应适配器。
+core 不依赖 PostGIS、SQL、HTTP、gRPC 或 Thrift。未来的数据格式通过 `WorkingCopyProvider` / `WorkingCopyTransaction` 扩展；存储通过 `ObjectStore` 扩展。`DatasetKind::Raster/PointCloud` 和 `Cell::Blob` 只是预留模型，尚无相应适配器。
 
 ## 构建
 
@@ -163,3 +164,12 @@ PostGIS 测试默认明确标记为 ignored，不会自动连接数据库；显�
 `fsck` 检查仓库对象、提交图和数据树，不等于全表核对数据库。被特权用户绕过的触发器写入、数据库备份恢复、任意 DDL 和进程崩溃窗口仍需要更完整的故障注入及审计测试。现在只应作为开发验证版使用。
 
 参见 [架构与一致性](docs/architecture.md)、[Kart 源码参考](docs/kart-reference.md)、[后续工作](docs/roadmap.md)。
+
+## Volo Thrift
+
+```bash
+./target/debug/spatial-version --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880
+cargo run -p spatial-version-server --example thrift_client -- 127.0.0.1:7880
+```
+
+`serve-thrift` 独立启动 Thrift；原有 `serve` 仍启动 HTTP/gRPC。采用 CloudWeGo（字节跳动）Volo Thrift，使用 Framed Binary 协议。支持与 gRPC 对等的 15 个方法，`execute` 覆盖全部命令，包括新增/删除字段、字段改名和修改类型。配置 `SV_API_TOKEN` 后，客户端每次调用传入 `Bearer <token>`。IDL、跨语言调用约定和代码生成边界见 [Thrift API](docs/api.md#volo-thrift)。

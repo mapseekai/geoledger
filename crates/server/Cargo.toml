@@ -20,11 +20,18 @@ tonic-reflection = "0.14"
 tokio-stream = { version = "0.1", features = ["net"] }
 subtle = "2"
 tracing = "0.1"
+volo = "0.12.4"
+volo-thrift = "0.12.6"
+pilota = "0.13"
+spatial-version-thrift-gen = { path = "../thrift-gen" }
 
 [build-dependencies]
 tonic-prost-build = "0.14"
 
 [dev-dependencies]
+spatial-version-postgis.workspace = true
+postgres = "0.19"
+uuid.workspace = true
 tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

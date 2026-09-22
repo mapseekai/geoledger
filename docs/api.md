@@ -8,7 +8,7 @@
 
 ## 统一命令协议
 
-HTTP `POST /v1/commands` 接受以下 JSON。相同对象可通过 gRPC ExecuteRequest.command_json 传入。未知字段会拒绝。author 默认 unknown；schema 默认 public；reference/from 分支起点默认 HEAD；limit 默认 100，列表最多返回 1000 项。status/diff 预览另受约 8 MiB 载荷预算约束（单条超大记录除外），所以返回条数可以小于 limit，truncated 根据实际返回数计算；total 仍为精确记录数，结构漂移时以 record_counts_complete 为准。
+HTTP `POST /v1/commands` 接受以下 JSON。相同对象可通过 gRPC 或 Thrift ExecuteRequest.command_json 传入。未知字段会拒绝。author 默认 unknown；schema 默认 public；reference/from 分支起点默认 HEAD；limit 默认 100，列表最多返回 1000 项。status/diff 预览另受约 8 MiB 载荷预算约束（单条超大记录除外），所以返回条数可以小于 limit，truncated 根据实际返回数计算；total 仍为精确记录数，结构漂移时以 record_counts_complete 为准。
 
 ```json
 {"op":"init","author":"Alan"}
@@ -83,7 +83,7 @@ HTTP `POST /v1/commands` 接受以下 JSON。相同对象可通过 gRPC ExecuteR
 
 status 的记录差异在 `diff.changes`，汇总在 `summary`，而不是顶层 changes。diff / conflicts 返回对应数组、total 与 truncated。列表没有游标或 offset；需要完整大结果时，应先扩展分页接口，不能静默接受 truncated。
 
-字段命令自动提交，可提供 author/message。外部 DDL 通过 status/diff 的 `schema_changes` 展示并由 commit 记录；`record_counts_complete: false` 表示结构变化数据集尚未计算行统计。此类 commit 的 `changed_records` 为 null，`rescanned_records` 是全扫描行数，`incremental_changed_records` 是其他数据集的增量数。限制和升级步骤见 [字段结构版本管理](schema-evolution.md)。新字段命令经 gRPC Execute 调用，暂不提供专用类型化 RPC。
+字段命令自动提交，可提供 author/message。外部 DDL 通过 status/diff 的 `schema_changes` 展示并由 commit 记录；`record_counts_complete: false` 表示结构变化数据集尚未计算行统计。此类 commit 的 `changed_records` 为 null，`rescanned_records` 是全扫描行数，`incremental_changed_records` 是其他数据集的增量数。限制和升级步骤见 [字段结构版本管理](schema-evolution.md)。新字段命令经 gRPC Execute 或 Thrift execute 调用，暂不提供专用类型化 RPC。
 
 ## gRPC
 
@@ -111,3 +111,25 @@ Bearer token 应是至少 24 字节的随机值，HTTP/gRPC 使用同一令牌�
 请求大小上限 4 MiB，回复序列化上限 16 MiB，同时执行槽位 8。回复在阻塞工作线程中使用有界 writer 编码一次，HTTP/gRPC 复用编码结果；槽位在编码完成后才释放。跨进程仓库文件锁使同仓库操作串行，竞争时可返回 busy；初版不要把并发槽位当成多分支并发写能力。数据库等待表锁上限 5 秒、语句超时默认 120 秒，可用 SV_STATEMENT_TIMEOUT_SECS 配置。初始导入仍可能执行多条语句，并无统一总任务时限。
 
 客户端断开不表示数据库操作被取消。不要自动重试可能已经成功的非幂等写入；先查询状态、历史与 recover。服务尚无请求幂等键，也没有 HTTP OpenAPI 自动生成文件。
+
+## Volo Thrift
+
+IDL：`crates/thrift-gen/idl/spatial_version.thrift`，Rust 命名空间 `spatial.version.v1`，服务 `SpatialVersion`。使用 Volo 0.12.4、volo-thrift 0.12.6、volo-build 0.12.3；构建时需要当前工具链安装 rustfmt（`rustup component add rustfmt`）。版本由 Cargo.lock 固定，建议 `cargo build --workspace --locked`。
+
+启动：`spatial-version --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880`。它是独立进程入口，Volo 负责 SIGINT/SIGTERM 的连接排空。数据库连接和 SQL 超时沿用 CLI 全局配置。与另一个入口同时操作同一仓库时仍遵守仓库锁。
+
+提供 `execute`、`status`、`import`、`commit`、`log`、`diff`、`branch`、`switch`、`merge`、`revert`、`reset`、`restore`、`continue`、`abort`、`recover`，语义与上述 gRPC 对应。所有方法接受 `(request, optional authorization)`，后者为完整 `Bearer <token>` 字符串。IDL 的 request 字段是 required；空 author 默认 unknown，空 schema 默认 public，空 reference/分支起点默认 HEAD（switch 除外），limit=0 默认 100，负数返回 invalid_argument。
+
+成功返回 `JsonReply.json`，需要 JSON 解码；业务错误通过 IDL 声明的 `ApiError { code, message }` exception 返回，保留 Application 错误码。Volo Rust 客户端需同时处理外层传输错误和 `MaybeException::Exception`，不能只检查 RPC Result。连接失败和协议解析错误由 Volo 返回。
+
+客户端使用 **Framed transport + Binary protocol**，不要使用默认 TTHeader 客户端配置：Rust 示例通过 `DefaultMakeCodec::framed()` 显式选择。其他语言可从此 IDL 生成 Apache Thrift 客户端，使用 TFramedTransport 和 TBinaryProtocol；本轮自动化验证的是 Volo Rust 客户端。读取示例：
+
+```bash
+cargo run -p spatial-version-server --example thrift_client -- 127.0.0.1:7880
+```
+
+四种字段变更通过 `execute(ExecuteRequest { command_json }, authorization)` 传入统一命令协议中的 `alter_schema` JSON。所有方法调用同一个 Service/Application，复用 8 个执行槽位、阻塞任务隔离和 16 MiB JSON 响应上限。解码后的 request 按 Binary 编码大小限制为 4 MiB；帧上限为 16 MiB + 64 KiB，以容纳回复和协议开销。这两个限制含义不同，帧解码仍可能先分配大于 4 MiB 的缓冲区。
+
+### 生成代码与内存安全边界
+
+`crates/thrift-gen` 构建时从 IDL 生成绑定，依赖的 Volo 生成器会产生含 unsafe 的多服务路由实现。因此只有该生成 crate 不继承 workspace 的 `unsafe_code = forbid`；手写代码继续禁止 unsafe。当前服务器使用类型化 `SpatialVersionServer::new`，不使用字节路由器，也未启用 Volo 的 `unsafe-codec` / `unsafe_unchecked` 特性。生成代码不手工修改。升级生成器时应重新检查这条边界和 MSRV；当前锁文件把间接依赖 ordered-float 保持在支持 Rust 1.88 的 5.1.0。

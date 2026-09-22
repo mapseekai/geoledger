@@ -157,6 +157,11 @@ enum Action {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
+    /// Start the Volo Thrift API.
+    ServeThrift {
+        #[arg(long, default_value = "127.0.0.1:7880")]
+        thrift: SocketAddr,
+    },
     /// Start HTTP API and gRPC listeners. Use SV_API_TOKEN for authentication.
     Serve {
         #[arg(long, default_value = "127.0.0.1:7878")]
@@ -340,6 +345,14 @@ async fn run(cli: Cli) -> Result<()> {
         Action::Recover => Command::Recover,
         Action::Fsck => Command::Fsck,
         Action::Reflog { limit } => Command::Reflog { limit },
+        Action::ServeThrift { thrift } => {
+            return spatial_version_server::thrift::serve(
+                app,
+                thrift,
+                std::env::var("SV_API_TOKEN").ok(),
+            )
+            .await;
+        }
         Action::Serve { http, grpc } => {
             return spatial_version_server::serve(
                 app,

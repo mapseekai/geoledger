@@ -107,3 +107,15 @@ cargo test -p spatial-version --test postgis -- --ignored --test-threads=1
 当前完整工作区显式启用 PostGIS 测试后 **50 项通过、0 失败、0 忽略**，包含 21 项 Application → PostGIS 测试。fmt、Clippy warnings-as-errors、Rust 1.88 全目标编译检查通过。四个原始错误复现已重跑，并增加分页字节预算/恢复、合并基点读取规模、树根变化差异和错误来源/编码边界回归。
 
 同一组 10,000 条脏记录、每条 8 KiB 文本的 debug `status --limit 1` 实测，峰值 RSS 从 184.30 MiB 降到 33.56 MiB，耗时基本持平。详细行为、自动合并的保守转换策略、查询索引补建以及测试边界见 [Rust 审查修复记录](rust-review-fixes.md)。证据目录为 `.reference/reviews/rust-fixes-20260922/`。
+
+
+## Volo Thrift 接入验证（2026-09-22）
+
+- `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+- `cargo +1.88.0 check --workspace --all-targets --offline` 通过；该工具链补装 rustfmt，Volo 构建器需要它生成代码。
+- 指向 `spatial_version_test` 的 `cargo test --workspace --offline -- --include-ignored`：53 项通过，0 失败、0 忽略。
+- 新增真实 TCP Thrift 测试：认证拒绝、init/branch/status/log、与同步 Application 状态一致、负 limit、非法 JSON、缺失引用、超过 4 MiB 的 request，以及连接排空。
+- 新增真实 PostGIS Thrift 测试：通过 execute 导入测试表，新增字段、改名、修改类型、删除字段；验证规范类型、最终表结构与原记录、6 条提交历史、clean 状态及 fsck。测试拒绝任何名称不为 `spatial_version_test` 的数据库。
+- 独立临时仓库中运行 CLI `serve-thrift --thrift 127.0.0.1:0`，示例客户端携带 token 查询成功；SIGTERM 后进程以 0 退出。
+
+本轮验证 Volo Rust 客户端和 Framed Binary 协议；没有测量 Thrift 与 gRPC 的吞吐差异，也未运行其他语言客户端兼容性测试。自动生成代码的 unsafe 边界见 [API 文档](api.md#生成代码与内存安全边界)。

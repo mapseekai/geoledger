@@ -1,3 +1,5 @@
+pub mod thrift;
+pub use spatial_version_thrift_gen::spatial::version::v1 as thrift_proto;
 pub mod grpc;
 pub mod http;
 pub mod proto {
