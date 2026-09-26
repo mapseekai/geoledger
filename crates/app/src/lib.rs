@@ -298,7 +298,10 @@ impl Application {
                     let limit = limit.clamp(1, 1000);
                     let (changes, total) =
                         merge::diff_page(repo, &source, &actual, limit, PREVIEW_BYTES)?;
-                    Ok(json!({"changes":changes,"total":total,"truncated":total>changes.len()}))
+                    let mut result =
+                        json!({"changes":changes,"total":total,"truncated":total>changes.len()});
+                    result["schema_changes"] = schema_changes(repo, &source, &actual)?;
+                    Ok(result)
                 } else {
                     Ok(changes.page(limit))
                 }
@@ -471,6 +474,15 @@ impl Application {
                         "restore requires explicit discard=true / --discard".into(),
                     ));
                 }
+                if !changes.is_empty() {
+                    restore_working_records(
+                        repo,
+                        &state.bindings,
+                        &schema_dirty,
+                        &baseline,
+                        session.as_mut(),
+                    )?;
+                }
                 restore_schema_edits(repo, &mut state, &baseline, &schema_dirty, session.as_mut())?;
                 finish(repo, session.as_mut(), &before_head, &state)?;
                 Ok(json!({"restored_records":changes.len(),"head":before_head}))
@@ -484,6 +496,15 @@ impl Application {
                 }
                 let target = state.resolve(&target)?;
                 let snapshot = snapshot_at(repo, &target)?;
+                if !changes.is_empty() {
+                    restore_working_records(
+                        repo,
+                        &state.bindings,
+                        &schema_dirty,
+                        &baseline,
+                        session.as_mut(),
+                    )?;
+                }
                 restore_schema_edits(repo, &mut state, &baseline, &schema_dirty, session.as_mut())?;
                 apply_snapshot(repo, &mut state, &baseline, &snapshot, session.as_mut())?;
                 state.branches.insert(state.branch.clone(), target.clone());
@@ -699,9 +720,6 @@ fn ensure_clean(changes: &WorkingChanges) -> Result<()> {
         Err(Error::Dirty)
     }
 }
-fn record_size(record: &Record) -> usize {
-    record.payload_bytes()
-}
 fn capture_dataset(
     repo: &Repository,
     binding: &Binding,
@@ -776,7 +794,7 @@ fn apply_snapshot(
             let mut bytes = 0usize;
             tree::visit(repo, dataset.root.as_ref(), &mut |_, id| {
                 let record: Record = load(repo, "record/v1", id)?;
-                bytes += record_size(&record);
+                bytes += record.payload_bytes();
                 batch.push(record);
                 if batch.len() >= 1000 || bytes >= 8 * 1024 * 1024 {
                     session.write_many(

@@ -91,6 +91,205 @@ impl Fixture {
 
 #[test]
 #[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+fn regression_nondefault_collations_are_rejected_before_import() {
+    let mut f = Fixture::new();
+    let head = f.head();
+    f.db.batch_execute(&format!(
+        "CREATE COLLATION {}.ci (provider=icu, locale='und-u-ks-level2', deterministic=false)",
+        f.schema
+    ))
+    .unwrap();
+    for (name, collation) in [
+        ("ordered", "\"C\"".into()),
+        ("folded", format!("{}.ci", f.schema)),
+    ] {
+        f.db.batch_execute(&format!(
+            "CREATE TABLE {schema}.{name}(id integer PRIMARY KEY, value text COLLATE {collation});
+             INSERT INTO {schema}.{name} VALUES(1,'One')",
+            schema = f.schema
+        ))
+        .unwrap();
+        let result = f.app.execute(
+            serde_json::from_value(json!({
+                "op":"import","dataset":name,"schema":f.schema,"table":name
+            }))
+            .unwrap(),
+        );
+        assert!(
+            matches!(result, Err(spatial_version::core::Error::Unsupported(_))),
+            "{result:?}"
+        );
+        let count: i64 =
+            f.db.query_one(
+                "SELECT count(*) FROM _spatial_version.tracked WHERE table_oid=$1::text::regclass",
+                &[&format!("{}.{name}", f.schema)],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 0);
+        assert_eq!(f.head(), head);
+    }
+    assert!(
+        f.db.query_one(&format!("SELECT value='one' FROM {}.folded", f.schema), &[])
+            .unwrap()
+            .get::<_, bool>(0)
+    );
+    assert_eq!(f.status()["clean"], true);
+}
+
+#[test]
+#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+fn regression_collation_drift_blocks_destructive_commands() {
+    let mut f = Fixture::new();
+    f.sql("ALTER TABLE $roads ADD COLUMN note text; UPDATE $roads SET note='One'");
+    let head = f.commit("add note");
+    f.db.batch_execute(&format!(
+        "CREATE COLLATION {}.ci (provider=icu, locale='und-u-ks-level2', deterministic=false)",
+        f.schema
+    ))
+    .unwrap();
+    f.sql(&format!(
+        "ALTER TABLE $roads ALTER COLUMN note TYPE text COLLATE {}.ci",
+        f.schema
+    ));
+    for command in [
+        json!({"op":"status"}),
+        json!({"op":"commit","message":"unsupported collation"}),
+        json!({"op":"restore","discard":true}),
+        json!({"op":"reset","target":head,"hard":true}),
+        json!({"op":"alter_schema","dataset":"roads","change":{"action":"drop","name":"note","discard":true}}),
+    ] {
+        let result = f.app.execute(serde_json::from_value(command).unwrap());
+        assert!(
+            matches!(result, Err(spatial_version::core::Error::Unsupported(_))),
+            "{result:?}"
+        );
+        assert_eq!(f.head(), head);
+        assert!(
+            f.db.query_one(
+                &format!("SELECT bool_and(note='one') FROM {}.roads", f.schema),
+                &[]
+            )
+            .unwrap()
+            .get::<_, bool>(0)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+fn regression_unique_value_swaps_restore_across_batches() {
+    for rows in [2, 1002] {
+        let mut f = Fixture::new();
+        f.sql(&format!(
+            "UPDATE $roads SET name=id::text;
+            INSERT INTO $roads(id,name) SELECT i,i::text FROM generate_series(3,{rows}) i"
+        ));
+        let original = f.commit("number unique values");
+        f.run(json!({"op":"branch","name":"original"}));
+        let rotate = format!(
+            "UPDATE $roads SET name='temp-'||id;
+            UPDATE $roads SET name=((id % {rows})+1)::text"
+        );
+        f.sql(&rotate);
+        let rotated = f.commit("rotate unique values");
+        let assert_values = |f: &mut Fixture, rotated: bool| {
+            let expected = if rotated {
+                format!("((id % {rows})+1)::text")
+            } else {
+                "id::text".into()
+            };
+            assert!(
+                f.db.query_one(
+                    &format!(
+                        "SELECT count(*)={rows} AND bool_and(name={expected}) FROM {}.roads",
+                        f.schema
+                    ),
+                    &[]
+                )
+                .unwrap()
+                .get::<_, bool>(0)
+            );
+            assert_eq!(f.status()["clean"], true);
+        };
+        f.run(json!({"op":"switch","branch":"original"}));
+        assert_values(&mut f, false);
+        f.run(json!({"op":"switch","branch":"main"}));
+        assert_values(&mut f, true);
+        f.sql("UPDATE $roads SET name='temp-'||id; UPDATE $roads SET name=id::text");
+        assert_eq!(
+            f.run(json!({"op":"restore","discard":true}))["restored_records"],
+            rows
+        );
+        assert_values(&mut f, true);
+        f.sql("UPDATE $roads SET name='dirty-'||id");
+        f.run(json!({"op":"reset","target":original,"hard":true}));
+        assert_values(&mut f, false);
+        f.run(json!({"op":"reset","target":rotated,"hard":true}));
+        assert_values(&mut f, true);
+        f.run(json!({"op":"revert","target":rotated}));
+        assert_values(&mut f, false);
+        f.run(json!({"op":"fsck"}));
+    }
+}
+
+#[test]
+#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+fn regression_historical_working_diff_includes_schema_changes() {
+    let mut f = Fixture::new();
+    let original = f.head();
+    f.run(json!({"op":"alter_schema","dataset":"roads","change":{"action":"alter_type","name":"width","data_type":"text"}}));
+    let compare = |f: &Fixture, from: &str| {
+        let working = f.run(json!({"op":"diff","from":from}));
+        let committed = f.run(json!({"op":"diff","from":from,"to":"HEAD"}));
+        assert_eq!(working, committed);
+        assert_eq!(working["total"], 0);
+        assert_eq!(working["schema_changes"].as_array().unwrap().len(), 1);
+    };
+    compare(&f, &original);
+    f.sql("DELETE FROM $roads");
+    let empty = f.commit("empty table");
+    f.run(json!({"op":"alter_schema","dataset":"roads","change":{"action":"add","name":"note","data_type":"text"}}));
+    compare(&f, &empty);
+}
+
+#[test]
+#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+fn regression_long_primary_key_import_rolls_back() {
+    let mut f = Fixture::new();
+    let head = f.head();
+    f.db.batch_execute(&format!(
+        "CREATE TABLE {}.long_keys(id text PRIMARY KEY, value text);
+         INSERT INTO {}.long_keys VALUES(repeat('a',9000),'one')",
+        f.schema, f.schema
+    ))
+    .unwrap();
+    let result = f.app.execute(
+        serde_json::from_value(json!({
+            "op":"import","dataset":"long","schema":f.schema,"table":"long_keys"
+        }))
+        .unwrap(),
+    );
+    assert!(
+        matches!(result, Err(spatial_version::core::Error::Invalid(_))),
+        "{result:?}"
+    );
+    assert_eq!(f.head(), head);
+    let tracking: i64 =
+        f.db.query_one(
+            "SELECT count(*) FROM _spatial_version.tracked WHERE table_oid=$1::text::regclass",
+            &[&format!("{}.long_keys", f.schema)],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(tracking, 0);
+    assert_eq!(f.run(json!({"op":"recover"}))["recovered"], false);
+    assert_eq!(f.status()["clean"], true);
+    f.run(json!({"op":"fsck"}));
+}
+
+#[test]
+#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
 fn schema_merge_refuses_lossy_values_and_accepts_exact_target_values() {
     let mut f = Fixture::new();
     f.run(json!({"op":"branch","name":"edit"}));

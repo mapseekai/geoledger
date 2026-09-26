@@ -157,3 +157,23 @@ fn malformed_ids_and_branch_names_fail() {
     }
     validate_branch("feature/new-roads").unwrap();
 }
+
+#[test]
+fn regression_bulk_and_incremental_key_limits_match() {
+    let store = MemoryStore::default();
+    let value = save(&store, "record/v1", &row("0", "0")).unwrap();
+    let valid = "a".repeat(8192);
+    let mut bulk = tree::BulkBuilder::default();
+    bulk.push(&store, valid.clone(), value.clone()).unwrap();
+    let root = tree::set(&store, None, &valid, Some(&value)).unwrap();
+    for invalid in ["b".repeat(8193), "中".repeat(2731)] {
+        assert!(tree::set(&store, root.as_ref(), &invalid, Some(&value)).is_err());
+        let count = store.object_count();
+        assert!(bulk.push(&store, invalid, value.clone()).is_err());
+        assert_eq!(store.object_count(), count);
+    }
+    // A rejected key must not change the builder's ordering or pending nodes.
+    bulk.push(&store, "c".into(), value.clone()).unwrap();
+    let expected = tree::set(&store, root.as_ref(), "c", Some(&value)).unwrap();
+    assert_eq!(bulk.finish(&store).unwrap(), expected);
+}

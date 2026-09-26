@@ -28,6 +28,12 @@ fn depth_guard(depth: usize) -> Result<()> {
         Ok(())
     }
 }
+fn validate_key(key: &str) -> Result<()> {
+    if key.len() > 8192 {
+        return Err(Error::Invalid("record key exceeds 8192 bytes".into()));
+    }
+    Ok(())
+}
 
 pub fn get(
     store: &dyn ObjectStore,
@@ -55,9 +61,7 @@ pub fn set(
     key: &str,
     value: Option<&ObjectId>,
 ) -> Result<Option<ObjectId>> {
-    if key.len() > 8192 {
-        return Err(Error::Invalid("record key exceeds 8192 bytes".into()));
-    }
+    validate_key(key)?;
     change(store, root, key, value, 0)
 }
 fn change(
@@ -325,6 +329,7 @@ pub struct BulkBuilder {
 }
 impl BulkBuilder {
     pub fn push(&mut self, store: &dyn ObjectStore, key: String, value: ObjectId) -> Result<()> {
+        validate_key(&key)?;
         if self.previous.as_ref().is_some_and(|p| p >= &key) {
             return Err(Error::Invalid(
                 "bulk keys must be strictly increasing (UTF-8 byte order)".into(),

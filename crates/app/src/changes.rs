@@ -46,10 +46,6 @@ pub(super) fn working_changes(
                 ..
             }
     );
-    let restore = matches!(
-        command,
-        Command::Restore { discard: true } | Command::Reset { hard: true, .. }
-    );
     let mut summary = WorkingChanges {
         snapshot: baseline.clone(),
         ..Default::default()
@@ -81,8 +77,6 @@ pub(super) fn working_changes(
                     ));
                 }
                 offset += records.len();
-                let mut reverse = Vec::new();
-                let mut bytes = 0;
                 for (key, after) in records {
                     let before = merge::record(repo, baseline.get(dataset), &key)?;
                     if before == after {
@@ -98,31 +92,69 @@ pub(super) fn working_changes(
                         merge::update(repo, target, &key, after.as_ref())?;
                     }
                     if summary.preview.len() < limit && summary.preview_bytes < PREVIEW_BYTES {
-                        summary.preview_bytes += before.as_ref().map_or(0, record_size)
-                            + after.as_ref().map_or(0, record_size);
+                        summary.preview_bytes += before.as_ref().map_or(0, Record::payload_bytes)
+                            + after.as_ref().map_or(0, Record::payload_bytes);
                         summary.preview.push(Change {
                             dataset: dataset.clone(),
-                            key: key.clone(),
+                            key,
                             fields: merge::changed_fields(before.as_ref(), after.as_ref()),
-                            before: before.clone(),
+                            before,
                             after,
                         });
                     }
-                    if restore {
-                        bytes += before.as_ref().map_or(0, record_size);
-                        reverse.push((key.clone(), before));
-                        if bytes >= 8 * 1024 * 1024 || reverse.len() >= 1000 {
-                            flush(session, binding, &mut reverse)?;
-                            bytes = 0;
-                        }
-                    }
                 }
-                flush(session, binding, &mut reverse)?;
             }
             cursor = keys.last().cloned();
         }
     }
     Ok(summary)
+}
+
+pub(super) fn restore_working_records(
+    repo: &dyn ObjectStore,
+    bindings: &BTreeMap<String, Binding>,
+    schema_dirty: &BTreeMap<String, Schema>,
+    baseline: &Snapshot,
+    session: &mut dyn WorkingCopyTransaction,
+) -> Result<()> {
+    for (name, binding) in bindings
+        .iter()
+        .filter(|(name, _)| !schema_dirty.contains_key(*name))
+    {
+        // Delete every dirty key before replaying HEAD, including across pages.
+        // Table locks and enabled triggers keep this key set stable during both
+        // passes; the historical tree supplies values without retaining rows.
+        for insert in [false, true] {
+            let mut cursor = None;
+            loop {
+                let keys = session.dirty_keys_page(name, cursor.as_deref(), 1000)?;
+                if keys.is_empty() {
+                    break;
+                }
+                let mut batch = Vec::new();
+                let mut bytes = 0;
+                for key in &keys {
+                    let record = if insert {
+                        let Some(record) = merge::record(repo, baseline.get(name), key)? else {
+                            continue;
+                        };
+                        Some(record)
+                    } else {
+                        None
+                    };
+                    bytes += key.len() + record.as_ref().map_or(0, Record::payload_bytes);
+                    batch.push((key.clone(), record));
+                    if bytes >= PREVIEW_BYTES {
+                        flush(session, binding, &mut batch)?;
+                        bytes = 0;
+                    }
+                }
+                flush(session, binding, &mut batch)?;
+                cursor = keys.last().cloned();
+            }
+        }
+    }
+    Ok(())
 }
 
 fn flush(
@@ -151,28 +183,37 @@ pub(super) fn write_snapshot_diff(
     session: &mut dyn WorkingCopyTransaction,
 ) -> Result<()> {
     for (name, binding) in &state.bindings {
-        let a = before
-            .get(name)
-            .map(|d| (name.clone(), d.clone()))
-            .into_iter()
-            .collect();
-        let b = after
-            .get(name)
-            .map(|d| (name.clone(), d.clone()))
-            .into_iter()
-            .collect();
-        let mut batch = Vec::new();
-        let mut bytes = 0;
-        merge::visit_diff(repo, &a, &b, &mut |change| {
-            bytes += change.after.as_ref().map_or(0, record_size);
-            batch.push((change.key, change.after));
-            if bytes >= 8 * 1024 * 1024 || batch.len() >= 1000 {
-                flush(session, binding, &mut batch)?;
-                bytes = 0;
-            }
-            Ok(())
-        })?;
-        flush(session, binding, &mut batch)?;
+        // A valid final snapshot can swap UNIQUE values. Remove all affected
+        // old rows before inserting any target rows, not just within one batch.
+        for insert in [false, true] {
+            let mut batch = Vec::new();
+            let mut bytes = 0;
+            tree::visit_diff(
+                repo,
+                before.get(name).and_then(|d| d.root.as_ref()),
+                after.get(name).and_then(|d| d.root.as_ref()),
+                &mut |delta| {
+                    let record: Option<Record> = if insert {
+                        let Some(id) = delta.after else {
+                            return Ok(());
+                        };
+                        Some(load(repo, "record/v1", &id)?)
+                    } else if delta.before.is_some() {
+                        None
+                    } else {
+                        return Ok(());
+                    };
+                    bytes += delta.key.len() + record.as_ref().map_or(0, Record::payload_bytes);
+                    batch.push((delta.key, record));
+                    if bytes >= PREVIEW_BYTES || batch.len() >= 1000 {
+                        flush(session, binding, &mut batch)?;
+                        bytes = 0;
+                    }
+                    Ok(())
+                },
+            )?;
+            flush(session, binding, &mut batch)?;
+        }
     }
     Ok(())
 }

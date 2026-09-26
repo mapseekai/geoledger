@@ -35,6 +35,10 @@ crates/cli        Clap 命令行与服务启动
 
 core 不依赖 PostGIS、SQL、HTTP、gRPC 或 Thrift。未来的数据格式通过 `WorkingCopyProvider` / `WorkingCopyTransaction` 扩展；存储通过 `ObjectStore` 扩展。`DatasetKind::Raster/PointCloud` 和 `Cell::Blob` 只是预留模型，尚无相应适配器。
 
+记录主键的规范文本最多为 8192 UTF-8 字节；初次导入、结构重扫和增量修改采用相同限制。schema v1/v2 未保存列排序规则，因此非默认列 collation 会在导入和工作副本验证时拒绝，避免历史恢复静默改变比较语义。
+
+旧版本已导入的超长主键历史仍可读取，但不支持继续增量修改；应将数据复制到采用受支持主键的新表，再新建仓库导入，不直接改写历史对象。
+
 ## 构建
 
 需要 Rust、C 编译环境与 `protoc`；Linux 使用 native-tls 时还需要 OpenSSL 开发包和 pkg-config。Cargo 声明 Rust 1.88 下限，本次实际验证使用 Rust 1.92.0，尚未验证 1.88。

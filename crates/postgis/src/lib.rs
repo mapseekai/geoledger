@@ -131,35 +131,6 @@ fn decode(schema: &Schema, row: &Row) -> Result<Record> {
     schema.validate(&record)?;
     Ok(record)
 }
-fn parameters(schema: &Schema, record: &Record) -> Result<Vec<Option<String>>> {
-    schema.validate(record)?;
-    schema
-        .fields
-        .iter()
-        .map(|f| match record.fields.get(&f.name) {
-            Some(Cell::Null) => Ok(None),
-            Some(Cell::Text(v) | Cell::Geometry(v)) => Ok(Some(v.clone())),
-            _ => Err(Error::Invalid("unsupported cell for PostGIS".into())),
-        })
-        .collect()
-}
-fn casts(schema: &Schema) -> Result<Vec<String>> {
-    schema
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(i, f)| {
-            let p = i + 1;
-            let value = if f.geometry {
-                format!("ST_GeomFromEWKB(decode(${p}::text,'hex'))")
-            } else {
-                format!("${p}::text")
-            };
-            Ok(format!("({value})::{}", native(f)?))
-        })
-        .collect()
-}
-
 struct PostgisTransaction {
     client: Client,
     repository_id: String,
@@ -354,7 +325,8 @@ impl WorkingCopyTransaction for PostgisTransaction {
         }
         let primary_key: String = keys[0].get(0);
         let columns=self.client.query("SELECT a.attname,t.typname,format_type(a.atttypid,a.atttypmod),NOT a.attnotnull,
-            a.attidentity::text,a.attgenerated::text,COALESCE(pg_get_expr(d.adbin,d.adrelid),'')
+            a.attidentity::text,a.attgenerated::text,COALESCE(pg_get_expr(d.adbin,d.adrelid),''),
+            a.attcollation <> t.typcollation
             FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid
             LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
             WHERE a.attrelid=$1::bigint::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum",&[&oid]).map_err(pg_error)?;
@@ -384,6 +356,13 @@ impl WorkingCopyTransaction for PostgisTransaction {
             if !supported.contains(&typ.as_str()) {
                 return Err(Error::Unsupported(format!(
                     "PostgreSQL type {typ} in field {name}"
+                )));
+            }
+            // Schema v1/v2 do not encode column collations. Never accept a
+            // definition that historical ADD COLUMN would silently change.
+            if r.get::<_, bool>(7) {
+                return Err(Error::Unsupported(format!(
+                    "non-default collation in field {name}; schema v1/v2 cannot restore it"
                 )));
             }
             if !r.get::<_, String>(4).is_empty() || !r.get::<_, String>(5).is_empty() {
@@ -728,77 +707,12 @@ impl WorkingCopyTransaction for PostgisTransaction {
         Ok(())
     }
     fn normalize(&mut self, binding: &Binding, record: &Record) -> Result<Record> {
-        let params = parameters(&binding.schema, record)?;
-        let refs: Vec<&(dyn ToSql + Sync)> =
-            params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
-        let expressions = casts(&binding.schema)?
-            .into_iter()
-            .zip(&binding.schema.fields)
-            .map(|(expr, field)| Ok(format!("{expr} AS {}", ident(&field.name)?)))
-            .collect::<Result<Vec<_>>>()?;
-        let query = format!(
-            "SELECT {} FROM (SELECT {}) r",
-            projection(&binding.schema)?,
-            expressions.join(",")
-        );
-        let row = self.client.query_one(&query, &refs).map_err(pg_error)?;
-        let normalized = decode(&binding.schema, &row)?;
-        if normalized.key != record.key {
-            return Err(Error::Invalid(
-                "custom resolution cannot change record identity".into(),
-            ));
-        }
-        Ok(normalized)
+        self.normalize_many(binding, std::slice::from_ref(record))?
+            .pop()
+            .ok_or_else(|| Error::Database("normalization row count mismatch".into()))
     }
     fn write(&mut self, binding: &Binding, key: &str, value: Option<&Record>) -> Result<()> {
-        let table = table(&binding.schema_name, &binding.table_name)?;
-        let pk = ident(&binding.schema.primary_key)?;
-        let Some(record) = value else {
-            self.client
-                .execute(
-                    &format!(
-                        "DELETE FROM {table} WHERE {pk}=($1::text)::{}",
-                        native(key_field(&binding.schema)?)?
-                    ),
-                    &[&key],
-                )
-                .map_err(pg_error)?;
-            return Ok(());
-        };
-        if record.key != key {
-            return Err(Error::Invalid("record key mismatch".into()));
-        }
-        let params = parameters(&binding.schema, record)?;
-        let refs: Vec<&(dyn ToSql + Sync)> =
-            params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
-        let columns = binding
-            .schema
-            .fields
-            .iter()
-            .map(|f| ident(&f.name))
-            .collect::<Result<Vec<_>>>()?;
-        let updates = binding
-            .schema
-            .fields
-            .iter()
-            .filter(|f| f.name != binding.schema.primary_key)
-            .map(|f| {
-                let n = ident(&f.name)?;
-                Ok(format!("{n}=EXCLUDED.{n}"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let on_conflict = if updates.is_empty() {
-            "DO NOTHING".into()
-        } else {
-            format!("DO UPDATE SET {}", updates.join(","))
-        };
-        let query = format!(
-            "INSERT INTO {table} ({}) VALUES({}) ON CONFLICT({pk}) {on_conflict}",
-            columns.join(","),
-            casts(&binding.schema)?.join(",")
-        );
-        self.client.execute(&query, &refs).map_err(pg_error)?;
-        Ok(())
+        self.write_many(binding, &[(key, value)])
     }
     fn clear_dirty(&mut self) -> Result<()> {
         self.client

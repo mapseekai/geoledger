@@ -35,7 +35,7 @@ pub(super) fn validate_merge_records(
         };
         let mut visit = |id: &ObjectId| -> Result<()> {
             let record: Record = load(repo, "record/v1", id)?;
-            bytes += record_size(&record);
+            bytes += record.payload_bytes();
             batch.push(record);
             if bytes >= 8 * 1024 * 1024 || batch.len() >= 1000 {
                 check(&mut batch)?;
