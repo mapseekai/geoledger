@@ -52,8 +52,26 @@ jobs:
         run: |
           cargo test --release --locked --target x86_64-pc-windows-msvc --workspace --exclude geoledger-thrift-gen --no-default-features 2>&1 | Tee-Object windows-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'Windows tests failed' }
-      - name: Smoke test the distributable
-        run: ./scripts/smoke-windows.ps1 -Executable ./target/x86_64-pc-windows-msvc/release/gl.exe
+      - name: Preserve validated executable and test log
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: geoledger-windows-validation
+          path: |
+            target/x86_64-pc-windows-msvc/release/gl.exe
+            windows-tests.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Smoke test with PowerShell 7 and Windows PowerShell 5.1
+        run: |
+          ./scripts/smoke-windows.ps1 -Executable ./target/x86_64-pc-windows-msvc/release/gl.exe
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell smoke test failed' }
+          $env:GL_AUTHOR = 'smoke-override'
+          $env:GL_STATEMENT_TIMEOUT_SECS = '900'
+          ./scripts/smoke-windows.ps1 -Executable ./target/x86_64-pc-windows-msvc/release/gl.exe
+          if ($env:GL_AUTHOR -ne 'smoke-override' -or $env:GL_STATEMENT_TIMEOUT_SECS -ne '900') { throw 'Environment restoration failed' }
+          Remove-Item Env:\GL_AUTHOR, Env:\GL_STATEMENT_TIMEOUT_SECS
+          powershell.exe -NoProfile -File ./scripts/smoke-windows.ps1 -Executable ./target/x86_64-pc-windows-msvc/release/gl.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell smoke test failed' }
       - name: Inspect Windows runtime dependencies
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'

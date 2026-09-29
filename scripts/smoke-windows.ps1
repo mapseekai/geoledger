@@ -9,7 +9,8 @@ $names = @('GL_DATABASE_URL', 'GL_AUTHOR', 'GL_STATEMENT_TIMEOUT_SECS', 'GL_API_
 $saved = @{}
 foreach ($name in $names) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-    [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+    Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath "Env:\$name") { throw "Could not clear $name" }
 }
 $root = Join-Path ([IO.Path]::GetTempPath()) ('geoledger-smoke-' + [guid]::NewGuid().ToString('N'))
 $repo = Join-Path $root ('spaces ' + [char]0x5730 + [char]0x56fe)
@@ -42,7 +43,11 @@ try {
 }
 finally {
     foreach ($name in $names) {
-        [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')
+        if ($null -eq $saved[$name]) {
+            Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
+        } else {
+            Set-Item -LiteralPath "Env:\$name" -Value $saved[$name]
+        }
     }
     if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 }
