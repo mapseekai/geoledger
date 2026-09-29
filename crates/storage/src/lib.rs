@@ -2,7 +2,8 @@
 //! SQLite transactions; the application journals the separate PostGIS commit.
 use fs2::FileExt;
 use geoledger_core::{
-    Error, ObjectId, ObjectStore, PendingOperation, RepositoryState, Result, object::digest,
+    Error, FORMAT_VERSION, ObjectId, ObjectStore, PendingOperation, RepositoryState, Result,
+    object::digest, schema,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -14,23 +15,22 @@ use std::{
 };
 
 const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
-// Persistent SQLite format identity; branding changes must not change this value.
-const APPLICATION_ID: i64 = 0x53565031;
+const APPLICATION_ID: i64 = 0x474c4433; // ASCII GLD3.
 const REPOSITORY_DIRECTORY: &str = ".geoledger";
-const LEGACY_REPOSITORY_DIRECTORY: &str = ".spatial-version";
 
-fn existing_directory(root: &Path) -> Result<Option<PathBuf>> {
-    let current = root.join(REPOSITORY_DIRECTORY);
-    let legacy = root.join(LEGACY_REPOSITORY_DIRECTORY);
-    match (current.try_exists()?, legacy.try_exists()?) {
-        (true, true) => Err(Error::Conflict(
-            "both .geoledger and .spatial-version exist; refusing an ambiguous repository".into(),
-        )),
-        (true, false) => Ok(Some(current)),
-        (false, true) => Ok(Some(legacy)),
-        (false, false) => Ok(None),
+fn validate_state(state: &RepositoryState) -> Result<()> {
+    if state.version != FORMAT_VERSION {
+        return Err(Error::Unsupported(
+            "GeoLedger repository state format".into(),
+        ));
     }
+    for binding in state.bindings.values() {
+        schema::validate_format(&binding.schema)?;
+    }
+    state.head()?;
+    Ok(())
 }
+
 fn db_error(e: rusqlite::Error) -> Error {
     Error::storage_source(e.to_string(), e)
 }
@@ -45,9 +45,6 @@ pub struct Repository {
 impl Repository {
     pub fn init(root: &Path) -> Result<Self> {
         fs::create_dir_all(root)?;
-        if existing_directory(root)?.is_some() {
-            return Err(Error::Conflict("repository already exists".into()));
-        }
         let directory = root.join(REPOSITORY_DIRECTORY);
         fs::create_dir(&directory).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
@@ -63,7 +60,7 @@ impl Repository {
         }
         let repo = Self::connect(directory, true)?;
         repo.connection.execute_batch(&format!(
-            "PRAGMA application_id={APPLICATION_ID}; PRAGMA user_version=1;
+            "PRAGMA application_id={APPLICATION_ID}; PRAGMA user_version={FORMAT_VERSION};
              CREATE TABLE objects(id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload BLOB NOT NULL) WITHOUT ROWID;
              CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
              CREATE TABLE reflog(sequence INTEGER PRIMARY KEY AUTOINCREMENT, branch TEXT NOT NULL,
@@ -72,8 +69,7 @@ impl Repository {
         Ok(repo)
     }
     pub fn open(root: &Path) -> Result<Self> {
-        let directory = existing_directory(root)?
-            .ok_or_else(|| Error::NotFound(format!("repository at {}", root.display())))?;
+        let directory = root.join(REPOSITORY_DIRECTORY);
         if !directory.join("repository.sqlite").is_file() {
             return Err(Error::NotFound(format!("repository at {}", root.display())));
         }
@@ -86,7 +82,7 @@ impl Repository {
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if app != APPLICATION_ID || !matches!(version, 1 | 2) {
+        if app != APPLICATION_ID || version != i64::from(FORMAT_VERSION) {
             return Err(Error::Unsupported("repository storage format".into()));
         }
         Ok(repo)
@@ -215,18 +211,11 @@ impl Repository {
         let state: RepositoryState = self
             .read_meta("state")?
             .ok_or_else(|| Error::Storage("missing repository state".into()))?;
-        if !matches!(state.version, 1 | 2) {
-            return Err(Error::Unsupported("repository state format".into()));
-        }
-        state.head()?;
+        validate_state(&state)?;
         Ok(state)
     }
     pub fn save_state(&self, state: &RepositoryState) -> Result<()> {
-        if state.version == 2 {
-            self.connection
-                .execute_batch("PRAGMA user_version=2")
-                .map_err(db_error)?;
-        }
+        validate_state(state)?;
         let previous: Option<RepositoryState> = self.read_meta("state")?;
         let old_head = previous.as_ref().map(|s| s.head().cloned()).transpose()?;
         let new_head = state.head()?;
@@ -247,14 +236,14 @@ impl Repository {
         self.write_meta("state", state)
     }
     pub fn pending(&self) -> Result<Option<PendingOperation>> {
-        self.read_meta("pending")
+        let pending: Option<PendingOperation> = self.read_meta("pending")?;
+        if let Some(operation) = &pending {
+            validate_state(&operation.after)?;
+        }
+        Ok(pending)
     }
     pub fn prepare(&self, operation: &PendingOperation) -> Result<()> {
-        if operation.after.version == 2 {
-            self.connection
-                .execute_batch("PRAGMA user_version=2")
-                .map_err(db_error)?;
-        }
+        validate_state(&operation.after)?;
         if self.pending()?.is_some() {
             return Err(Error::Recovery("an operation is already pending".into()));
         }

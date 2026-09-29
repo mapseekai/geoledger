@@ -197,7 +197,7 @@ pub(super) fn write_snapshot_diff(
                         let Some(id) = delta.after else {
                             return Ok(());
                         };
-                        Some(load(repo, "record/v1", &id)?)
+                        Some(load(repo, "record/v3", &id)?)
                     } else if delta.before.is_some() {
                         None
                     } else {

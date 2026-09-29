@@ -34,7 +34,7 @@ async fn http_executes_shared_application_and_requires_token() {
                 .method("POST")
                 .header("authorization", "Bearer test-token-long-enough-for-tests")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"op":"init","author":"http-test"}"#))
+                .body(Body::from(r#"{"op":"init"}"#))
                 .unwrap(),
         )
         .await
@@ -77,7 +77,7 @@ async fn grpc_roundtrip_uses_real_http2_and_typed_methods() {
             .unwrap();
     client
         .execute(proto::ExecuteRequest {
-            command_json: r#"{"op":"init","author":"grpc-test"}"#.into(),
+            command_json: r#"{"op":"init"}"#.into(),
         })
         .await
         .unwrap();
@@ -105,6 +105,7 @@ async fn grpc_roundtrip_uses_real_http2_and_typed_methods() {
         .into_inner();
     let json: serde_json::Value = serde_json::from_str(&reply.json).unwrap();
     assert_eq!(json["commits"].as_array().unwrap().len(), 1);
+    assert_eq!(json["commits"][0]["commit"]["author"], "mapseekai");
     tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
 }

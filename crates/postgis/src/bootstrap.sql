@@ -1,33 +1,32 @@
--- Persistent v1 schema and trigger identities are retained for existing repositories.
-CREATE SCHEMA IF NOT EXISTS _spatial_version;
-CREATE TABLE IF NOT EXISTS _spatial_version.format(version integer PRIMARY KEY CHECK(version=1));
-INSERT INTO _spatial_version.format VALUES(1) ON CONFLICT DO NOTHING;
-CREATE TABLE IF NOT EXISTS _spatial_version.repositories (
+CREATE SCHEMA IF NOT EXISTS _geoledger;
+CREATE TABLE IF NOT EXISTS _geoledger.format(version integer PRIMARY KEY CHECK(version=3));
+INSERT INTO _geoledger.format VALUES(3) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS _geoledger.repositories (
     id text PRIMARY KEY, head text NOT NULL, operation text
 );
-CREATE TABLE IF NOT EXISTS _spatial_version.tracked (
+CREATE TABLE IF NOT EXISTS _geoledger.tracked (
     table_oid oid PRIMARY KEY,
-    repository_id text NOT NULL REFERENCES _spatial_version.repositories(id),
+    repository_id text NOT NULL REFERENCES _geoledger.repositories(id),
     dataset text NOT NULL,
     UNIQUE(repository_id, dataset)
 );
-CREATE TABLE IF NOT EXISTS _spatial_version.dirty (
+CREATE TABLE IF NOT EXISTS _geoledger.dirty (
     repository_id text NOT NULL, dataset text NOT NULL, pk text NOT NULL,
     PRIMARY KEY(repository_id, dataset, pk)
 );
 
-CREATE INDEX IF NOT EXISTS dirty_pk_c_v1 ON _spatial_version.dirty(repository_id,dataset,pk COLLATE "C");
+CREATE INDEX IF NOT EXISTS dirty_pk_c_v3 ON _geoledger.dirty(repository_id,dataset,pk COLLATE "C");
 
-CREATE OR REPLACE FUNCTION _spatial_version.track_row_v1() RETURNS trigger
-LANGUAGE plpgsql SET search_path = pg_catalog, _spatial_version AS $$
+CREATE OR REPLACE FUNCTION _geoledger.track_row_v3() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, _geoledger AS $$
 BEGIN
     IF TG_OP <> 'INSERT' THEN
-        INSERT INTO _spatial_version.dirty(repository_id,dataset,pk)
+        INSERT INTO _geoledger.dirty(repository_id,dataset,pk)
         VALUES(TG_ARGV[0],TG_ARGV[1],to_jsonb(OLD)->>TG_ARGV[2])
         ON CONFLICT DO NOTHING;
     END IF;
     IF TG_OP <> 'DELETE' THEN
-        INSERT INTO _spatial_version.dirty(repository_id,dataset,pk)
+        INSERT INTO _geoledger.dirty(repository_id,dataset,pk)
         VALUES(TG_ARGV[0],TG_ARGV[1],to_jsonb(NEW)->>TG_ARGV[2])
         ON CONFLICT DO NOTHING;
     END IF;
@@ -35,7 +34,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION _spatial_version.reject_truncate_v1() RETURNS trigger
+CREATE OR REPLACE FUNCTION _geoledger.reject_truncate_v3() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN
     RAISE EXCEPTION USING ERRCODE='0A000',

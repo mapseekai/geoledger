@@ -49,7 +49,7 @@ fn option(s: FastStr) -> Option<String> {
 }
 fn author(s: FastStr) -> String {
     if s.is_empty() {
-        "unknown".into()
+        geoledger::default_author()
     } else {
         s.to_string()
     }
@@ -283,4 +283,13 @@ pub async fn run(service: Service, incoming: impl volo::net::incoming::MakeIncom
             message: "Thrift server failed".into(),
             source: e,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn empty_author_defaults_to_mapseekai_and_explicit_author_is_preserved() {
+        assert_eq!(super::author(pilota::FastStr::new("")), "mapseekai");
+        assert_eq!(super::author("custom-author".into()), "custom-author");
+    }
 }

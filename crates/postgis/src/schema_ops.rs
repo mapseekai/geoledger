@@ -139,10 +139,8 @@ pub(super) fn positions(
 
 pub(super) fn current(session: &mut PostgisTransaction, binding: &Binding) -> Result<Schema> {
     let mut actual = session.inspect(&binding.schema_name, &binding.table_name)?;
-    if binding.schema.version == 1 {
-        return Ok(actual);
-    }
-    actual.version = 2;
+    geoledger_core::schema::validate_format(&binding.schema)?;
+    actual.version = FORMAT_VERSION;
     let oid = session.table_oid(&binding.schema_name, &binding.table_name)?;
     let rows = session.client.query("SELECT attnum,attname FROM pg_attribute WHERE attrelid=$1::bigint::oid AND attnum>0 AND NOT attisdropped", &[&oid]).map_err(pg_error)?;
     let numbers: BTreeMap<String, i16> = rows.into_iter().map(|r| (r.get(1), r.get(0))).collect();
@@ -358,11 +356,10 @@ pub(super) fn replace(
     // Historic rows are restored from objects, never obtained by reverse-casting
     // lossy converted values. DELETE keeps all working-copy triggers active.
     let table = table(&binding.schema_name, &binding.table_name)?;
-    let mut before = binding.schema.clone();
-    if before.version == 1 {
-        before = geoledger_core::schema::with_identities(before);
-    }
-    let target_ids = geoledger_core::schema::with_identities(target.clone());
+    geoledger_core::schema::validate_format(&binding.schema)?;
+    geoledger_core::schema::validate_format(target)?;
+    let before = binding.schema.clone();
+    let target_ids = target.clone();
     validate_transition(&before, &target_ids)?;
     session
         .client

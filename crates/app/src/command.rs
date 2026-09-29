@@ -4,7 +4,7 @@ fn head() -> String {
     "HEAD".into()
 }
 fn author() -> String {
-    "unknown".into()
+    crate::default_author()
 }
 fn limit() -> usize {
     100
@@ -18,7 +18,6 @@ fn public() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
-    Upgrade,
     AlterSchema {
         dataset: String,
         change: geoledger_core::schema::SchemaEdit,

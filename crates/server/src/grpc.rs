@@ -50,7 +50,7 @@ fn option(value: String) -> Option<String> {
 }
 fn author(value: String) -> String {
     if value.is_empty() {
-        "unknown".into()
+        geoledger::default_author()
     } else {
         value
     }
@@ -189,5 +189,14 @@ impl geo_ledger_server::GeoLedger for Rpc {
     async fn recover(&self, r: Request<Empty>) -> Result<Response<JsonReply>, Status> {
         self.check(&r)?;
         self.run(Command::Recover).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn empty_author_defaults_to_mapseekai_and_explicit_author_is_preserved() {
+        assert_eq!(super::author(String::new()), "mapseekai");
+        assert_eq!(super::author("custom-author".to_string()), "custom-author");
     }
 }

@@ -1,55 +1,45 @@
-# 架构与一致性约束
+# 架构与一致性
 
-## 1. 版本仓库与工作副本分离
+## 版本历史与工作副本
 
-PostGIS 是可编辑工作副本；本地不可变对象库和分支引用保存历史。一个提交指向 Snapshot；Snapshot 映射逻辑 dataset ID 到 schema 对象、记录树根和计数。记录主键在当前单主键限制下是稳定的文本键。
+PostGIS 提供可编辑工作副本；本地对象库和分支引用保存历史。提交指向 Snapshot，Snapshot 映射 dataset ID 到 schema、记录树根及记录数。数据仓库、结构和对象采用统一 GeoLedger 格式 3，定义见 [数据格式](format.md)。
 
-对象类型包括 `record/v1`、`schema/v1`、`schema/v2`、`tree-node/v1`、`snapshot/v1`、`commit/v1`。v2 schema 引入稳定字段 ID，仓库状态和 SQLite user_version 同步升级；旧对象保留，见 [迁移计划](schema-evolution.md)。对象 ID = BLAKE3(固定域 + 对象类型长度 + 对象类型 + 编码字节)。先编码和哈希，再压缩。类型隔离避免不同对象类型共享 ID。读取时校验类型、解压大小和哈希。
+对象 ID 由 BLAKE3 对固定域、类型长度、类型和编码字节计算，先编码、哈希，再压缩。对象读取校验类型、解压大小与哈希。编码使用结构化 serde JSON 和 BTreeMap 键序。属性保存数据库规范文本及字段类型，几何使用小写 XDR EWKB 保留 SRID、Z/M 与坐标表达；版本差异按保存的值比较。
 
-编码使用结构化 serde JSON、BTreeMap 键序和显式格式版本，不声明 RFC 8785 兼容。SQL 数值、时间等属性保存数据库规范化文本与 schema 类型信息，避免 JSON 浮点精度损失。几何保存 XDR EWKB 十六进制，保留 SRID / Z / M 等编码；不进行 ST_Normalize、坐标舍入、环反转或投影转换。比较的是表达值，不是 ST_Equals 拓扑等价性。
+## 持久化树与批处理
 
-## 2. 持久化数据树
+记录树使用按键排序、以 BLAKE3(key) 为确定性优先级的 treap。修改路径生成新节点，共享子树按对象 ID 复用。初次导入采用有序流和 Cartesian stack 构建。差异遍历按优先级展开有序任务栈，在解码前跳过相同子树，遍历全部差异以获得精确总数，并按预览预算解码记录。
 
-以记录键为查找顺序、BLAKE3(key) 为确定性优先级构建 treap。修改路径生成新节点，未变子树复用，旧提交无需复制全表。初次导入使用有序流的 Cartesian stack 构建器。树深超过保护阈值会拒绝。
+压缩上下文和 SQL 语句复用；对象解压按帧大小分配并执行 64 MiB 容量检查。SQLite 使用 WAL、synchronous=FULL、64 MiB 主缓存目标和 256 MiB mmap 窗口。结构全量扫描先写文件型临时对象表，再按哈希排序写入正式表，临时表使用 16 MiB 页缓存。批写 savepoint 位于原事务内，失败时回滚。
 
-差异遍历使用两侧有序任务栈，在解码前跳过相同子树；根不同则先展开优先级更早的根，使旋转后的共享子树重新对齐，不再把两棵子树放进完整 BTreeMap。遍历辅助内存随树深增长；历史 diff 仍遍历全部差异以给出精确总数，但只解码预览预算内的记录。压缩/解压上下文与 SQL 语句复用；解压按帧内容大小分配并保留 64 MiB 上限，所有对象仍校验哈希。SQLite 缓存上限目标 64 MiB、mmap 窗口 256 MiB，WAL 与 synchronous=FULL 不变。
+## PostGIS 跟踪
 
-结构变更的全量记录扫描先写文件型临时对象表（单独 16 MiB 页缓存），再按哈希顺序插入正式对象表，减少已有对象库上的随机页换出。临时数据不发布给仓库引用；批写 savepoint 包含在原 SQLite 事务内，正式对象与 journal 仍先于 PostgreSQL 提交持久化。失败回滚，临时表不成为新仓库格式的一部分。该策略需要额外临时磁盘空间；新仓库初次导入仍直接写空对象库。
+行触发器记录 OLD / NEW 主键，dirty 集合按键去重。应用层读取当前行并与 HEAD 比较，主键修改表现为旧键删除和新键新增。事务取得仓库 advisory lock，再按稳定顺序获取注册表 SHARE ROW EXCLUSIVE 锁，允许普通 SELECT，并在版本操作期间协调写入。
 
-## 3. PostGIS 跟踪与事务
+跟踪 schema 为 `_geoledger`，使用 `gl_track_row_v3` 和 `gl_reject_truncate_v3` 保持变更可追踪。普通清空采用 DELETE，触发器持续启用，完成操作时在同一事务内清理 dirty 集合。SQL 标识符正确转义，数据值使用参数绑定。每次操作校验表绑定、字段结构和跟踪触发器。
 
-行触发器分别记录 OLD / NEW 主键，使主键改变能够形成删除旧记录与新增新记录。dirty set 去重，不直接把触发器操作码当作最终变化；应用层读取当前行后与 HEAD 比较，因此无效更新或改回原值不会生成虚假 diff。
+dirty 主键按 1000 个分页，使用 `dirty_pk_c_v3` 的 C 排序索引。记录按约 8 MiB 分批读取和写入，单条大记录可超过批大小。字段演进通过稳定 ID 与 attnum 对齐，结构提交全量扫描，历史恢复保留表 OID、调整结构并分批回填。
 
-事务取得仓库 advisory lock，并按稳定顺序对注册表取得 SHARE ROW EXCLUSIVE 锁。该锁允许普通 SELECT，但阻止其他数据写入，使 dirty 集合、当前行、引用移动之间具备明确的提交边界。SQL 标识符双引号转义，数据值参数绑定。工作副本写入不关闭触发器；完成后在同一事务内清理 dirty set。
+## 两存储协调协议
 
-会核对 schema 定义、表绑定以及触发器是否存在/启用。v1 拒绝结构漂移；v2 将受支持的字段差异单独记录，通过稳定列 ID 及 attnum 映射识别改名。DDL 提交全量流式扫描；跨结构恢复先清空表，再调整结构并从历史对象分批回填，触发器保持开启。dirty 主键以 1000 个为一页进行 keyset 分页；新增兼容旧跟踪表的 `dirty_pk_c_v1` 排序索引，避免按 C 排序时反复全量扫描。已存在的跟踪库在首次使用时事务内补建该索引，不改变对象格式。记录以有序 LEFT JOIN 流式读取，每次保留约 8 MiB 载荷，缺失行也返回对应键；写入按 1000 条或约 8 MiB 分批（超大单条允许超过批大小）。status/diff 同时保留精确统计与有限预览，普通提交直接消费记录流，恢复逐批回写；不会累计完整 before/after 列表。TRUNCATE 通过语句触发器拒绝。角色有权限直接篡改元数据或临时绕过触发器时，仍然超出当前可信边界；不能把该方案视为审计防篡改产品。
+SQLite 与 PostgreSQL 各自维护事务，GeoLedger 使用可恢复 journal / marker 协议协调：先在数据库事务和表锁内准备变化与 operation UUID；再在 SQLite 持久化新增对象和 PendingOperation；随后提交数据库中的数据、dirty 清理及 operation 标记；最后原子更新 SQLite 分支状态并清除 pending。
 
-## 4. 两套存储不是一个原子事务
+恢复时比较 operation UUID 与 HEAD：匹配目标状态则完成本地发布，数据库保持原 HEAD 则撤销本地 pending，其余情况返回 recovery_required 并保留诊断信息。数据库提交结果待确认时保留 pending，后续通过 recover 核对状态。故障注入、备份恢复和审计能力的开发安排见 [开发计划](roadmap.md)。
 
-SQLite 和 PostgreSQL 不共享事务。正常更新按以下顺序执行：
+## 合并与历史恢复
 
-1. 保持 PostgreSQL 事务和表锁，计算/应用变化，准备数据库 operation UUID 与目标 HEAD。
-2. 在 SQLite 持久化新增不可变对象和 PendingOperation；此时不公开新的分支状态。
-3. 提交 PostgreSQL：数据、dirty 清理、operation 标记同事务提交。
-4. 原子更新 SQLite 仓库状态并删除 PendingOperation。
+三方合并比较 BASE / OURS / THEIRS，普通字段独立判断，geometry 按原子值处理。同键不同新增、改删冲突保存为记录冲突。合并基点通过可达位传播和父边缓存计算，单个提交解码一次；唯一最佳共同祖先用于三方合并，多基点场景返回明确结果供调用方处理。
 
-恢复检查数据库 operation 标记：匹配 pending 的 operation 且 HEAD 对应，则完成本地状态；未匹配且数据库仍在原 HEAD，则撤销本地 pending；其他不一致拒绝猜测。调用期间的不确定数据库提交错误必须保留 pending，不盲目执行第二次写入。
+结构按稳定列 ID 合并，并预计算投影关系；源结构新增字段使用适配器提供的常量默认值，已有字段的显式 NULL 保持原值。支持独立新增字段以及一侧改名、另一侧编辑记录。结构冲突通过分支定义对齐后再次合并。
 
-这是可恢复协议，不是跨系统 ACID / 2PC 保证。基础约束失败回滚测试不等于 kill -9、断电、磁盘满、数据库 failover 等完整故障矩阵；投产前必须完成故障注入验证、孤儿对象管理和备份恢复演练。
+冲突与候选树独立持久化，HEAD 和工作副本保持 OURS。resolve 更新候选树，自定义值由 PostGIS 规范化。continue 要求干净工作副本和全部冲突已解决，按目标类型验证候选值表达后统一发布；abort 清理合并状态并保留工作副本内容。
 
-## 5. 合并状态
+同结构恢复采用先删除全部待替换行、再分批写入目标行的事务顺序，支持唯一值交换。跨结构恢复从对象记录读取历史值，保留表 OID 和跟踪触发器后调整定义、回填记录。恢复操作所需资源与数据量及结构变化范围相关。
 
-常见三方合并以 BASE / OURS / THEIRS 对比。普通字段独立判断，geometry 字段作为原子值。同键不同新增、改删冲突保留整记录冲突。合并基点按两侧可达标记传播，单个提交只解码一次；共同祖先集合通过直接父边排除旧祖先。相同 HEAD 可直接返回。多个最佳共同祖先的 criss-cross 合并拒绝，暂不构建递归虚拟祖先。
+## 分层与扩展接口
 
-结构先按稳定列 ID 三方合并，预计算列投影计划；只对源 schema 不存在的字段应用适配器提供的常量默认值，保留显式 NULL。删列与另一侧新行中非空字段值也产生冲突。独立字段新增、一侧改名另一侧编辑可合并；不兼容结构和删列/编辑冲突 fail closed，暂需人工对齐分支定义。结构不同的三方合并需要全量记录处理，仍有内存和计算成本。
+[WorkingCopyProvider / WorkingCopyTransaction](../crates/core/src/adapter.rs) 定义工作副本事务、表检查、扫描、dirty 键、规范化、写入和标记协议；[ObjectStore](../crates/core/src/object.rs) 定义按类型存取对象的接口。核心版本算法独立于具体数据库和网络传输。
 
-冲突与候选树单独持久化，HEAD 和 PostGIS 工作副本维持 OURS。resolve 在候选树上操作；自定义值经 PostGIS 类型规范化。continue 要求工作副本仍干净且全部冲突解决。生成合并提交前，由适配器批量规范化检查最终候选记录；若目标类型会改变候选值的表达，拒绝自动发布并要求先对齐分支值/类型，不隐式截断或舍入。检查通过后才统一应用。abort 只删除合并状态，不覆盖用户数据库编辑。
+[Application](../crates/app/src/lib.rs) 编排各版本操作；HTTP、gRPC、Thrift 和 CLI 均调用该服务。异步入口通过阻塞工作线程执行同步数据库操作，并共享请求容量、回复编码和执行槽位控制。
 
-## 6. 扩展接口
-
-- `WorkingCopyProvider` 创建受控工作副本事务；能力通过适配器实现，不进入版本树代码。
-- `WorkingCopyTransaction` 提供 inspect/register/scan/read/dirty_keys/normalize/write/marker 等协议。
-- `ObjectStore` 负责按类型存取不可变对象，当前实现是带 Zstd 的 SQLite。
-- `DatasetKind`、版本化 schema、`Cell::Blob(ObjectId)` 为文件、栅格、点云等后续模型留位。
-
-未来 GeoPackage / GeoParquet / 栅格仍需实现自己的编码、能力声明、变更发现与事务/恢复语义。不能仅实现 read/write 就宣称与 PostGIS 等价。当前应用层也拒绝一个仓库混合多种工作副本 provider；这需要单独设计协调协议。
+当前适配器提供 PostGIS 表与向量工作副本，存储实现采用 SQLite + Zstd。扩展工作副本时分别定义数据编码、能力声明、变化发现、事务和恢复语义，并复用提交图、分支和合并接口。

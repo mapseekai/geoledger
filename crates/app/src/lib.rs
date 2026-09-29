@@ -5,6 +5,12 @@ mod command;
 mod merge_working;
 use changes::*;
 pub use command::{Command, Resolution};
+
+/// Default author shared by all GeoLedger entry points.
+pub const DEFAULT_AUTHOR: &str = "mapseekai";
+pub fn default_author() -> String {
+    DEFAULT_AUTHOR.into()
+}
 pub use geoledger_core as core;
 use merge_working::*;
 
@@ -72,7 +78,7 @@ impl Application {
             } => {
                 let id = state.resolve(&reference)?;
                 let commit = graph::commit(&repo, &id)?;
-                let snapshot: Snapshot = load(&repo, "snapshot/v1", &commit.root)?;
+                let snapshot: Snapshot = load(&repo, "snapshot/v3", &commit.root)?;
                 match (dataset, key) {
                     (Some(dataset), Some(key)) => Ok(
                         json!({"commit":id,"dataset":dataset,"record":merge::record(&repo,snapshot.get(&dataset),&key)?}),
@@ -139,7 +145,7 @@ impl Application {
         }
     }
     fn init(&self, author: &str) -> Result<Value> {
-        identity(author, "Initialize spatial repository")?;
+        identity(author, "Initialize GeoLedger repository")?;
         let repo = Repository::init(&self.root)?;
         repo.begin()?;
         let initial = create_commit(
@@ -147,10 +153,10 @@ impl Application {
             &Snapshot::new(),
             Vec::new(),
             author,
-            "Initialize spatial repository",
+            "Initialize GeoLedger repository",
         )?;
         let state = RepositoryState {
-            version: 1,
+            version: core::FORMAT_VERSION,
             repository_id: uuid::Uuid::new_v4().to_string(),
             branch: "main".into(),
             branches: BTreeMap::from([("main".into(), initial.clone())]),
@@ -160,7 +166,7 @@ impl Application {
         repo.save_state(&state)?;
         repo.commit()?;
         Ok(
-            json!({"repository":self.root,"repository_id":state.repository_id,"head":initial,"branch":"main","format_version":1}),
+            json!({"repository":self.root,"repository_id":state.repository_id,"head":initial,"branch":"main","format_version":core::FORMAT_VERSION}),
         )
     }
     fn recover_pending(&self, repo: &Repository) -> Result<bool> {
@@ -241,11 +247,9 @@ impl Application {
         let baseline = snapshot_at(repo, &before_head)?;
         let mut schema_dirty = BTreeMap::new();
         for (name, binding) in &state.bindings {
-            if binding.schema.version == 2 {
-                let actual = session.current_schema(binding)?;
-                if actual != binding.schema {
-                    schema_dirty.insert(name.clone(), actual);
-                }
+            let actual = session.current_schema(binding)?;
+            if actual != binding.schema {
+                schema_dirty.insert(name.clone(), actual);
             }
         }
         if !schema_dirty.is_empty()
@@ -334,7 +338,7 @@ impl Application {
                 let mut tree = tree::BulkBuilder::default();
                 let mut records = 0u64;
                 session.scan(&binding, &mut |record| {
-                    let id = save(repo, "record/v1", &record)?;
+                    let id = save(repo, "record/v3", &record)?;
                     tree.push(repo, record.key, id)?;
                     records += 1;
                     Ok(())
@@ -347,7 +351,7 @@ impl Application {
                 let mut snapshot = baseline;
                 snapshot.insert(dataset.clone(), imported);
                 state.bindings.insert(dataset.clone(), binding);
-                state.version = 2;
+                state.version = core::FORMAT_VERSION;
                 let message = message.unwrap_or_else(|| format!("Import {dataset}"));
                 let id = create_commit(
                     repo,
@@ -390,36 +394,6 @@ impl Application {
                     json!({"commit":id,"changed_records":if schema_dirty.is_empty(){Some(changes.len())}else{None},"incremental_changed_records":changes.len(),"rescanned_records":schema_dirty.keys().map(|name|snapshot[name].records).sum::<u64>(),"schema_changed_datasets":schema_dirty.keys().collect::<Vec<_>>(),"schema_datasets_rescanned":!schema_dirty.is_empty()}),
                 )
             }
-            Command::Upgrade => {
-                ensure_clean(&changes)?;
-                if state.version == 2 && state.bindings.values().all(|b| b.schema.version == 2) {
-                    return Ok(
-                        json!({"format_version":2,"already_current":true,"head":before_head}),
-                    );
-                }
-                let mut snapshot = baseline.clone();
-                for (name, binding) in &mut state.bindings {
-                    if binding.schema.version == 1 {
-                        binding.schema = schema::with_identities(binding.schema.clone());
-                        binding.column_ids = session.column_ids(binding)?;
-                        binding.schema = session.current_schema(binding)?;
-                        if let Some(d) = snapshot.get_mut(name) {
-                            d.schema = schema::store(repo, &binding.schema)?;
-                        }
-                    }
-                }
-                let id = create_commit(
-                    repo,
-                    &snapshot,
-                    vec![before_head.clone()],
-                    "migration",
-                    "Upgrade schema tracking to format v2",
-                )?;
-                state.version = 2;
-                state.branches.insert(state.branch.clone(), id.clone());
-                finish(repo, session.as_mut(), &before_head, &state)?;
-                Ok(json!({"commit":id,"format_version":2}))
-            }
             Command::AlterSchema {
                 dataset,
                 change,
@@ -431,11 +405,6 @@ impl Application {
                     .bindings
                     .get_mut(&dataset)
                     .ok_or_else(|| Error::NotFound(format!("dataset {dataset}")))?;
-                if binding.schema.version != 2 {
-                    return Err(Error::Unsupported(
-                        "run upgrade before editing schema in a v1 dataset".into(),
-                    ));
-                }
                 binding.schema = session.edit_schema(binding, &change)?;
                 binding.column_ids = session.column_ids(binding)?;
                 let mut snapshot = baseline.clone();
@@ -450,7 +419,7 @@ impl Application {
                     &author,
                     &message.unwrap_or_else(|| format!("Alter schema of {dataset}")),
                 )?;
-                state.version = 2;
+                state.version = core::FORMAT_VERSION;
                 state.branches.insert(state.branch.clone(), id.clone());
                 finish(repo, session.as_mut(), &before_head, &state)?;
                 Ok(json!({"commit":id,"dataset":dataset,"schema":state.bindings[&dataset].schema}))
@@ -692,17 +661,17 @@ fn create_commit(
 ) -> Result<ObjectId> {
     identity(author, message)?;
     let commit = Commit {
-        version: 1,
+        version: core::FORMAT_VERSION,
         parents,
-        root: save(repo, "snapshot/v1", snapshot)?,
+        root: save(repo, "snapshot/v3", snapshot)?,
         author: author.into(),
         message: message.into(),
         timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
     };
-    save(repo, "commit/v1", &commit)
+    save(repo, "commit/v3", &commit)
 }
 fn snapshot_at(repo: &dyn ObjectStore, id: &ObjectId) -> Result<Snapshot> {
-    load(repo, "snapshot/v1", &graph::commit(repo, id)?.root)
+    load(repo, "snapshot/v3", &graph::commit(repo, id)?.root)
 }
 fn ensure_not_merging(state: &RepositoryState) -> Result<()> {
     if state.merging.is_some() {
@@ -729,7 +698,7 @@ fn capture_dataset(
         let mut tree = tree::BulkBuilder::default();
         let mut records = 0;
         session.scan(binding, &mut |record| {
-            let id = save(store, "record/v1", &record)?;
+            let id = save(store, "record/v3", &record)?;
             tree.push(store, record.key, id)?;
             records += 1;
             Ok(())
@@ -793,7 +762,7 @@ fn apply_snapshot(
             let mut batch = Vec::<Record>::new();
             let mut bytes = 0usize;
             tree::visit(repo, dataset.root.as_ref(), &mut |_, id| {
-                let record: Record = load(repo, "record/v1", id)?;
+                let record: Record = load(repo, "record/v3", id)?;
                 bytes += record.payload_bytes();
                 batch.push(record);
                 if batch.len() >= 1000 || bytes >= 8 * 1024 * 1024 {
@@ -922,7 +891,7 @@ fn fsck(repo: &Repository, state: &RepositoryState) -> Result<Value> {
             let schema: Schema = schema::read(repo, &dataset.schema)?;
             let mut count = 0;
             tree::visit(repo, dataset.root.as_ref(), &mut |key, id| {
-                let row: Record = load(repo, "record/v1", id)?;
+                let row: Record = load(repo, "record/v3", id)?;
                 if key != row.key {
                     return Err(Error::Storage("tree key/record key mismatch".into()));
                 }

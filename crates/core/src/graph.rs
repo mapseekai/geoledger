@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 const MAX_COMMITS: usize = 100_000;
 
 pub fn commit(store: &dyn ObjectStore, id: &ObjectId) -> Result<Commit> {
-    let c: Commit = load(store, "commit/v1", id)?;
-    if c.version != 1 {
+    let c: Commit = load(store, "commit/v3", id)?;
+    if c.version != crate::FORMAT_VERSION {
         return Err(Error::Unsupported("commit format version".into()));
     }
     Ok(c)

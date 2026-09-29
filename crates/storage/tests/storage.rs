@@ -14,15 +14,15 @@ fn objects_are_durable_typed_and_transactional() {
     let dir = tempfile::tempdir().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
     repo.begin().unwrap();
-    let committed = repo.put("record/v1", b"hello").unwrap();
+    let committed = repo.put("record/v3", b"hello").unwrap();
     repo.commit().unwrap();
     repo.begin().unwrap();
-    let lost = repo.put("record/v1", b"lost").unwrap();
+    let lost = repo.put("record/v3", b"lost").unwrap();
     drop(repo);
     let repo = Repository::open(dir.path()).unwrap();
-    assert_eq!(repo.get(&committed, "record/v1").unwrap(), b"hello");
-    assert!(repo.get(&committed, "schema/v1").is_err());
-    assert!(repo.get(&lost, "record/v1").is_err());
+    assert_eq!(repo.get(&committed, "record/v3").unwrap(), b"hello");
+    assert!(repo.get(&committed, "schema/v3").is_err());
+    assert!(repo.get(&lost, "record/v3").is_err());
     assert_eq!(repo.verify_objects().unwrap(), 1);
 }
 
@@ -59,39 +59,39 @@ fn staged_bulk_objects_are_readable_deduplicated_and_rolled_back() {
     let repo = Repository::init(dir.path()).unwrap();
     assert!(repo.bulk_write(|_| Ok(())).is_err());
     repo.begin().unwrap();
-    let old = repo.put("record/v1", b"existing").unwrap();
+    let old = repo.put("record/v3", b"existing").unwrap();
     let added = repo
         .bulk_write(|store| {
             // Reject nesting without leaving an extra savepoint or losing the outer batch.
             assert!(repo.bulk_write(|_| Ok(())).is_err());
-            assert_eq!(store.get(&old, "record/v1")?, b"existing");
-            assert_eq!(store.put("record/v1", b"existing")?, old);
-            let added = store.put("record/v1", b"added")?;
-            assert_eq!(store.get(&added, "record/v1")?, b"added");
-            assert!(store.get(&added, "schema/v2").is_err());
+            assert_eq!(store.get(&old, "record/v3")?, b"existing");
+            assert_eq!(store.put("record/v3", b"existing")?, old);
+            let added = store.put("record/v3", b"added")?;
+            assert_eq!(store.get(&added, "record/v3")?, b"added");
+            assert!(store.get(&added, "schema/v3").is_err());
             Ok(added)
         })
         .unwrap();
-    let lost = geoledger_core::object::digest("record/v1", b"lost");
+    let lost = geoledger_core::object::digest("record/v3", b"lost");
     let failed: geoledger_core::Result<()> = repo.bulk_write(|store| {
-        store.put("record/v1", b"lost")?;
+        store.put("record/v3", b"lost")?;
         Err(Error::Invalid("simulated scan error".into()))
     });
     assert!(failed.is_err());
-    assert!(repo.get(&lost, "record/v1").is_err());
+    assert!(repo.get(&lost, "record/v3").is_err());
     // A failed batch can be followed by a successful one in the same transaction.
-    repo.bulk_write(|store| store.put("record/v1", b"added"))
+    repo.bulk_write(|store| store.put("record/v3", b"added"))
         .unwrap();
     assert_eq!(repo.verify_objects().unwrap(), 2);
     repo.commit().unwrap();
     repo.begin().unwrap();
-    repo.bulk_write(|store| store.put("record/v1", b"lost"))
+    repo.bulk_write(|store| store.put("record/v3", b"lost"))
         .unwrap();
     repo.rollback().unwrap();
     drop(repo);
     let repo = Repository::open(dir.path()).unwrap();
-    assert_eq!(repo.get(&added, "record/v1").unwrap(), b"added");
-    assert!(repo.get(&lost, "record/v1").is_err());
+    assert_eq!(repo.get(&added, "record/v3").unwrap(), b"added");
+    assert!(repo.get(&lost, "record/v3").is_err());
     assert_eq!(repo.verify_objects().unwrap(), 2);
 }
 
@@ -101,60 +101,74 @@ fn new_repositories_use_geoledger_directory() {
     let repo = Repository::init(dir.path()).unwrap();
     assert_eq!(repo.directory, dir.path().join(".geoledger"));
     assert!(repo.directory.join("repository.sqlite").is_file());
-    assert!(!dir.path().join(".spatial-version").exists());
 }
 
 #[test]
-fn legacy_repositories_remain_readable_locked_and_cannot_be_reinitialized() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = Repository::init(dir.path()).unwrap();
-    let id = repo.put("record/v1", b"legacy payload").unwrap();
-    drop(repo);
-    std::fs::rename(
-        dir.path().join(".geoledger"),
-        dir.path().join(".spatial-version"),
-    )
-    .unwrap();
-    let repo = Repository::open(dir.path()).unwrap();
-    assert_eq!(repo.directory, dir.path().join(".spatial-version"));
-    assert_eq!(repo.get(&id, "record/v1").unwrap(), b"legacy payload");
-    assert!(matches!(Repository::open(dir.path()), Err(Error::Busy)));
-    assert!(matches!(
-        Repository::init(dir.path()),
-        Err(Error::Conflict(_))
-    ));
-    assert!(!dir.path().join(".geoledger").exists());
-    assert_eq!(repo.verify_objects().unwrap(), 1);
-}
-
-#[test]
-fn ambiguous_repository_directories_fail_closed() {
-    let dir = tempfile::tempdir().unwrap();
-    drop(Repository::init(dir.path()).unwrap());
-    std::fs::create_dir(dir.path().join(".spatial-version")).unwrap();
-    assert!(matches!(
-        Repository::open(dir.path()),
-        Err(Error::Conflict(_))
-    ));
-    assert!(matches!(
-        Repository::init(dir.path()),
-        Err(Error::Conflict(_))
-    ));
-    assert!(dir.path().join(".geoledger/repository.sqlite").is_file());
-    assert!(
-        !dir.path()
-            .join(".spatial-version/repository.sqlite")
-            .exists()
-    );
-}
-
-#[test]
-fn opening_a_missing_repository_does_not_create_either_directory() {
+fn opening_a_missing_repository_has_no_side_effects() {
     let dir = tempfile::tempdir().unwrap();
     assert!(matches!(
         Repository::open(dir.path()),
         Err(Error::NotFound(_))
     ));
     assert!(!dir.path().join(".geoledger").exists());
-    assert!(!dir.path().join(".spatial-version").exists());
+}
+
+#[test]
+fn current_repository_identity_and_version_are_required() {
+    for (application, version) in [(0x474c4433, 1), (0x474c4433, 2), (0x474c4433, 4), (0, 3)] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let path = repo.directory.join("repository.sqlite");
+        drop(repo);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let current: (i64, i64) = (
+            conn.query_row("PRAGMA application_id", [], |row| row.get(0))
+                .unwrap(),
+            conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap(),
+        );
+        assert_eq!(
+            current,
+            (0x474c4433, i64::from(geoledger_core::FORMAT_VERSION))
+        );
+        conn.execute_batch(&format!(
+            "PRAGMA application_id={application}; PRAGMA user_version={version};"
+        ))
+        .unwrap();
+        drop(conn);
+        assert!(matches!(
+            Repository::open(dir.path()),
+            Err(Error::Unsupported(_))
+        ));
+    }
+}
+
+#[test]
+fn repository_state_and_journal_require_current_format() {
+    use geoledger_core::{FORMAT_VERSION, PendingOperation, RepositoryState};
+    use std::collections::BTreeMap;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let head = repo.put("test/v1", b"head").unwrap();
+    let mut state = RepositoryState {
+        version: FORMAT_VERSION,
+        repository_id: "format-test".into(),
+        branch: "main".into(),
+        branches: BTreeMap::from([("main".into(), head.clone())]),
+        bindings: BTreeMap::new(),
+        merging: None,
+    };
+    repo.save_state(&state).unwrap();
+    state.version = FORMAT_VERSION - 1;
+    assert!(repo.save_state(&state).is_err());
+    assert!(
+        repo.prepare(&PendingOperation {
+            id: "test".into(),
+            before_head: head,
+            after: state
+        })
+        .is_err()
+    );
+    assert_eq!(repo.state().unwrap().version, FORMAT_VERSION);
+    assert!(repo.pending().unwrap().is_none());
 }

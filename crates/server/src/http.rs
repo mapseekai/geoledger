@@ -138,11 +138,8 @@ async fn branch(State(s): State<Service>, Json(p): Json<NewBranch>) -> Result<Re
 #[serde(deny_unknown_fields)]
 struct NewCommit {
     message: String,
-    #[serde(default = "unknown")]
+    #[serde(default = "geoledger::default_author")]
     author: String,
-}
-fn unknown() -> String {
-    "unknown".into()
 }
 async fn commit(State(s): State<Service>, Json(p): Json<NewCommit>) -> Result<Response, ApiError> {
     run(
@@ -158,7 +155,7 @@ async fn commit(State(s): State<Service>, Json(p): Json<NewCommit>) -> Result<Re
 #[serde(deny_unknown_fields)]
 struct NewMerge {
     source: String,
-    #[serde(default = "unknown")]
+    #[serde(default = "geoledger::default_author")]
     author: String,
     #[serde(default)]
     message: Option<String>,
@@ -173,4 +170,19 @@ async fn merge(State(s): State<Service>, Json(p): Json<NewMerge>) -> Result<Resp
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn commit_and_merge_authors_default_to_mapseekai() -> Result<(), serde_json::Error> {
+        let commit: super::NewCommit = serde_json::from_str(r#"{"message":"save"}"#)?;
+        let merge: super::NewMerge = serde_json::from_str(r#"{"source":"draft"}"#)?;
+        assert_eq!(commit.author, "mapseekai");
+        assert_eq!(merge.author, "mapseekai");
+        let explicit: super::NewCommit =
+            serde_json::from_str(r#"{"message":"save","author":"custom-author"}"#)?;
+        assert_eq!(explicit.author, "custom-author");
+        Ok(())
+    }
 }

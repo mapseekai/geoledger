@@ -1,11 +1,11 @@
-//! Versioned column identity. V1 columns receive deterministic legacy identities;
-//! V2 preserves them through rename and assigns fresh identities to new columns.
-use crate::{Cell, Field, ObjectId, ObjectStore, Record, Result, Schema, load, save};
+//! Stable GeoLedger column identities shared by schema history and field evolution.
+use crate::{
+    Cell, FORMAT_VERSION, Field, ObjectId, ObjectStore, Record, Result, Schema, load, save,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-// Persisted schema key: retain it across the GeoLedger product rename.
-pub const COLUMN_ID: &str = "spatial-version.column-id";
+pub const COLUMN_ID: &str = "geoledger.column-id";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -34,7 +34,7 @@ pub fn column_id(field: &Field) -> String {
         .metadata
         .get(COLUMN_ID)
         .cloned()
-        .unwrap_or_else(|| format!("legacy:{}", field.name))
+        .unwrap_or_else(|| format!("gl:field:{}", field.name))
 }
 
 pub fn with_identities(mut schema: Schema) -> Schema {
@@ -42,51 +42,48 @@ pub fn with_identities(mut schema: Schema) -> Schema {
         let id = column_id(field);
         field.metadata.insert(COLUMN_ID.into(), id);
     }
-    schema.version = 2;
+    schema.version = FORMAT_VERSION;
     schema.fields.sort_by(|a, b| a.name.cmp(&b.name));
     schema
 }
 
 pub fn store(store: &dyn ObjectStore, schema: &Schema) -> Result<ObjectId> {
-    save(
-        store,
-        if schema.version == 2 {
-            "schema/v2"
-        } else {
-            "schema/v1"
-        },
-        schema,
-    )
+    validate_format(schema)?;
+    save(store, "schema/v3", schema)
 }
 
 pub fn read(store: &dyn ObjectStore, id: &ObjectId) -> Result<Schema> {
-    let (schema, version): (Schema, u32) =
-        load(store, "schema/v1", id)
-            .map(|schema| (schema, 1))
-            .or_else(|_| load(store, "schema/v2", id).map(|schema| (schema, 2)))?;
-    if schema.version != version {
-        return Err(crate::Error::Unsupported("schema format".into()));
+    let schema: Schema = load(store, "schema/v3", id)?;
+    validate_format(&schema)?;
+    Ok(schema)
+}
+
+pub fn validate_format(schema: &Schema) -> Result<()> {
+    if schema.version != FORMAT_VERSION {
+        return Err(crate::Error::Unsupported("GeoLedger schema format".into()));
     }
     let mut names = std::collections::BTreeSet::new();
     let mut ids = std::collections::BTreeSet::new();
-    for f in &schema.fields {
-        if !names.insert(&f.name) || !ids.insert(column_id(f)) {
+    for field in &schema.fields {
+        let id = field
+            .metadata
+            .get(COLUMN_ID)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| crate::Error::Storage("schema field is missing identity".into()))?;
+        if !names.insert(&field.name) || !ids.insert(id) {
             return Err(crate::Error::Storage(
                 "duplicate schema field name or identity".into(),
             ));
         }
-        if schema.version == 2 && !f.metadata.contains_key(COLUMN_ID) {
-            return Err(crate::Error::Storage("v2 field is missing identity".into()));
-        }
     }
-    Ok(schema)
+    Ok(())
 }
 
 /// Compare physical definitions, excluding versioning IDs and physical column order.
 pub fn equivalent(a: &Schema, b: &Schema) -> bool {
     fn normalized(s: &Schema) -> Schema {
         let mut s = s.clone();
-        s.version = 1;
+        s.version = FORMAT_VERSION;
         for field in &mut s.fields {
             field.metadata.remove(COLUMN_ID);
         }
@@ -204,7 +201,7 @@ pub fn merge(base: &Schema, ours: &Schema, theirs: &Schema) -> Result<Schema> {
     }
     fields.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(Schema {
-        version: 2,
+        version: FORMAT_VERSION,
         kind: if fields.iter().any(|f| f.geometry) {
             crate::DatasetKind::Vector
         } else {

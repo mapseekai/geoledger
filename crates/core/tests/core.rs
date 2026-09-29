@@ -77,7 +77,7 @@ fn deterministic_tree_matches_bulk_import() {
     let store = MemoryStore::default();
     let mut a = None;
     let mut b = None;
-    let value = save(&store, "record/v1", &row("0", "0")).unwrap();
+    let value = save(&store, "record/v3", &row("0", "0")).unwrap();
     let keys: Vec<_> = (0..300).map(|i| format!("{i:04}")).collect();
     for key in &keys {
         a = tree::set(&store, a.as_ref(), key, Some(&value)).unwrap();
@@ -101,14 +101,14 @@ fn deterministic_tree_matches_bulk_import() {
 #[test]
 fn changing_one_record_reuses_subtrees() {
     let store = MemoryStore::default();
-    let value = save(&store, "record/v1", &row("0", "0")).unwrap();
+    let value = save(&store, "record/v3", &row("0", "0")).unwrap();
     let mut b = tree::BulkBuilder::default();
     for i in 0..10_000 {
         b.push(&store, format!("{i:05}"), value.clone()).unwrap();
     }
     let root = b.finish(&store).unwrap();
     let count = store.object_count();
-    let v2 = save(&store, "record/v1", &row("1", "0")).unwrap();
+    let v2 = save(&store, "record/v3", &row("1", "0")).unwrap();
     let edited = tree::set(&store, root.as_ref(), "05000", Some(&v2)).unwrap();
     assert!(store.object_count() - count < 100);
     let delta = tree::diff(&store, root.as_ref(), edited.as_ref()).unwrap();
@@ -120,7 +120,7 @@ fn changing_one_record_reuses_subtrees() {
 #[test]
 fn deletes_and_inserts_match_reference_map() {
     let store = MemoryStore::default();
-    let value = save(&store, "record/v1", &row("0", "0")).unwrap();
+    let value = save(&store, "record/v3", &row("0", "0")).unwrap();
     let mut root = None;
     let mut expected = BTreeMap::new();
     for i in 0..1000 {
@@ -145,8 +145,8 @@ fn deletes_and_inserts_match_reference_map() {
 fn object_hash_is_domain_separated() {
     let store = MemoryStore::default();
     assert_ne!(
-        store.put("record/v1", b"{}").unwrap(),
-        store.put("schema/v1", b"{}").unwrap()
+        store.put("record/v3", b"{}").unwrap(),
+        store.put("schema/v3", b"{}").unwrap()
     );
 }
 #[test]
@@ -161,7 +161,7 @@ fn malformed_ids_and_branch_names_fail() {
 #[test]
 fn regression_bulk_and_incremental_key_limits_match() {
     let store = MemoryStore::default();
-    let value = save(&store, "record/v1", &row("0", "0")).unwrap();
+    let value = save(&store, "record/v3", &row("0", "0")).unwrap();
     let valid = "a".repeat(8192);
     let mut bulk = tree::BulkBuilder::default();
     bulk.push(&store, valid.clone(), value.clone()).unwrap();
@@ -179,11 +179,51 @@ fn regression_bulk_and_incremental_key_limits_match() {
 }
 
 #[test]
-fn product_rename_preserves_object_and_schema_identities() {
-    // Captured from the original spatial-version implementation before the rename.
+fn current_schema_roundtrips_and_validates_format_and_identities() {
+    let store = MemoryStore::default();
+    let current = schema::with_identities(Schema {
+        version: FORMAT_VERSION,
+        kind: DatasetKind::Table,
+        primary_key: "id".into(),
+        fields: vec![Field {
+            name: "id".into(),
+            logical_type: "text".into(),
+            codec: "postgres-text/v1".into(),
+            nullable: false,
+            geometry: false,
+            metadata: BTreeMap::new(),
+        }],
+        metadata: BTreeMap::new(),
+    });
+    assert_eq!(schema::COLUMN_ID, "geoledger.column-id");
+    let id = schema::store(&store, &current).unwrap();
+    assert_eq!(schema::read(&store, &id).unwrap(), current);
+    for version in [1, 2, 4] {
+        let mut invalid = current.clone();
+        invalid.version = version;
+        assert!(schema::store(&store, &invalid).is_err());
+        let id = save(&store, "schema/v3", &invalid).unwrap();
+        assert!(schema::read(&store, &id).is_err());
+    }
+    let mut missing = current.clone();
+    missing.fields[0].metadata.clear();
+    assert!(schema::store(&store, &missing).is_err());
+    let mut duplicate = current.clone();
+    duplicate.fields.push(current.fields[0].clone());
+    assert!(schema::store(&store, &duplicate).is_err());
+}
+
+#[test]
+fn object_digest_uses_current_geoledger_domain() {
+    let kind = "record/v3";
+    let payload = b"geoledger format regression";
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"geoledger\0object-v3\0");
+    hasher.update(&(kind.len() as u64).to_be_bytes());
+    hasher.update(kind.as_bytes());
+    hasher.update(payload);
     assert_eq!(
-        object::digest("record/v1", b"geoledger rename compatibility").as_str(),
-        "b12a591944627e77b064cd2b235cc20e5dde3ff24dc74c96680ee40747be883d"
+        object::digest(kind, payload).as_str(),
+        hasher.finalize().to_hex().as_str()
     );
-    assert_eq!(schema::COLUMN_ID, "spatial-version.column-id");
 }

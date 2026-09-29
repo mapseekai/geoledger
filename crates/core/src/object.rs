@@ -42,8 +42,7 @@ impl From<ObjectId> for String {
 
 pub fn digest(kind: &str, bytes: &[u8]) -> ObjectId {
     let mut hasher = blake3::Hasher::new();
-    // This v1 domain separator is part of existing object IDs, not the product name.
-    hasher.update(b"spatial-version\0object-v1\0");
+    hasher.update(b"geoledger\0object-v3\0");
     hasher.update(&(kind.len() as u64).to_be_bytes());
     hasher.update(kind.as_bytes());
     hasher.update(bytes);

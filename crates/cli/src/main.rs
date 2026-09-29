@@ -14,7 +14,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 struct Cli {
     #[arg(long, global = true, default_value = ".")]
     repo: PathBuf,
-    #[arg(long, global = true, env = "GL_AUTHOR", default_value = "unknown")]
+    #[arg(long, global = true, env = "GL_AUTHOR", default_value = geoledger::DEFAULT_AUTHOR)]
     author: String,
     /// Name of an environment variable; credentials are never stored in the repository.
     #[arg(long, global = true, default_value = "GL_DATABASE_URL")]
@@ -28,8 +28,6 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
-    /// Upgrade legacy datasets to stable column identity tracking (format v2).
-    Upgrade,
     Schema {
         dataset: String,
         #[arg(long, default_value = "HEAD")]
@@ -207,7 +205,6 @@ async fn run(cli: Cli) -> Result<()> {
     }
     let author = cli.author;
     let command = match cli.command {
-        Action::Upgrade => Command::Upgrade,
         Action::Schema { dataset, reference } => Command::Schema { dataset, reference },
         Action::AddField {
             dataset,

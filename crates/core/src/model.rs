@@ -2,7 +2,8 @@ use crate::{Error, ObjectId, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const FORMAT_VERSION: u32 = 1;
+/// Current GeoLedger object, schema and repository format.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// A record key may identify a feature today and a tile/chunk in a future adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

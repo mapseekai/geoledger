@@ -118,7 +118,7 @@ fn regression_nondefault_collations_are_rejected_before_import() {
         );
         let count: i64 =
             f.db.query_one(
-                "SELECT count(*) FROM _spatial_version.tracked WHERE table_oid=$1::text::regclass",
+                "SELECT count(*) FROM _geoledger.tracked WHERE table_oid=$1::text::regclass",
                 &[&format!("{}.{name}", f.schema)],
             )
             .unwrap()
@@ -274,7 +274,7 @@ fn regression_long_primary_key_import_rolls_back() {
     assert_eq!(f.head(), head);
     let tracking: i64 =
         f.db.query_one(
-            "SELECT count(*) FROM _spatial_version.tracked WHERE table_oid=$1::text::regclass",
+            "SELECT count(*) FROM _geoledger.tracked WHERE table_oid=$1::text::regclass",
             &[&format!("{}.long_keys", f.schema)],
         )
         .unwrap()
@@ -608,7 +608,7 @@ fn schema_commands_preserve_history_and_restore_lossy_casts() {
             .unwrap()
             .iter()
             .find(|f| f["name"] == name)
-            .unwrap()["metadata"]["spatial-version.column-id"]
+            .unwrap()["metadata"]["geoledger.column-id"]
             .clone()
     };
     assert_eq!(field_id(&before, "note"), field_id(&after, "memo"));
@@ -741,7 +741,7 @@ fn schema_commit_recovery_uses_the_new_binding() {
     f.run(json!({"op":"alter_schema","dataset":"roads","change":{"action":"rename","name":"width","new_name":"breadth"}}));
     let operation: String =
         f.db.query_one(
-            "SELECT operation FROM _spatial_version.repositories WHERE id=$1",
+            "SELECT operation FROM _geoledger.repositories WHERE id=$1",
             &[&before.repository_id],
         )
         .unwrap()
@@ -765,49 +765,29 @@ fn schema_commit_recovery_uses_the_new_binding() {
 
 #[test]
 #[ignore = "requires disposable GL_TEST_DATABASE_URL"]
-fn legacy_upgrade_preserves_history_and_enables_external_rename() {
-    use geoledger_core::{Commit, Snapshot, load, save, schema::COLUMN_ID};
+fn current_format_supports_field_history_from_first_import() {
     use geoledger_storage::Repository;
     let mut f = Fixture::new();
-    let legacy_head;
-    let repository_id;
+    let original_head;
     {
         let repo = Repository::open(f._directory.path()).unwrap();
-        let mut state = repo.state().unwrap();
-        repository_id = state.repository_id.clone();
-        let mut commit: Commit = load(&repo, "commit/v1", state.head().unwrap()).unwrap();
-        let mut snapshot: Snapshot = load(&repo, "snapshot/v1", &commit.root).unwrap();
-        repo.begin().unwrap();
-        for (name, binding) in &mut state.bindings {
-            binding.schema.version = 1;
-            binding.schema.metadata.remove("postgres.indexes");
-            for field in &mut binding.schema.fields {
-                field.metadata.remove(COLUMN_ID);
-            }
-            binding.column_ids.clear();
-            snapshot.get_mut(name).unwrap().schema =
-                save(&repo, "schema/v1", &binding.schema).unwrap();
+        let state = repo.state().unwrap();
+        assert_eq!(state.version, geoledger_core::FORMAT_VERSION);
+        for binding in state.bindings.values() {
+            geoledger_core::schema::validate_format(&binding.schema).unwrap();
         }
-        commit.root = save(&repo, "snapshot/v1", &snapshot).unwrap();
-        legacy_head = save(&repo, "commit/v1", &commit).unwrap();
-        state.version = 1;
-        state.branches.insert("main".into(), legacy_head.clone());
-        repo.save_state(&state).unwrap();
-        repo.commit().unwrap();
+        original_head = state.head().unwrap().clone();
     }
-    f.db.execute(
-        "UPDATE _spatial_version.repositories SET head=$1,operation=NULL WHERE id=$2",
-        &[&legacy_head.as_str(), &repository_id],
-    )
-    .unwrap();
-    let upgraded = f.run(json!({"op":"upgrade"}));
-    assert_eq!(upgraded["format_version"], 2);
-    assert_eq!(f.run(json!({"op":"upgrade"}))["already_current"], true);
+    let version: i32 =
+        f.db.query_one("SELECT version FROM _geoledger.format", &[])
+            .unwrap()
+            .get(0);
+    assert_eq!(version, geoledger_core::FORMAT_VERSION as i32);
     f.sql("ALTER TABLE $roads RENAME COLUMN width TO breadth");
-    f.commit("external rename after upgrade");
-    f.run(json!({"op":"reset","target":legacy_head.as_str(),"hard":true}));
+    f.commit("external field rename");
+    f.run(json!({"op":"reset","target":original_head.as_str(),"hard":true}));
     assert_eq!(f.status()["clean"], true);
-    f.run(json!({"op":"fsck"}));
+    assert_eq!(f.run(json!({"op":"fsck"}))["ok"], true);
 }
 
 #[test]

@@ -69,12 +69,11 @@ async fn thrift_roundtrip_auth_errors_and_shared_application() {
     }
     // Rejected calls must not create repository state.
     assert!(!directory.path().join(".geoledger").exists());
-    assert!(!directory.path().join(".spatial-version").exists());
     reply(
         client
             .execute(
                 ExecuteRequest {
-                    command_json: r#"{"op":"init","author":"thrift-test"}"#.into(),
+                    command_json: r#"{"op":"init"}"#.into(),
                 },
                 auth.clone(),
             )
@@ -114,6 +113,7 @@ async fn thrift_roundtrip_auth_errors_and_shared_application() {
             .unwrap(),
     );
     assert_eq!(log["commits"].as_array().unwrap().len(), 1);
+    assert_eq!(log["commits"][0]["commit"]["author"], "mapseekai");
     let direct = app
         .execute(serde_json::from_str(r#"{"op":"status"}"#).unwrap())
         .unwrap();

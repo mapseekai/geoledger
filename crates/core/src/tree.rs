@@ -13,10 +13,10 @@ struct Node {
     right: Option<ObjectId>,
 }
 fn node(store: &dyn ObjectStore, id: &ObjectId) -> Result<Node> {
-    load(store, "tree-node/v1", id)
+    load(store, "tree-node/v3", id)
 }
 fn write(store: &dyn ObjectStore, n: &Node) -> Result<ObjectId> {
-    save(store, "tree-node/v1", n)
+    save(store, "tree-node/v3", n)
 }
 fn priority(key: &str) -> ([u8; 32], &str) {
     (*blake3::hash(key.as_bytes()).as_bytes(), key)

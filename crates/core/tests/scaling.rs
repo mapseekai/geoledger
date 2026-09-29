@@ -19,11 +19,11 @@ impl ObjectStore for Counting {
 fn commit(s: &Counting, parents: Vec<ObjectId>, message: &str) -> ObjectId {
     save(
         s,
-        "commit/v1",
+        "commit/v3",
         &Commit {
-            version: 1,
+            version: geoledger_core::FORMAT_VERSION,
             parents,
-            root: save(s, "snapshot/v1", &Snapshot::new()).unwrap(),
+            root: save(s, "snapshot/v3", &Snapshot::new()).unwrap(),
             author: "test".into(),
             message: message.into(),
             timestamp: "fixed".into(),

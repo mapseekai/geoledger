@@ -8,10 +8,6 @@ fn gl() -> Command {
         "GL_AUTHOR",
         "GL_STATEMENT_TIMEOUT_SECS",
         "GL_API_TOKEN",
-        "SV_DATABASE_URL",
-        "SV_AUTHOR",
-        "SV_STATEMENT_TIMEOUT_SECS",
-        "SV_API_TOKEN",
     ] {
         command.env_remove(key);
     }
@@ -50,8 +46,6 @@ fn executable_and_help_use_gl_and_geoledger_names() {
     ] {
         assert!(help.contains(text), "missing {text}: {help}");
     }
-    assert!(!help.contains("spatial-version"));
-    assert!(!help.contains("SV_"));
 }
 
 #[test]
@@ -65,7 +59,6 @@ fn gl_offline_workflow_uses_new_directory_and_author_environment() {
     );
     assert_eq!(init["branch"], "main");
     assert!(dir.path().join(".geoledger/repository.sqlite").is_file());
-    assert!(!dir.path().join(".spatial-version").exists());
     let log = json(gl().arg("--repo").arg(dir.path()).arg("log"));
     assert_eq!(log["commits"][0]["commit"]["author"], "rename-test");
     success(gl().arg("--repo").arg(dir.path()).args(["branch", "draft"]));
@@ -96,4 +89,37 @@ fn gl_api_token_environment_is_used_before_binding_listeners() {
         String::from_utf8_lossy(&output.stderr)
             .contains("GL_API_TOKEN must contain at least 24 bytes")
     );
+}
+
+#[test]
+fn gl_defaults_to_mapseekai_and_explicit_author_takes_precedence() {
+    for (environment, explicit, expected) in [
+        (None, None, "mapseekai"),
+        (Some("environment-author"), None, "environment-author"),
+        (
+            Some("environment-author"),
+            Some("flag-author"),
+            "flag-author",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = gl();
+        command.arg("--repo").arg(dir.path());
+        if let Some(value) = environment {
+            command.env("GL_AUTHOR", value);
+        }
+        if let Some(value) = explicit {
+            command.args(["--author", value]);
+        }
+        command.arg("init");
+        assert_eq!(
+            json(&mut command)["format_version"],
+            geoledger::core::FORMAT_VERSION
+        );
+        let history = json(gl().arg("--repo").arg(dir.path()).arg("log"));
+        assert_eq!(history["commits"][0]["commit"]["author"], expected);
+    }
+    let help = String::from_utf8(success(gl().arg("--help")).stdout).unwrap();
+    assert!(!help.contains("upgrade"));
+    assert!(help.contains("mapseekai"));
 }

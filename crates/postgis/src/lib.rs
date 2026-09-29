@@ -168,7 +168,7 @@ impl WorkingCopyProvider for PostgisProvider {
         let exists: bool = session
             .client
             .query_one(
-                "SELECT to_regclass('_spatial_version.repositories') IS NOT NULL",
+                "SELECT to_regclass('_geoledger.repositories') IS NOT NULL",
                 &[],
             )
             .map_err(pg_error)?
@@ -176,7 +176,7 @@ impl WorkingCopyProvider for PostgisProvider {
         if !exists {
             session
                 .client
-                .query_one("SELECT pg_advisory_xact_lock(1937142839::bigint)", &[])
+                .query_one("SELECT pg_advisory_xact_lock(1196180531::bigint)", &[])
                 .map_err(pg_error)?;
             session
                 .client
@@ -185,26 +185,24 @@ impl WorkingCopyProvider for PostgisProvider {
         }
         let version: i32 = session
             .client
-            .query_one("SELECT version FROM _spatial_version.format", &[])
+            .query_one("SELECT version FROM _geoledger.format", &[])
             .map_err(pg_error)?
             .get(0);
-        if version != 1 {
+        if version != FORMAT_VERSION as i32 {
             return Err(Error::Unsupported("PostGIS tracking schema version".into()));
         }
         let ordered_index: bool = session
             .client
             .query_one(
-                "SELECT to_regclass('_spatial_version.dirty_pk_c_v1') IS NOT NULL",
+                "SELECT to_regclass('_geoledger.dirty_pk_c_v3') IS NOT NULL",
                 &[],
             )
             .map_err(pg_error)?
             .get(0);
         if !ordered_index {
-            session
-                .client
-                .query_one("SELECT pg_advisory_xact_lock(1937142839::bigint)", &[])
-                .map_err(pg_error)?;
-            session.client.batch_execute("CREATE INDEX IF NOT EXISTS dirty_pk_c_v1 ON _spatial_version.dirty(repository_id,dataset,pk COLLATE \"C\")").map_err(pg_error)?;
+            return Err(Error::Recovery(
+                "GeoLedger tracking index is missing".into(),
+            ));
         }
         let hash = blake3::hash(repository_id.as_bytes());
         let mut key_bytes = [0u8; 8];
@@ -217,7 +215,7 @@ impl WorkingCopyProvider for PostgisProvider {
         let marker = session
             .client
             .query_opt(
-                "SELECT head FROM _spatial_version.repositories WHERE id=$1",
+                "SELECT head FROM _geoledger.repositories WHERE id=$1",
                 &[&repository_id],
             )
             .map_err(pg_error)?;
@@ -230,7 +228,7 @@ impl WorkingCopyProvider for PostgisProvider {
             session
                 .client
                 .execute(
-                    "INSERT INTO _spatial_version.repositories(id,head) VALUES($1,$2)",
+                    "INSERT INTO _geoledger.repositories(id,head) VALUES($1,$2)",
                     &[&repository_id, &initial_head.as_str()],
                 )
                 .map_err(pg_error)?;
@@ -281,7 +279,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
         let r = self
             .client
             .query_one(
-                "SELECT head,operation FROM _spatial_version.repositories WHERE id=$1",
+                "SELECT head,operation FROM _geoledger.repositories WHERE id=$1",
                 &[&self.repository_id],
             )
             .map_err(pg_error)?;
@@ -292,7 +290,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
     }
     fn inspect(&mut self, schema_name: &str, table_name: &str) -> Result<Schema> {
         table(schema_name, table_name)?;
-        if schema_name == "_spatial_version"
+        if schema_name == "_geoledger"
             || schema_name.starts_with("pg_")
             || schema_name == "information_schema"
         {
@@ -313,7 +311,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
                 "foreign-key relationships in tracked tables".into(),
             ));
         }
-        let custom_triggers: bool = self.client.query_one("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=$1::bigint::oid AND NOT tgisinternal AND tgname NOT IN ('sv_track_row_v1','sv_reject_truncate_v1'))",&[&oid]).map_err(pg_error)?.get(0);
+        let custom_triggers: bool = self.client.query_one("SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=$1::bigint::oid AND NOT tgisinternal AND tgname NOT IN ('gl_track_row_v3','gl_reject_truncate_v3'))",&[&oid]).map_err(pg_error)?.get(0);
         if custom_triggers {
             return Err(Error::Unsupported("user triggers on tracked tables".into()));
         }
@@ -394,7 +392,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
         }
         let constraints:Vec<String>=self.client.query("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid=$1::bigint::oid ORDER BY contype,pg_get_constraintdef(oid)",&[&oid]).map_err(pg_error)?.into_iter().map(|r|r.get(0)).collect();
         Ok(Schema {
-            version: 1,
+            version: FORMAT_VERSION,
             kind: if fields.iter().any(|f| f.geometry) {
                 DatasetKind::Vector
             } else {
@@ -410,17 +408,27 @@ impl WorkingCopyTransaction for PostgisTransaction {
     }
     fn register(&mut self, dataset: &str, binding: &Binding) -> Result<()> {
         let oid = self.table_oid(&binding.schema_name, &binding.table_name)?;
-        if self.client.query_opt("SELECT repository_id FROM _spatial_version.tracked WHERE table_oid=$1::bigint::oid",&[&oid]).map_err(pg_error)?.is_some() {
-            return Err(Error::Conflict("table is already tracked by a repository".into()));
+        if self
+            .client
+            .query_opt(
+                "SELECT repository_id FROM _geoledger.tracked WHERE table_oid=$1::bigint::oid",
+                &[&oid],
+            )
+            .map_err(pg_error)?
+            .is_some()
+        {
+            return Err(Error::Conflict(
+                "table is already tracked by a repository".into(),
+            ));
         }
-        self.client.execute("INSERT INTO _spatial_version.tracked(table_oid,repository_id,dataset) VALUES($1::bigint::oid,$2,$3)",&[&oid,&self.repository_id,&dataset]).map_err(pg_error)?;
+        self.client.execute("INSERT INTO _geoledger.tracked(table_oid,repository_id,dataset) VALUES($1::bigint::oid,$2,$3)",&[&oid,&self.repository_id,&dataset]).map_err(pg_error)?;
         let table = table(&binding.schema_name, &binding.table_name)?;
         self.client
             .batch_execute(&format!(
-                "CREATE TRIGGER sv_track_row_v1 AFTER INSERT OR UPDATE OR DELETE ON {table}
-            FOR EACH ROW EXECUTE FUNCTION _spatial_version.track_row_v1({},{},{});
-            CREATE TRIGGER sv_reject_truncate_v1 BEFORE TRUNCATE ON {table}
-            FOR EACH STATEMENT EXECUTE FUNCTION _spatial_version.reject_truncate_v1();",
+                "CREATE TRIGGER gl_track_row_v3 AFTER INSERT OR UPDATE OR DELETE ON {table}
+            FOR EACH ROW EXECUTE FUNCTION _geoledger.track_row_v3({},{},{});
+            CREATE TRIGGER gl_reject_truncate_v3 BEFORE TRUNCATE ON {table}
+            FOR EACH STATEMENT EXECUTE FUNCTION _geoledger.reject_truncate_v3();",
                 literal(&self.repository_id),
                 literal(dataset),
                 literal(&binding.schema.primary_key)
@@ -429,16 +437,10 @@ impl WorkingCopyTransaction for PostgisTransaction {
         Ok(())
     }
     fn verify(&mut self, dataset: &str, binding: &Binding) -> Result<()> {
-        let actual = self.inspect(&binding.schema_name, &binding.table_name)?;
-        if binding.schema.version == 1
-            && !geoledger_core::schema::equivalent(&actual, &binding.schema)
-        {
-            return Err(Error::Unsupported(format!(
-                "schema drift in dataset {dataset}; DDL is not versioned"
-            )));
-        }
+        geoledger_core::schema::validate_format(&binding.schema)?;
+        self.inspect(&binding.schema_name, &binding.table_name)?;
         let oid = self.table_oid(&binding.schema_name, &binding.table_name)?;
-        let tracked=self.client.query_opt("SELECT repository_id,dataset FROM _spatial_version.tracked WHERE table_oid=$1::bigint::oid",&[&oid]).map_err(pg_error)?;
+        let tracked=self.client.query_opt("SELECT repository_id,dataset FROM _geoledger.tracked WHERE table_oid=$1::bigint::oid",&[&oid]).map_err(pg_error)?;
         if tracked.is_none_or(|r| {
             r.get::<_, String>(0) != self.repository_id || r.get::<_, String>(1) != dataset
         }) {
@@ -447,8 +449,8 @@ impl WorkingCopyTransaction for PostgisTransaction {
             )));
         }
         let count:i64=self.client.query_one("SELECT count(*) FROM pg_trigger WHERE tgrelid=$1::bigint::oid AND tgenabled IN ('O','A') AND
-            ((tgname='sv_track_row_v1' AND tgfoid='_spatial_version.track_row_v1'::regproc AND tgtype=29) OR
-             (tgname='sv_reject_truncate_v1' AND tgfoid='_spatial_version.reject_truncate_v1'::regproc AND tgtype=34))",&[&oid]).map_err(pg_error)?.get(0);
+            ((tgname='gl_track_row_v3' AND tgfoid='_geoledger.track_row_v3'::regproc AND tgtype=29) OR
+             (tgname='gl_reject_truncate_v3' AND tgfoid='_geoledger.reject_truncate_v3'::regproc AND tgtype=34))",&[&oid]).map_err(pg_error)?.get(0);
         if count != 2 {
             return Err(Error::Recovery(format!(
                 "tracking triggers missing/disabled for {dataset}"
@@ -477,7 +479,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
         Ok(())
     }
     fn dirty_keys(&mut self, dataset: &str) -> Result<Vec<String>> {
-        Ok(self.client.query("SELECT pk FROM _spatial_version.dirty WHERE repository_id=$1 AND dataset=$2 ORDER BY pk COLLATE \"C\"",&[&self.repository_id,&dataset]).map_err(pg_error)?.into_iter().map(|r|r.get(0)).collect())
+        Ok(self.client.query("SELECT pk FROM _geoledger.dirty WHERE repository_id=$1 AND dataset=$2 ORDER BY pk COLLATE \"C\"",&[&self.repository_id,&dataset]).map_err(pg_error)?.into_iter().map(|r|r.get(0)).collect())
     }
     fn dirty_keys_page(
         &mut self,
@@ -487,7 +489,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
     ) -> Result<Vec<String>> {
         let limit = i64::try_from(limit)
             .map_err(|_| Error::Invalid("dirty page limit too large".into()))?;
-        self.client.query("SELECT pk FROM _spatial_version.dirty WHERE repository_id=$1 AND dataset=$2 AND ($3::text IS NULL OR pk COLLATE \"C\" > $3 COLLATE \"C\") ORDER BY pk COLLATE \"C\" LIMIT $4", &[&self.repository_id, &dataset, &after, &limit])
+        self.client.query("SELECT pk FROM _geoledger.dirty WHERE repository_id=$1 AND dataset=$2 AND ($3::text IS NULL OR pk COLLATE \"C\" > $3 COLLATE \"C\") ORDER BY pk COLLATE \"C\" LIMIT $4", &[&self.repository_id, &dataset, &after, &limit])
             .map_err(pg_error).map(|rows| rows.into_iter().map(|r| r.get(0)).collect())
     }
     fn projection_defaults(
@@ -717,7 +719,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
     fn clear_dirty(&mut self) -> Result<()> {
         self.client
             .execute(
-                "DELETE FROM _spatial_version.dirty WHERE repository_id=$1",
+                "DELETE FROM _geoledger.dirty WHERE repository_id=$1",
                 &[&self.repository_id],
             )
             .map_err(pg_error)?;
@@ -726,7 +728,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
     fn mark(&mut self, operation: &str, head: &ObjectId) -> Result<()> {
         self.client
             .execute(
-                "UPDATE _spatial_version.repositories SET operation=$2,head=$3 WHERE id=$1",
+                "UPDATE _geoledger.repositories SET operation=$2,head=$3 WHERE id=$1",
                 &[&self.repository_id, &operation, &head.as_str()],
             )
             .map_err(pg_error)?;

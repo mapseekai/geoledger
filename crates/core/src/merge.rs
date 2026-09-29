@@ -11,7 +11,7 @@ pub fn record(
 ) -> Result<Option<Record>> {
     let id = tree::get(store, dataset.and_then(|d| d.root.as_ref()), key)?;
     id.as_ref()
-        .map(|id| load(store, "record/v1", id))
+        .map(|id| load(store, "record/v3", id))
         .transpose()
 }
 pub fn update(
@@ -24,7 +24,7 @@ pub fn update(
         return Err(Error::Invalid("record key mismatch".into()));
     }
     let old = tree::get(store, dataset.root.as_ref(), key)?;
-    let new = value.map(|r| save(store, "record/v1", r)).transpose()?;
+    let new = value.map(|r| save(store, "record/v3", r)).transpose()?;
     if old.is_none() && new.is_some() {
         dataset.records += 1;
     }
@@ -104,12 +104,12 @@ fn decode_change(store: &dyn ObjectStore, name: &str, d: tree::Delta) -> Result<
     let before: Option<Record> = d
         .before
         .as_ref()
-        .map(|id| load(store, "record/v1", id))
+        .map(|id| load(store, "record/v3", id))
         .transpose()?;
     let after: Option<Record> = d
         .after
         .as_ref()
-        .map(|id| load(store, "record/v1", id))
+        .map(|id| load(store, "record/v3", id))
         .transpose()?;
     let fields = changed_fields(before.as_ref(), after.as_ref());
     Ok(Change {
@@ -264,9 +264,9 @@ pub fn three_way_with_defaults(
             if os != target {
                 let mut builder = tree::BulkBuilder::default();
                 tree::visit(store, o.root.as_ref(), &mut |key, id| {
-                    let r: Record = load(store, "record/v1", id)?;
+                    let r: Record = load(store, "record/v3", id)?;
                     let r = op.apply(&r);
-                    builder.push(store, key.into(), save(store, "record/v1", &r)?)
+                    builder.push(store, key.into(), save(store, "record/v3", &r)?)
                 })?;
                 merged.root = builder.finish(store)?;
             }
