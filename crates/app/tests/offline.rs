@@ -118,7 +118,6 @@ fn fresh_repository_uses_current_format_and_default_author() {
         history["commits"][0]["commit"]["version"],
         geoledger::core::FORMAT_VERSION
     );
-    assert!(serde_json::from_str::<Command>(r#"{"op":"upgrade"}"#).is_err());
 }
 
 mod import_regression {
@@ -330,7 +329,6 @@ mod import_regression {
                     theirs: head.clone(),
                     parents: vec![head.clone(); parent_count],
                     snapshot,
-                    conflicts: vec![],
                     author: "test".into(),
                     message: "candidate".into(),
                 });

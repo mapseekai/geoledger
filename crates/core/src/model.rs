@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 /// Current immutable object, schema and PostGIS tracking format.
 pub const FORMAT_VERSION: u32 = 3;
 
-/// Mutable local repository state with indexed conflicts (SQLite storage v4).
-pub const STATE_VERSION: u32 = 4;
+/// Current local repository state; conflict records live exclusively in the index.
+pub const STATE_VERSION: u32 = 5;
 
 /// A record key may identify a feature today and a tile/chunk in a future adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +142,7 @@ pub struct Binding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RepositoryState {
     pub version: u32,
     pub repository_id: String,
@@ -189,20 +190,19 @@ pub struct Conflict {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MergeState {
     pub base: ObjectId,
     pub ours: ObjectId,
     pub theirs: ObjectId,
     pub parents: Vec<ObjectId>,
     pub snapshot: Snapshot,
-    /// Legacy v3 migration payload. In state v4, conflicts live in the storage
-    /// index and this must be empty; use Repository conflict APIs for counts/data.
-    pub conflicts: Vec<Conflict>,
     pub author: String,
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PendingOperation {
     pub id: String,
     pub before_head: ObjectId,

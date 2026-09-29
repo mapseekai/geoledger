@@ -115,10 +115,19 @@ fn opening_a_missing_repository_has_no_side_effects() {
 
 #[test]
 fn current_repository_identity_and_version_are_required() {
-    for (application, version) in [(0x474c4433, 1), (0x474c4433, 2), (0x474c4433, 5), (0, 3)] {
+    for (application, version) in [
+        (0x474c4433, 0),
+        (0x474c4433, 1),
+        (0x474c4433, 2),
+        (0x474c4433, 3),
+        (0x474c4433, 4),
+        (0x474c4433, 6),
+        (0, 5),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         let path = repo.directory.join("repository.sqlite");
+        repo.put("test/v1", b"unmodified data").unwrap();
         drop(repo);
         let conn = rusqlite::Connection::open(&path).unwrap();
         let current: (i64, i64) = (
@@ -127,16 +136,18 @@ fn current_repository_identity_and_version_are_required() {
             conn.query_row("PRAGMA user_version", [], |row| row.get(0))
                 .unwrap(),
         );
-        assert_eq!(current, (0x474c4433, 4));
+        assert_eq!(current, (0x474c4433, 5));
         conn.execute_batch(&format!(
-            "PRAGMA application_id={application}; PRAGMA user_version={version};"
-        ))
-        .unwrap();
+            "PRAGMA journal_mode=DELETE; PRAGMA application_id={application}; PRAGMA user_version={version};"
+        )).unwrap();
         drop(conn);
+        let original = std::fs::read(&path).unwrap();
         assert!(matches!(
             Repository::open(dir.path()),
             Err(Error::Unsupported(_))
         ));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(!path.with_extension("sqlite-wal").exists());
     }
 }
 
@@ -175,7 +186,7 @@ fn merge_state(repo: &Repository) -> geoledger_core::RepositoryState {
     let head = repo.put("test/v1", b"history-must-survive").unwrap();
     RepositoryState {
         version: STATE_VERSION,
-        repository_id: "migration".into(),
+        repository_id: "indexed-conflicts".into(),
         branch: "main".into(),
         branches: std::collections::BTreeMap::from([("main".into(), head.clone())]),
         bindings: Default::default(),
@@ -185,7 +196,6 @@ fn merge_state(repo: &Repository) -> geoledger_core::RepositoryState {
             theirs: head.clone(),
             parents: vec![head],
             snapshot: Default::default(),
-            conflicts: vec![],
             author: "test".into(),
             message: "merge".into(),
         }),
@@ -213,28 +223,20 @@ fn conflict(key: &str) -> geoledger_core::Conflict {
 }
 
 #[test]
-fn v3_conflicts_upgrade_transactionally_without_changing_history() {
+fn indexed_conflicts_persist_and_resolve_transactionally() {
     let dir = tempfile::tempdir().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
-    let mut state = merge_state(&repo);
-    state.version = 3;
+    let state = merge_state(&repo);
     let head = state.head().unwrap().clone();
-    state.merging.as_mut().unwrap().conflicts = vec![conflict("b"), conflict("a")];
     let path = repo.directory.join("repository.sqlite");
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute(
-        "INSERT INTO metadata VALUES('state',?1)",
-        [serde_json::to_string(&state).unwrap()],
-    )
-    .unwrap();
-    conn.execute_batch("DROP TABLE conflicts; DROP TABLE conflict_stats; PRAGMA user_version=3;")
-        .unwrap();
-    drop(conn);
+    repo.begin().unwrap();
+    repo.insert_conflict(&conflict("b")).unwrap();
+    repo.insert_conflict(&conflict("a")).unwrap();
+    repo.save_state(&state).unwrap();
+    repo.commit().unwrap();
     drop(repo);
     let repo = Repository::open(dir.path()).unwrap();
-    assert_eq!(repo.get(&head, "test/v1").unwrap(), b"history-must-survive");
     assert_eq!(repo.state().unwrap().head().unwrap(), &head);
-    assert!(repo.state().unwrap().merging.unwrap().conflicts.is_empty());
     assert_eq!(repo.conflict_count().unwrap(), 2);
     assert_eq!(repo.conflicts_page(1, 0).unwrap()[0].key, "a");
     assert_eq!(repo.conflicts_page(1, 1).unwrap()[0].key, "b");
@@ -252,17 +254,14 @@ fn v3_conflicts_upgrade_transactionally_without_changing_history() {
     repo.commit().unwrap();
     assert_eq!(repo.conflict_count().unwrap(), 1);
     let conn = rusqlite::Connection::open(path).unwrap();
-    assert_eq!(
-        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        4
-    );
     let metadata: String = conn
         .query_row("SELECT value FROM metadata WHERE key='state'", [], |r| {
             r.get(0)
         })
         .unwrap();
     assert!(metadata.len() < 2000);
+    let value: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert!(value["merging"].get("conflicts").is_none());
     conn.execute(
         "UPDATE metadata SET value='null' WHERE key='conflict_owner'",
         [],
@@ -272,49 +271,26 @@ fn v3_conflicts_upgrade_transactionally_without_changing_history() {
 }
 
 #[test]
-fn failed_upgrade_rolls_back_schema_objects_and_version() {
+fn failed_conflict_batch_rolls_back_objects_index_and_state() {
     let dir = tempfile::tempdir().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
     let mut state = merge_state(&repo);
-    state.version = 3;
-    // Duplicate keys fail after the first record objects were inserted.
-    state.merging.as_mut().unwrap().conflicts = vec![conflict("a"), conflict("a")];
-    let path = repo.directory.join("repository.sqlite");
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute(
-        "INSERT INTO metadata VALUES('state',?1)",
-        [serde_json::to_string(&state).unwrap()],
-    )
-    .unwrap();
-    conn.execute_batch("DROP TABLE conflicts; DROP TABLE conflict_stats; PRAGMA user_version=3;")
-        .unwrap();
-    drop(repo);
-    assert!(Repository::open(dir.path()).is_err());
+    state.merging = None;
+    repo.save_state(&state).unwrap();
+    let original_state = serde_json::to_value(repo.state().unwrap()).unwrap();
+    let original_objects = repo.verify_objects().unwrap();
+    let original_reflog = repo.reflog(100).unwrap();
+    repo.begin().unwrap();
+    repo.insert_conflict(&conflict("a")).unwrap();
+    assert!(repo.insert_conflict(&conflict("a")).is_err());
+    repo.rollback().unwrap();
+    assert_eq!(repo.conflict_count().unwrap(), 0);
+    assert_eq!(repo.verify_objects().unwrap(), original_objects);
     assert_eq!(
-        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        3
+        serde_json::to_value(repo.state().unwrap()).unwrap(),
+        original_state
     );
-    assert_eq!(
-        conn.query_row("SELECT count(*) FROM objects", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE name='conflicts'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0
-    );
-    let original: String = conn
-        .query_row("SELECT value FROM metadata WHERE key='state'", [], |r| {
-            r.get(0)
-        })
-        .unwrap();
-    assert_eq!(original, serde_json::to_string(&state).unwrap());
+    assert_eq!(repo.reflog(100).unwrap(), original_reflog);
 }
 
 #[test]
@@ -331,50 +307,36 @@ fn corrupt_metadata_is_storage_error_with_json_source() {
 }
 
 #[test]
-fn pending_v3_journal_blocks_upgrade_without_mutation() {
+fn current_pending_journal_survives_reopen_and_clears_transactionally() {
     use geoledger_core::PendingOperation;
     let dir = tempfile::tempdir().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
     let mut state = merge_state(&repo);
     state.merging = None;
     repo.save_state(&state).unwrap();
-    repo.prepare(&PendingOperation {
+    let pending = PendingOperation {
         id: "unfinished".into(),
         before_head: state.head().unwrap().clone(),
         after: state,
-    })
-    .unwrap();
-    let conn = rusqlite::Connection::open(repo.directory.join("repository.sqlite")).unwrap();
-    conn.execute_batch("DROP TABLE conflicts; DROP TABLE conflict_stats; PRAGMA user_version=3;")
-        .unwrap();
+    };
+    repo.begin().unwrap();
+    repo.prepare(&pending).unwrap();
+    repo.commit().unwrap();
     drop(repo);
-    assert!(matches!(
-        Repository::open(dir.path()),
-        Err(Error::Recovery(_))
-    ));
+    let repo = Repository::open(dir.path()).unwrap();
     assert_eq!(
-        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        3
+        serde_json::to_value(repo.pending().unwrap()).unwrap(),
+        serde_json::to_value(&pending).unwrap()
     );
-    assert_eq!(
-        conn.query_row(
-            "SELECT count(*) FROM metadata WHERE key='pending'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        1
-    );
-    assert_eq!(
-        conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE name='conflicts'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0
-    );
+    assert!(matches!(repo.prepare(&pending), Err(Error::Recovery(_))));
+    repo.begin().unwrap();
+    repo.clear_pending().unwrap();
+    repo.rollback().unwrap();
+    assert!(repo.pending().unwrap().is_some());
+    repo.begin().unwrap();
+    repo.clear_pending().unwrap();
+    repo.commit().unwrap();
+    assert!(repo.pending().unwrap().is_none());
 }
 
 #[test]
@@ -403,7 +365,7 @@ fn conflict_page_does_not_decode_unrequested_entries_and_checks_identity() {
 }
 
 #[test]
-fn normal_v3_history_upgrade_preserves_commit_ids_and_reflog() {
+fn current_history_and_reflog_roundtrip() {
     use geoledger_core::{Commit, FORMAT_VERSION, STATE_VERSION, Snapshot, graph, save};
     let dir = tempfile::tempdir().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
@@ -440,16 +402,6 @@ fn normal_v3_history_upgrade_preserves_commit_ids_and_reflog() {
     repo.save_state(&state).unwrap();
     let reflog = repo.reflog(100).unwrap();
     let objects = repo.verify_objects().unwrap();
-    state.version = 3;
-    let conn = rusqlite::Connection::open(repo.directory.join("repository.sqlite")).unwrap();
-    conn.execute(
-        "UPDATE metadata SET value=?1 WHERE key='state'",
-        [serde_json::to_string(&state).unwrap()],
-    )
-    .unwrap();
-    conn.execute_batch("DROP TABLE conflicts; DROP TABLE conflict_stats; PRAGMA user_version=3;")
-        .unwrap();
-    drop(conn);
     drop(repo);
     let repo = Repository::open(dir.path()).unwrap();
     assert_eq!(repo.state().unwrap().version, STATE_VERSION);
@@ -458,4 +410,49 @@ fn normal_v3_history_upgrade_preserves_commit_ids_and_reflog() {
     assert_eq!(graph::ancestors(&repo, &second).unwrap().len(), 2);
     assert_eq!(repo.reflog(100).unwrap(), reflog);
     assert_eq!(repo.verify_objects().unwrap(), objects);
+}
+
+#[test]
+fn state_and_journal_reject_unknown_fields_without_reinterpreting_them() {
+    use geoledger_core::PendingOperation;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let state = merge_state(&repo);
+    repo.save_state(&state).unwrap();
+    let conn = rusqlite::Connection::open(repo.directory.join("repository.sqlite")).unwrap();
+    let value = serde_json::to_value(&state).unwrap();
+    for field in ["conflicts", "unexpected"] {
+        let mut invalid = value.clone();
+        invalid["merging"][field] = serde_json::json!([]);
+        conn.execute(
+            "UPDATE metadata SET value=?1 WHERE key='state'",
+            [invalid.to_string()],
+        )
+        .unwrap();
+        assert_eq!(repo.state().unwrap_err().code(), "storage_error");
+        let raw: String = conn
+            .query_row("SELECT value FROM metadata WHERE key='state'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(raw, invalid.to_string());
+    }
+    conn.execute(
+        "UPDATE metadata SET value=?1 WHERE key='state'",
+        [value.to_string()],
+    )
+    .unwrap();
+    let mut pending = serde_json::to_value(PendingOperation {
+        id: "strict-journal".into(),
+        before_head: state.head().unwrap().clone(),
+        after: state,
+    })
+    .unwrap();
+    pending["after"]["merging"]["conflicts"] = serde_json::json!([]);
+    conn.execute(
+        "INSERT INTO metadata VALUES('pending',?1)",
+        [pending.to_string()],
+    )
+    .unwrap();
+    assert_eq!(repo.pending().unwrap_err().code(), "storage_error");
 }

@@ -120,7 +120,6 @@ fn gl_defaults_to_mapseekai_and_explicit_author_takes_precedence() {
         assert_eq!(history["commits"][0]["commit"]["author"], expected);
     }
     let help = String::from_utf8(success(gl().arg("--help")).stdout).unwrap();
-    assert!(!help.contains("upgrade"));
     assert!(help.contains("mapseekai"));
 }
 

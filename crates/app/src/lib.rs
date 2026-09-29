@@ -504,7 +504,6 @@ impl Application {
                     theirs: theirs.clone(),
                     parents: vec![before_head.clone(), theirs],
                     snapshot,
-                    conflicts: Vec::new(),
                     author,
                     message: message
                         .unwrap_or_else(|| format!("Merge {source} into {}", state.branch)),
@@ -540,7 +539,6 @@ impl Application {
                     theirs: parent,
                     parents: vec![before_head.clone()],
                     snapshot,
-                    conflicts: Vec::new(),
                     author,
                     message: message.unwrap_or_else(|| format!("Revert {target}")),
                 };

@@ -13,9 +13,10 @@ Keep working-copy triggers enabled during checkout and restoration. Preserve tab
 journal/marker ordering, schema validation, clean-copy checks and conflicting-head protection.
 
 Keep immutable object/schema/PostGIS tracking FORMAT_VERSION distinct from mutable local
-STATE_VERSION and SQLite storage layout. Storage migrations preserve object IDs and run
-transactionally with migration/rollback tests. Encoding changes receive explicit versions. During development, initialize fresh
-repositories and import source tables into dedicated current-format working copies.
+STATE_VERSION and SQLite storage layout. Development targets current formats only: do not
+add legacy readers, command aliases or automatic upgrades. Give structural/encoding changes
+explicit versions, then initialize fresh repositories and import source tables into dedicated
+current-format working copies. Preserve current-format recovery and transaction rollback.
 
 Document implemented behavior, operating prerequisites and measured validation scope.
 Keep README as the overview, with guides for getting started, daily operations, API,

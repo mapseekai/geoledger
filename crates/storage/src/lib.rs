@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-const STORAGE_VERSION: u32 = 4;
+const STORAGE_VERSION: u32 = 5;
 const CONFLICT_TABLE: &str = "CREATE TABLE conflicts(dataset TEXT NOT NULL, key TEXT NOT NULL, refs TEXT NOT NULL, PRIMARY KEY(dataset,key)) WITHOUT ROWID;
 CREATE TABLE conflict_stats(singleton INTEGER PRIMARY KEY CHECK(singleton=1), count INTEGER NOT NULL CHECK(count>=0));
 INSERT INTO conflict_stats VALUES(1,0);
@@ -83,62 +83,7 @@ impl Repository {
         if !directory.join("repository.sqlite").is_file() {
             return Err(Error::NotFound(format!("repository at {}", root.display())));
         }
-        let repo = Self::connect(directory, false)?;
-        let app: i64 = repo
-            .connection
-            .query_row("PRAGMA application_id", [], |r| r.get(0))
-            .map_err(db_error)?;
-        let version: i64 = repo
-            .connection
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .map_err(db_error)?;
-        if app != APPLICATION_ID || ![3, i64::from(STORAGE_VERSION)].contains(&version) {
-            return Err(Error::Unsupported("repository storage format".into()));
-        }
-        if version == 3 {
-            repo.migrate_conflicts()?;
-        }
-        Ok(repo)
-    }
-    fn migrate_conflicts(&self) -> Result<()> {
-        self.begin()?;
-        let result = (|| {
-            self.connection
-                .execute_batch(CONFLICT_TABLE)
-                .map_err(db_error)?;
-            // A pending cross-database journal must be recovered by its original
-            // reader before migration; never reinterpret an in-flight operation.
-            if self.read_meta::<PendingOperation>("pending")?.is_some() {
-                return Err(Error::Recovery(
-                    "recover pending operation with storage v3 before upgrade".into(),
-                ));
-            }
-            let mut state: RepositoryState = self
-                .read_meta("state")?
-                .ok_or_else(|| Error::Storage("missing repository state".into()))?;
-            if state.version != 3 {
-                return Err(Error::Unsupported(
-                    "v3 repository state required for migration".into(),
-                ));
-            }
-            state.version = STATE_VERSION;
-            validate_state(&state)?;
-            if let Some(merge) = &mut state.merging {
-                for conflict in std::mem::take(&mut merge.conflicts) {
-                    self.insert_conflict(&conflict)?;
-                }
-            }
-            self.write_meta("conflict_owner", &conflict_owner(&state))?;
-            self.write_meta("state", &state)?;
-            self.connection
-                .execute_batch("PRAGMA user_version=4")
-                .map_err(db_error)?;
-            self.commit()
-        })();
-        if result.is_err() {
-            self.rollback()?;
-        }
-        result
+        Self::connect(directory, false)
     }
     fn connect(directory: PathBuf, create: bool) -> Result<Self> {
         let mut options = OpenOptions::new();
@@ -164,6 +109,20 @@ impl Repository {
             };
         let connection = Connection::open_with_flags(directory.join("repository.sqlite"), flags)
             .map_err(db_error)?;
+        if !create {
+            // Validate the current layout before applying any database settings.
+            let application: i64 = connection
+                .query_row("PRAGMA application_id", [], |r| r.get(0))
+                .map_err(db_error)?;
+            let version: i64 = connection
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .map_err(db_error)?;
+            if application != APPLICATION_ID || version != i64::from(STORAGE_VERSION) {
+                return Err(Error::Unsupported(
+                    "repository storage format; initialize a new development repository".into(),
+                ));
+            }
+        }
         connection
             .busy_timeout(Duration::from_secs(5))
             .map_err(db_error)?;
@@ -270,13 +229,6 @@ impl Repository {
             .read_meta("state")?
             .ok_or_else(|| Error::Storage("missing repository state".into()))?;
         validate_state(&state)?;
-        if state
-            .merging
-            .as_ref()
-            .is_some_and(|m| !m.conflicts.is_empty())
-        {
-            return Err(Error::Storage("inline conflicts in storage v4".into()));
-        }
         let owner: Option<Option<(ObjectId, ObjectId, ObjectId)>> =
             self.read_meta("conflict_owner")?;
         if owner.flatten() != conflict_owner(&state)
@@ -290,15 +242,6 @@ impl Repository {
     }
     pub fn save_state(&self, state: &RepositoryState) -> Result<()> {
         validate_state(state)?;
-        if state
-            .merging
-            .as_ref()
-            .is_some_and(|m| !m.conflicts.is_empty())
-        {
-            return Err(Error::Storage(
-                "storage v4 requires indexed conflicts".into(),
-            ));
-        }
         if state.merging.is_none() {
             self.connection
                 .execute("DELETE FROM conflicts", [])

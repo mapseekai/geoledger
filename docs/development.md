@@ -17,7 +17,7 @@
 
 PostGIS 保存可编辑工作副本；SQLite 保存历史对象和分支。提交采用“对象与 pending 持久化 → 数据库提交 → 分支状态发布”的顺序，`recover` 通过操作标记协调恢复。数据和字段恢复持续保留跟踪触发器及表锁。
 
-版本对象与 PostGIS 跟踪采用格式 3，本地目录为 `.geoledger`，数据库元数据为 `_geoledger`。SQLite 存储布局为 4，冲突按对象引用独立索引；历史对象与提交 ID 保持原样。正常布局 3 仓库在打开时通过事务更新存储布局；更新前先完成待恢复操作并备份仓库。对象读取校验类型和哈希，`fsck` 按字段结构和子树身份复用校验结果。
+本地状态与 SQLite 存储布局采用格式 5，冲突按对象引用独立索引；版本对象与 PostGIS 跟踪采用格式 3。本地目录为 `.geoledger`，数据库元数据为 `_geoledger`。开发数据通过新建仓库和从源数据导入准备。对象读取校验类型和哈希，`fsck` 按字段结构和子树身份复用校验结果。
 
 ## 构建
 
@@ -63,10 +63,10 @@ cargo test --locked --workspace --exclude geoledger-thrift-gen --no-default-feat
 中心版按数据库会话、数值编解码、查询、发布和错误处理拆分模块；复用 core 的 `merge_record`。中心属性使用带 JSON Pointer 转义的 `/properties/` 字段，几何使用 `/geometry`，
 JSON 值编码为文本单元，几何编码为保留坐标顺序与 Z 的 XDR EWKB。这是中心格式 1 的内部映射，本地 core 编解码保持原样。
 
-[事务迁移](../crates/center/src/schema.sql) 建立项目范围复合外键、成员、工作区、增量、当前要素、时态历史、提交、幂等记录和审计表。
+[结构初始化](../crates/center/src/schema.sql) 建立项目范围复合外键、成员、工作区、增量、当前要素、时态历史、提交、幂等记录和审计表。
 历史值与提交由数据库触发器保护；历史区间在后续提交中仅关闭一次。发布在同一连接的单一事务中锁项目行及工作区行，
 重新合并后一起更新要素、历史、提交、HEAD、审计、幂等结果和工作区状态。草稿仅锁自身工作区及成员身份。
-项目采用 `FOR NO KEY UPDATE`，与草稿写入的外键 KEY SHARE 锁兼容；成员管理与发布采用一致的锁顺序；bootstrap 的事务 advisory lock 仅用于协调迁移。
+项目采用 `FOR NO KEY UPDATE`，与草稿写入的外键 KEY SHARE 锁兼容；成员管理与发布采用一致的锁顺序；bootstrap 的事务 advisory lock 仅用于协调结构初始化。
 服务专用写角色是运行前提，数据库所有者仍拥有管理权限。
 
 离线验证：
