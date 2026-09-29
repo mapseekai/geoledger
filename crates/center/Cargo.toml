@@ -1,0 +1,31 @@
+[package]
+name = "geoledger-center"
+version = "0.2.0-alpha.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gl-center"
+path = "src/main.rs"
+
+[dependencies]
+geoledger-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+postgres = "0.19"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
+axum = "0.8"
+subtle = "2"
+getrandom = "0.4"
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[lints]
+workspace = true

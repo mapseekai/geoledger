@@ -831,6 +831,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "geoledger-center"
+version = "0.2.0-alpha.1"
+dependencies = [
+ "axum",
+ "geoledger-core",
+ "getrandom 0.4.3",
+ "http-body-util",
+ "native-tls",
+ "postgres",
+ "postgres-native-tls",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "geoledger-cli"
 version = "0.1.0-alpha.1"
 dependencies = [

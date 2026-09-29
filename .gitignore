@@ -4,3 +4,5 @@
 /.geoledger/
 *.log
 /.reference/
+
+.center-tokens*.json

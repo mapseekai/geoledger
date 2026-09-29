@@ -1,0 +1,67 @@
+name: Center Windows test package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: center-windows-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Configure Rust
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy
+          if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
+          rustup default 1.92.0
+          if ($LASTEXITCODE -ne 0) { throw 'Rust selection failed' }
+      - name: Validate documentation and formatting
+        run: |
+          python scripts/check-docs.py
+          if ($LASTEXITCODE -ne 0) { throw 'Documentation validation failed' }
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Formatting validation failed' }
+      - name: Build native center service
+        run: |
+          cargo build -p geoledger-center --release --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Center build failed' }
+      - name: Test native center service
+        run: |
+          cargo test -p geoledger-center --release --locked --target x86_64-pc-windows-msvc 2>&1 | Tee-Object center-windows-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Center tests failed' }
+          ./target/x86_64-pc-windows-msvc/release/gl-center.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Version check failed' }
+      - name: Inspect runtime dependencies
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          $dumpbin = Get-ChildItem "$vs/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          $deps = & $dumpbin.FullName /DEPENDENTS ./target/x86_64-pc-windows-msvc/release/gl-center.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Binary inspection failed' }
+          $deps | Tee-Object center-windows-dependencies.log
+          if (($deps -join "`n") -match '(?i)VCRUNTIME|MSVCP|libssl|libcrypto') { throw 'Unexpected runtime dependency' }
+      - name: Package center
+        run: |
+          python scripts/package-center.py --binary target/x86_64-pc-windows-msvc/release/gl-center.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: geoledger-center-windows-x86_64
+          path: |
+            target/center-dist/*.zip
+            target/center-dist/*.sha256
+            center-windows-tests.log
+            center-windows-dependencies.log
+          if-no-files-found: error
+          retention-days: 14

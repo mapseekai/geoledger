@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GeoLedger Center · 协作测试台</title>
+<style>
+:root{color-scheme:light;--ink:#14283b;--line:#dbe2e8;--accent:#176c80}*{box-sizing:border-box}body{margin:0;background:#f4f6f8;color:var(--ink);font:15px/1.6 system-ui,sans-serif}header{padding:28px max(24px,calc((100vw - 1280px)/2));background:#14283b;color:white}h1{margin:0;font-size:26px}header p{margin:6px 0 0;color:#bdd1de}main{max-width:1328px;margin:auto;padding:24px;display:grid;grid-template-columns:300px 1fr;gap:22px}.panel{background:white;border:1px solid var(--line);border-radius:10px;padding:20px}h2{font-size:16px;margin:0 0 14px}label{display:block;font-size:13px;font-weight:650;margin:10px 0 5px}input,select,textarea{width:100%;padding:9px;border:1px solid #bccad5;border-radius:5px;color:var(--ink);background:white;font:inherit}input{font-size:13px}textarea{font:13px/1.65 ui-monospace,Consolas,monospace;resize:vertical;min-height:310px;tab-size:2}button{border:0;border-radius:5px;padding:10px 16px;font:inherit;cursor:pointer;background:var(--accent);color:white}button.secondary{background:#e8eef2;color:var(--ink)}button:disabled{opacity:.5;cursor:wait}.toolbar{display:flex;gap:10px;margin:12px 0;align-items:center;flex-wrap:wrap}.muted{color:#546675;font-size:13px}.status{font-size:13px;font-weight:650}.status.error{color:#ae2938}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:550px;overflow:auto;margin:0;font:13px/1.65 ui-monospace,Consolas,monospace}.output{margin-top:20px}.steps{margin:16px 0 0;padding-left:20px;font-size:13px;color:#546675}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}details{font-size:13px;margin-top:14px}summary{cursor:pointer}a{color:var(--accent)}@media(max-width:850px){main{grid-template-columns:1fr}header{padding:22px}textarea{min-height:260px}}
+</style>
+</head>
+<body>
+<header><h1>GeoLedger Center</h1><p>个人草稿 · 版本发布 · 冲突解决　/　浏览器协作测试台</p></header>
+<main>
+<aside class="panel">
+<h2>连接与工作上下文</h2>
+<label for="token">个人访问令牌</label><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="使用服务端配置的个人令牌">
+<p class="muted">令牌仅保留在当前页面内存中。每位测试用户使用独立令牌。</p>
+<label for="project">项目 ID</label><input id="project" spellcheck="false">
+<label for="dataset">数据集 ID</label><input id="dataset" spellcheck="false">
+<label for="workspace">草稿 ID</label><input id="workspace" spellcheck="false">
+<div class="row"><div><label for="version">草稿版本</label><input id="version" type="number" min="0" step="1" value="0"></div><div><label for="head">正式版本</label><input id="head" type="number" min="0" step="1" value="0"></div></div>
+<ol class="steps"><li>创建项目和数据集。</li><li>由项目所有者添加协作成员。</li><li>每个用户创建自己的草稿。</li><li>保存要素、查看差异，再发布。</li><li>遇到冲突，提交对应的解决结果后再次发布。</li></ol>
+<details><summary>测试说明</summary><p>这是 API 测试台。要素以 GeoJSON 编辑，保存进入个人草稿，发布才更新 PostGIS 正式要素。两个浏览器窗口可分别使用不同用户令牌，共享项目并验证多人编辑。</p></details>
+</aside>
+<section>
+<div class="panel">
+<h2>请求</h2>
+<label for="operation">操作</label><select id="operation"></select>
+<div class="toolbar"><button id="template" class="secondary" type="button">生成请求示例</button><span class="muted" id="endpoint"></span></div>
+<label for="request">JSON 请求体</label><textarea id="request" spellcheck="false" aria-label="JSON 请求体"></textarea>
+<div class="toolbar"><button id="send" type="button">执行请求</button><span id="status" class="status" role="status" aria-live="polite"></span></div>
+<p class="muted">示例使用左侧 ID 和版本。发布请求中的 request_id 用于安全重试；重试原请求时保持请求体不变。</p>
+</div>
+<div class="panel output"><h2>响应</h2><pre id="response" tabindex="0" aria-label="API 响应">请求结果会显示在这里。</pre></div>
+</section>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const operations={create_project:'创建项目',list_projects:'项目列表',get_project:'项目信息',set_member:'设置项目成员',create_dataset:'创建数据集',list_datasets:'数据集列表',create_workspace:'创建个人草稿',list_workspaces:'个人草稿列表',get_workspace:'草稿信息',save:'保存要素 / 删除要素',features:'查询要素',diff:'查看草稿差异',publish:'发布草稿',conflicts:'查询合并冲突',resolve:'分批解决冲突',rebase:'更新基线 / 解决冲突',discard:'丢弃个人草稿',history:'发布历史',commit:'提交明细',restore:'生成撤销草稿'};
+for(const [value,label] of Object.entries(operations)){const o=document.createElement('option');o.value=value;o.textContent=label;$('operation').appendChild(o)}
+function uuid(){if(crypto.randomUUID)return crypto.randomUUID();const a=crypto.getRandomValues(new Uint8Array(16));a[6]=(a[6]&15)|64;a[8]=(a[8]&63)|128;const h=Array.from(a,x=>x.toString(16).padStart(2,'0')).join('');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`}
+function makeTemplate(){
+ const p=$('project').value.trim(),d=$('dataset').value.trim(),w=$('workspace').value.trim(),v=Number($('version').value),h=Number($('head').value);
+ const op=$('operation').value;
+ const feature={type:'Feature',id:'road-1',properties:{name:'示例道路',width:8},geometry:{type:'LineString',coordinates:[[120,30],[120.01,30.01]]}};
+ const data={
+  create_project:{name:'协作测试'},list_projects:{limit:20},get_project:{project:p},
+  set_member:{project:p,subject:'bob',role:'editor'},create_dataset:{project:p,name:'roads'},list_datasets:{project:p,limit:20},
+  create_workspace:{project:p},list_workspaces:{project:p,limit:20},get_workspace:{project:p,workspace:w},
+  save:{project:p,workspace:w,expected_workspace_version:v,edits:[{dataset:d,feature_id:'road-1',feature}]},
+  features:{project:p,dataset:d,...(w?{workspace:w}:{}),limit:20},diff:{project:p,workspace:w,limit:20},
+  publish:{project:p,workspace:w,expected_workspace_version:v,request_id:uuid(),message:'浏览器提交'},
+  conflicts:{project:p,workspace:w,limit:20},
+  resolve:{project:p,workspace:w,expected_workspace_version:v,expected_head:h,resolutions:[{dataset:d,feature_id:'road-1',feature}]},
+  rebase:{project:p,workspace:w,expected_workspace_version:v,expected_head:h,resolutions:[]},
+  discard:{project:p,workspace:w,expected_workspace_version:v},history:{project:p,limit:20},
+  commit:{project:p,revision:h,limit:20},restore:{project:p,revision:h}
+ };
+ $('request').value=JSON.stringify(data[op],null,2);$('endpoint').textContent=`POST /api/center/${op}`;
+}
+$('operation').addEventListener('change',makeTemplate);$('template').addEventListener('click',makeTemplate);
+$('send').addEventListener('click',async()=>{
+ const token=$('token').value.trim();if(!token){$('status').textContent='请先输入个人令牌';return}
+ let input;try{input=JSON.parse($('request').value)}catch(e){$('status').textContent='JSON 格式错误';return}
+ const op=$('operation').value,button=$('send'),controller=new AbortController();
+ button.disabled=true;$('status').className='status';$('status').textContent='执行中';
+ const timer=setTimeout(()=>controller.abort(),45000);
+ try{
+  const r=await fetch(`/api/center/${encodeURIComponent(op)}`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify(input),signal:controller.signal,cache:'no-store',credentials:'omit'});
+  const raw=await r.text();let out;try{out=JSON.parse(raw)}catch{out={message:raw}}
+  $('response').textContent=JSON.stringify(out,null,2);$('status').textContent=`HTTP ${r.status}`;$('status').className=r.ok?'status':'status error';
+  if(r.ok){
+   if(op==='create_project'){$('project').value=out.project;$('dataset').value='';$('workspace').value='';$('version').value='0';$('head').value=out.head}
+   if(op==='create_dataset')$('dataset').value=out.dataset;
+   if(op==='create_workspace'||op==='restore'){$('workspace').value=out.workspace;$('version').value=out.version}
+   if(Number.isInteger(out.version))$('version').value=out.version;
+   if(Number.isInteger(out.workspace_version))$('version').value=out.workspace_version;
+   if(Number.isInteger(out.head))$('head').value=out.head;
+   if(op==='publish'&&Number.isInteger(out.revision))$('head').value=out.revision;
+  }else if(r.status===409){if(Number.isInteger(out.head))$('head').value=out.head;if(Number.isInteger(out.version))$('version').value=out.version}
+ }catch(e){$('status').className='status error';$('status').textContent='请求结果待确认';$('response').textContent='请查询草稿或发布历史确认状态。发布请求可使用原 request_id 和相同请求体重试。'}
+ finally{clearTimeout(timer);button.disabled=false}
+});
+makeTemplate();
+</script>
+</body>
+</html>
