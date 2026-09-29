@@ -51,9 +51,21 @@ async fn stalled(query: bool, tls: bool) -> TestResult {
                     } else if query {
                         socket.write_all(b"R\0\0\0\x08\0\0\0\0Z\0\0\0\x05I")?;
                     }
-                    // The session must close the socket; a read timeout is failure.
+                    // Both orderly EOF and a TCP reset prove peer closure. Linux
+                    // may reset a socket closed with unread query/TLS bytes.
+                    // TimedOut/WouldBlock must still fail: they mean it stayed open.
                     let mut buffer = [0; 4096];
-                    while socket.read(&mut buffer)? != 0 {}
+                    loop {
+                        match socket.read(&mut buffer) {
+                            Ok(0) => break,
+                            Ok(_) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {
+                                break;
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
                     Ok(())
                 }));
             }
