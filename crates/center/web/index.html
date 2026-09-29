@@ -41,6 +41,7 @@ for(const [value,label] of Object.entries(operations)){const o=document.createEl
 function uuid(){if(crypto.randomUUID)return crypto.randomUUID();const a=crypto.getRandomValues(new Uint8Array(16));a[6]=(a[6]&15)|64;a[8]=(a[8]&63)|128;const h=Array.from(a,x=>x.toString(16).padStart(2,'0')).join('');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`}
 function makeTemplate(){
  const p=$('project').value.trim(),d=$('dataset').value.trim(),w=$('workspace').value.trim(),v=Number($('version').value),h=Number($('head').value);
+ if(!Number.isSafeInteger(v)||!Number.isSafeInteger(h))throw new Error('版本超出浏览器精确范围，请直接编辑请求文本');
  const op=$('operation').value;
  const feature={type:'Feature',id:'road-1',properties:{name:'示例道路',width:8},geometry:{type:'LineString',coordinates:[[120,30],[120.01,30.01]]}};
  const data={
@@ -61,23 +62,23 @@ function makeTemplate(){
 $('operation').addEventListener('change',makeTemplate);$('template').addEventListener('click',makeTemplate);
 $('send').addEventListener('click',async()=>{
  const token=$('token').value.trim();if(!token){$('status').textContent='请先输入个人令牌';return}
- let input;try{input=JSON.parse($('request').value)}catch(e){$('status').textContent='JSON 格式错误';return}
+ const input=$('request').value;try{JSON.parse(input)}catch(e){$('status').textContent='JSON 格式错误';return}
  const op=$('operation').value,button=$('send'),controller=new AbortController();
  button.disabled=true;$('status').className='status';$('status').textContent='执行中';
  const timer=setTimeout(()=>controller.abort(),45000);
  try{
-  const r=await fetch(`/api/center/${encodeURIComponent(op)}`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify(input),signal:controller.signal,cache:'no-store',credentials:'omit'});
+  const r=await fetch(`/api/center/${encodeURIComponent(op)}`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:input,signal:controller.signal,cache:'no-store',credentials:'omit'});
   const raw=await r.text();let out;try{out=JSON.parse(raw)}catch{out={message:raw}}
-  $('response').textContent=JSON.stringify(out,null,2);$('status').textContent=`HTTP ${r.status}`;$('status').className=r.ok?'status':'status error';
+  $('response').textContent=raw;$('status').textContent=`HTTP ${r.status}`;$('status').className=r.ok?'status':'status error';
   if(r.ok){
-   if(op==='create_project'){$('project').value=out.project;$('dataset').value='';$('workspace').value='';$('version').value='0';$('head').value=out.head}
+   if(op==='create_project'){$('project').value=out.project;$('dataset').value='';$('workspace').value='';$('version').value='0';if(Number.isSafeInteger(out.head))$('head').value=out.head}
    if(op==='create_dataset')$('dataset').value=out.dataset;
-   if(op==='create_workspace'||op==='restore'){$('workspace').value=out.workspace;$('version').value=out.version}
-   if(Number.isInteger(out.version))$('version').value=out.version;
-   if(Number.isInteger(out.workspace_version))$('version').value=out.workspace_version;
-   if(Number.isInteger(out.head))$('head').value=out.head;
-   if(op==='publish'&&Number.isInteger(out.revision))$('head').value=out.revision;
-  }else if(r.status===409){if(Number.isInteger(out.head))$('head').value=out.head;if(Number.isInteger(out.version))$('version').value=out.version}
+   if(op==='create_workspace'||op==='restore'){$('workspace').value=out.workspace;if(Number.isSafeInteger(out.version))$('version').value=out.version}
+   if(Number.isSafeInteger(out.version))$('version').value=out.version;
+   if(Number.isSafeInteger(out.workspace_version))$('version').value=out.workspace_version;
+   if(Number.isSafeInteger(out.head))$('head').value=out.head;
+   if(op==='publish'&&Number.isSafeInteger(out.revision))$('head').value=out.revision;
+  }else if(r.status===409){if(Number.isSafeInteger(out.head))$('head').value=out.head;if(Number.isSafeInteger(out.version))$('version').value=out.version}
  }catch(e){$('status').className='status error';$('status').textContent='请求结果待确认';$('response').textContent='请查询草稿或发布历史确认状态。发布请求可使用原 request_id 和相同请求体重试。'}
  finally{clearTimeout(timer);button.disabled=false}
 });

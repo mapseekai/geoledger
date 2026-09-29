@@ -46,6 +46,15 @@ fn run() -> Result<(), String> {
         std::env::var("GL_CENTER_DATABASE_URL")
             .map_err(|_| "GL_CENTER_DATABASE_URL is required")?,
     );
+    let app = if let Ok(value) = std::env::var("GL_CENTER_OPERATION_TIMEOUT_MS") {
+        let millis: u64 = value.parse().map_err(|_| "invalid operation timeout")?;
+        if !(1..=300_000).contains(&millis) {
+            return Err("operation timeout must be 1..=300000 milliseconds".into());
+        }
+        app.with_timeout(std::time::Duration::from_millis(millis))
+    } else {
+        app
+    };
     if command == "migrate" {
         return app.migrate().map_err(|e| e.to_string());
     }

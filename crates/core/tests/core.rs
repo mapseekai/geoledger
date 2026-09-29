@@ -227,3 +227,185 @@ fn object_digest_uses_current_geoledger_domain() {
         hasher.finalize().to_hex().as_str()
     );
 }
+
+#[test]
+fn persisted_json_errors_keep_source_and_storage_code() {
+    use std::error::Error as _;
+    let store = MemoryStore::default();
+    let id = store.put("record/v3", b"{").unwrap();
+    let error = load::<Record>(&store, "record/v3", &id).unwrap_err();
+    assert_eq!(error.code(), "storage_error");
+    assert!(error.source().unwrap().is::<serde_json::Error>());
+    let id = store.put("schema/v3", b"{").unwrap();
+    let error = schema::read(&store, &id).unwrap_err();
+    assert_eq!(error.code(), "storage_error");
+    assert!(error.source().unwrap().is::<serde_json::Error>());
+}
+
+#[test]
+fn merge_keeps_missing_distinct_from_null_and_conflicts_sorted() {
+    let base = row("0", "0");
+    let mut ours = base.clone();
+    ours.fields.remove("a");
+    let mut theirs = base.clone();
+    theirs.fields.insert("b".into(), Cell::Null);
+    let merged = merge_record(Some(&base), Some(&ours), Some(&theirs))
+        .unwrap()
+        .unwrap();
+    assert!(!merged.fields.contains_key("a"));
+    assert_eq!(merged.fields["b"], Cell::Null);
+    theirs.fields.insert("a".into(), Cell::Null);
+    ours.fields.insert("b".into(), Cell::Text("other".into()));
+    assert_eq!(
+        merge_record(Some(&base), Some(&ours), Some(&theirs)).unwrap_err(),
+        vec!["a", "b"]
+    );
+}
+
+#[test]
+fn streaming_merge_matches_convenience_and_stops_on_sink_error() {
+    let store = MemoryStore::default();
+    let schema = store.put("schema/v3", b"unused equal schema").unwrap();
+    let snapshot = |value: &str| {
+        let mut d = Dataset {
+            schema: schema.clone(),
+            root: None,
+            records: 0,
+        };
+        for key in ["a", "b", "c"] {
+            let mut r = row(value, "geometry payload");
+            r.key = key.into();
+            merge::update(&store, &mut d, key, Some(&r)).unwrap();
+        }
+        Snapshot::from([("data".into(), d)])
+    };
+    let (b, o, t) = (snapshot("base"), snapshot("ours"), snapshot("theirs"));
+    let expected = merge::three_way(&store, &b, &o, &t).unwrap();
+    let mut received = Vec::new();
+    let actual = merge::three_way_streaming(
+        &store,
+        &b,
+        &o,
+        &t,
+        &mut |_, _| Ok(BTreeMap::new()),
+        &mut |c| {
+            received.push(c);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(actual, expected.0);
+    assert_eq!(
+        serde_json::to_value(received).unwrap(),
+        serde_json::to_value(expected.1).unwrap()
+    );
+    let mut calls = 0;
+    assert!(
+        merge::three_way_streaming(
+            &store,
+            &b,
+            &o,
+            &t,
+            &mut |_, _| Ok(BTreeMap::new()),
+            &mut |_| {
+                calls += 1;
+                Err(Error::Storage("sink failed".into()))
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(calls, 1);
+}
+
+#[test]
+fn fsck_rejects_corrupt_references_order_and_keys_even_with_cached_subtrees() {
+    let store = MemoryStore::default();
+    let schema = schema::with_identities(Schema {
+        version: FORMAT_VERSION,
+        kind: DatasetKind::Table,
+        primary_key: "id".into(),
+        fields: vec![Field {
+            name: "id".into(),
+            logical_type: "text".into(),
+            codec: "text".into(),
+            nullable: false,
+            geometry: false,
+            metadata: BTreeMap::new(),
+        }],
+        metadata: BTreeMap::new(),
+    });
+    let schema_id = schema::store(&store, &schema).unwrap();
+    let value = |key: &str| {
+        save(
+            &store,
+            "record/v3",
+            &Record {
+                key: key.into(),
+                fields: BTreeMap::from([("id".into(), Cell::Text(key.into()))]),
+            },
+        )
+        .unwrap()
+    };
+    let node = |key: &str, value: &ObjectId, left: Option<&ObjectId>, right: Option<&ObjectId>| {
+        save(
+            &store,
+            "tree-node/v3",
+            &serde_json::json!({"key":key,"value":value,"left":left,"right":right}),
+        )
+        .unwrap()
+    };
+    let leaf = node("z", &value("z"), None, None);
+    let mut validator = tree::Validator::default();
+    let dataset = |root: ObjectId, records| Dataset {
+        schema: schema_id.clone(),
+        root: Some(root),
+        records,
+    };
+    validator
+        .dataset(&store, &dataset(leaf.clone(), 1))
+        .unwrap();
+    let wrong_order = node("a", &value("a"), Some(&leaf), None);
+    assert!(validator.dataset(&store, &dataset(wrong_order, 2)).is_err());
+    let wrong_key = node("wrong", &value("z"), None, None);
+    assert!(validator.dataset(&store, &dataset(wrong_key, 1)).is_err());
+    let missing = ObjectId::parse(&"0".repeat(64)).unwrap();
+    let bad_reference = node("a", &missing, None, None);
+    assert!(
+        validator
+            .dataset(&store, &dataset(bad_reference, 1))
+            .is_err()
+    );
+    // An adversarial store bypasses content hashes to exercise the cycle guard.
+    struct Cyclic {
+        schema: MemoryStore,
+        id: ObjectId,
+        bytes: Vec<u8>,
+    }
+    impl ObjectStore for Cyclic {
+        fn put(&self, _: &str, _: &[u8]) -> Result<ObjectId> {
+            unreachable!()
+        }
+        fn get(&self, id: &ObjectId, kind: &str) -> Result<Vec<u8>> {
+            if id == &self.id {
+                Ok(self.bytes.clone())
+            } else {
+                self.schema.get(id, kind)
+            }
+        }
+    }
+    let bytes = serde_json::to_vec(
+        &serde_json::json!({"key":"z","value":value("z"),"left":missing,"right":null}),
+    )
+    .unwrap();
+    let cycle_dataset = dataset(missing.clone(), 1);
+    let cyclic = Cyclic {
+        schema: store,
+        id: missing,
+        bytes,
+    };
+    assert!(
+        tree::Validator::default()
+            .dataset(&cyclic, &cycle_dataset)
+            .is_err()
+    );
+}

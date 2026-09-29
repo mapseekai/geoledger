@@ -75,7 +75,7 @@
 
 ## 中心版
 
-1. 创建项目后，创建者成为 owner。owner 可通过 `set_member` 设置 owner/editor/viewer；已授予的 owner 身份保留。
+1. 创建项目后，创建者成为 owner。owner 可通过 `set_member` 设置 owner/editor/viewer；项目始终保留至少一位 owner。
 2. owner/editor 创建集合与自己的工作区。工作区固定 `base_revision`，读取该修订的历史要素并覆盖自己的增量。
    其他人的发布只影响已发布视图；各人的工作区列表、详情、差异和编辑受成员身份及所有权检查。
 3. 使用 `save` 一次提交最多 100 个完整 Feature 或删除标记；请求提供 `expected_workspace_version`。

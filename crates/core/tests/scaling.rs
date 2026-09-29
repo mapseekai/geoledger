@@ -1,11 +1,15 @@
 #![allow(clippy::unwrap_used)]
 use geoledger_core::{graph, object::MemoryStore, tree, *};
-use std::{cell::Cell as Counter, collections::BTreeMap};
+use std::{
+    cell::{Cell as Counter, RefCell},
+    collections::BTreeMap,
+};
 
 #[derive(Default)]
 struct Counting {
     inner: MemoryStore,
     reads: Counter<usize>,
+    visits: RefCell<BTreeMap<(ObjectId, String), usize>>,
 }
 impl ObjectStore for Counting {
     fn put(&self, kind: &str, bytes: &[u8]) -> Result<ObjectId> {
@@ -13,6 +17,11 @@ impl ObjectStore for Counting {
     }
     fn get(&self, id: &ObjectId, kind: &str) -> Result<Vec<u8>> {
         self.reads.set(self.reads.get() + 1);
+        *self
+            .visits
+            .borrow_mut()
+            .entry((id.clone(), kind.into()))
+            .or_default() += 1;
         self.inner.get(id, kind)
     }
 }
@@ -147,4 +156,85 @@ fn backend_errors_keep_the_original_source_and_category() {
             .downcast_ref::<std::io::Error>()
             .is_some()
     );
+}
+
+#[test]
+fn fsck_caches_shared_structure_and_records_per_schema() {
+    let s = Counting::default();
+    let schema = Schema {
+        version: FORMAT_VERSION,
+        kind: DatasetKind::Table,
+        primary_key: "id".into(),
+        fields: vec![Field {
+            name: "id".into(),
+            logical_type: "text".into(),
+            codec: "text".into(),
+            nullable: false,
+            geometry: false,
+            metadata: BTreeMap::new(),
+        }],
+        metadata: BTreeMap::new(),
+    };
+    let schema = schema::with_identities(schema);
+    let schema_id = schema::store(&s, &schema).unwrap();
+    let mut builder = tree::BulkBuilder::default();
+    for i in 0..1000 {
+        let key = format!("{i:06}");
+        let row = Record {
+            key: key.clone(),
+            fields: BTreeMap::from([("id".into(), Cell::Text(key.clone()))]),
+        };
+        builder
+            .push(&s, key, save(&s, "record/v3", &row).unwrap())
+            .unwrap();
+    }
+    let mut dataset = Dataset {
+        schema: schema_id,
+        root: builder.finish(&s).unwrap(),
+        records: 1000,
+    };
+    let mut versions = vec![dataset.clone()];
+    for i in 1000..1100 {
+        let key = format!("{i:06}");
+        merge::update(
+            &s,
+            &mut dataset,
+            &key,
+            Some(&Record {
+                key: key.clone(),
+                fields: BTreeMap::from([("id".into(), Cell::Text(key.clone()))]),
+            }),
+        )
+        .unwrap();
+        versions.push(dataset.clone());
+    }
+    s.reads.set(0);
+    s.visits.borrow_mut().clear();
+    let mut validator = tree::Validator::default();
+    for d in &versions {
+        validator.dataset(&s, d).unwrap();
+    }
+    assert!(
+        s.reads.get() < 6000,
+        "{} reads for shared history",
+        s.reads.get()
+    );
+    for ((_, kind), visits) in s.visits.borrow().iter() {
+        if kind == "record/v3" || kind == "tree-node/v3" {
+            assert_eq!(
+                *visits, 1,
+                "each reachable structure and record is validated once"
+            );
+        }
+    }
+    let reads = s.reads.get();
+    validator.dataset(&s, &dataset).unwrap();
+    assert_eq!(s.reads.get(), reads + 1); // Only schema reload, no rows/subtrees.
+    let mut invalid_schema = schema.clone();
+    invalid_schema.fields[0].geometry = true;
+    dataset.schema = schema::store(&s, &invalid_schema).unwrap();
+    assert!(validator.dataset(&s, &dataset).is_err());
+    dataset = versions[0].clone();
+    dataset.records += 1;
+    assert!(validator.dataset(&s, &dataset).is_err());
 }

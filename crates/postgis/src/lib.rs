@@ -94,21 +94,60 @@ fn key_field(schema: &Schema) -> Result<&Field> {
         .find(|f| f.name == schema.primary_key)
         .ok_or_else(|| Error::Invalid("primary-key field is missing".into()))
 }
+fn field_projection(field: &Field) -> Result<String> {
+    let column = format!("r.{}", ident(&field.name)?);
+    Ok(if field.geometry {
+        format!("encode(ST_AsEWKB({column}, 'XDR'), 'hex')")
+    } else {
+        format!("{column}::text")
+    })
+}
 fn projection(schema: &Schema) -> Result<String> {
     schema
         .fields
         .iter()
-        .map(|f| {
-            let column = format!("r.{}", ident(&f.name)?);
-            Ok(if f.geometry {
-                format!("encode(ST_AsEWKB({column}, 'XDR'), 'hex')")
-            } else {
-                format!("{column}::text")
-            })
-        })
+        .map(field_projection)
         .collect::<Result<Vec<_>>>()
         .map(|v| v.join(","))
 }
+// Materialize only keys and sizes, never all suffix record payloads. The final
+// join projects just the prefix that can cross the application's byte budget.
+fn bounded_read_query(binding: &Binding) -> Result<String> {
+    let schema = &binding.schema;
+    let sizes = schema
+        .fields
+        .iter()
+        .map(|f| {
+            Ok(format!(
+                "coalesce(octet_length({})::bigint,0)",
+                field_projection(f)?
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .join("+");
+    let names: usize = schema.fields.iter().map(|f| f.name.len()).sum();
+    let projection = projection(schema)?;
+    let table = table(&binding.schema_name, &binding.table_name)?;
+    let pk = ident(&schema.primary_key)?;
+    let native = native(key_field(schema)?)?;
+    Ok(format!(
+        "WITH sized AS MATERIALIZED (
+           SELECT requested.key,requested.ordinal,
+             octet_length(requested.key)::bigint + CASE WHEN r.{pk} IS NULL THEN 0 ELSE
+             octet_length(r.{pk}::text)::bigint + {names} + {sizes} END AS bytes
+           FROM unnest($1::text[]) WITH ORDINALITY AS requested(key,ordinal)
+           LEFT JOIN {table} r ON r.{pk} = requested.key::{native}
+         ), bounded AS (
+           SELECT key,ordinal,coalesce(sum(bytes) OVER
+             (ORDER BY ordinal ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) AS prior_bytes FROM sized
+         )
+         SELECT {projection} FROM bounded requested
+         LEFT JOIN {table} r ON r.{pk} = requested.key::{native}
+         WHERE requested.ordinal=1 OR requested.prior_bytes < $2::bigint
+         ORDER BY requested.ordinal"
+    ))
+}
+
 fn decode(schema: &Schema, row: &Row) -> Result<Record> {
     let mut fields = BTreeMap::new();
     let mut key = None;
@@ -612,29 +651,20 @@ impl WorkingCopyTransaction for PostgisTransaction {
             .iter()
             .position(|f| f.name == schema.primary_key)
             .ok_or_else(|| Error::Invalid("primary-key field is missing".into()))?;
-        let query = format!(
-            "SELECT {} FROM unnest($1::text[]) WITH ORDINALITY AS requested(key,ordinal) LEFT JOIN {} r ON r.{} = requested.key::{} ORDER BY requested.ordinal",
-            projection(schema)?,
-            table(&binding.schema_name, &binding.table_name)?,
-            ident(&schema.primary_key)?,
-            native(key_field(schema)?)?
-        );
-        let params: [&(dyn ToSql + Sync); 1] = [&keys];
+        let query = bounded_read_query(binding)?;
+        let budget = i64::try_from(byte_limit).unwrap_or(i64::MAX);
+        let params: [&(dyn ToSql + Sync); 2] = [&keys, &budget];
         let mut rows = self.client.query_raw(&query, params).map_err(pg_error)?;
         let mut batch = Vec::new();
-        let mut bytes = 0;
-        for key in keys {
-            let row = rows
-                .next()
-                .map_err(pg_error)?
+        // The SQL boundary returns only the prefix, including its final
+        // budget-crossing row. Always drain it; no suffix payload is discarded.
+        while let Some(row) = rows.next().map_err(pg_error)? {
+            let key = keys
+                .get(batch.len())
                 .ok_or_else(|| Error::Database("bounded read row count mismatch".into()))?;
             let pk: Option<String> = row.try_get(pk_index).map_err(pg_error)?;
             let record = pk.map(|_| decode(schema, &row)).transpose()?;
-            bytes += key.len() + record.as_ref().map_or(0, Record::payload_bytes);
             batch.push((key.clone(), record));
-            if bytes >= byte_limit {
-                break;
-            }
         }
         Ok(batch)
     }
@@ -827,5 +857,93 @@ mod tests {
             Some("\"roads\"\"; DROP TABLE x;--\"".into())
         );
         assert!(ident("a\0b").is_err());
+    }
+    #[test]
+    #[ignore = "requires disposable GL_TEST_DATABASE_URL"]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn bounded_read_returns_each_megabyte_payload_once() {
+        let dsn = std::env::var("GL_TEST_DATABASE_URL").expect("set disposable test database URL");
+        let config = Config::from_str(&dsn).unwrap();
+        assert_eq!(
+            config.get_dbname(),
+            Some("geoledger_test"),
+            "refusing a non-test database before connect"
+        );
+        let mut client = config.connect(postgres::NoTls).unwrap();
+        assert_eq!(
+            client
+                .query_one("SELECT current_database()", &[])
+                .unwrap()
+                .get::<_, String>(0),
+            "geoledger_test"
+        );
+        let test_schema = format!(
+            "gl_bounded_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        client.batch_execute(&format!("BEGIN; CREATE SCHEMA {test_schema}; SET LOCAL search_path={test_schema},public; CREATE TABLE bounded_rows(id bigint PRIMARY KEY, payload text); INSERT INTO bounded_rows SELECT i,repeat('x',1048576) FROM generate_series(1,100) AS i;")).unwrap();
+        let mut tx = PostgisTransaction {
+            client,
+            repository_id: "bounded-test".into(),
+            active: true,
+        };
+        let schema = tx.inspect(&test_schema, "bounded_rows").unwrap();
+        let binding = Binding {
+            provider: "postgis".into(),
+            schema_name: test_schema,
+            table_name: "bounded_rows".into(),
+            schema,
+            column_ids: BTreeMap::new(),
+        };
+        let query = bounded_read_query(&binding).unwrap();
+        let keys: Vec<_> = (1..=100).map(|i| i.to_string()).collect();
+        let mut offset = 0;
+        let mut returned_rows = 0;
+        let mut queries = 0;
+        while offset < keys.len() {
+            let suffix = &keys[offset..];
+            // Observe the real SQL result boundary, independently of Rust's
+            // batch loop: the former implementation returned the whole suffix.
+            let rows = tx
+                .client
+                .query(&query, &[&suffix, &(8 * 1024 * 1024i64)])
+                .unwrap();
+            returned_rows += rows.len();
+            queries += 1;
+            let batch = tx
+                .read_many_bounded(&binding, suffix, 8 * 1024 * 1024)
+                .unwrap();
+            assert_eq!(rows.len(), batch.len());
+            assert!(batch.len() <= 8 && !batch.is_empty());
+            for (key, record) in &batch {
+                let record = record.as_ref().unwrap();
+                assert_eq!(key, &record.key);
+                assert_eq!(record.fields["payload"], Cell::Text("x".repeat(1048576)));
+            }
+            offset += batch.len();
+        }
+        assert_eq!(returned_rows, 100);
+        assert_eq!(queries, 13);
+        tx.client.batch_execute("DELETE FROM bounded_rows WHERE id=2; UPDATE bounded_rows SET payload=NULL WHERE id=3").unwrap();
+        let keys = vec!["3".into(), "2".into(), "1".into(), "3".into()];
+        let batch = tx
+            .read_many_bounded(&binding, &keys, 8 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(
+            batch.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+            keys.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(batch[0].1.as_ref().unwrap().fields["payload"], Cell::Null);
+        assert!(batch[1].1.is_none());
+        assert_eq!(tx.read_many_bounded(&binding, &keys, 0).unwrap().len(), 1);
+        assert_eq!(
+            tx.read_many_bounded(&binding, &["1".into(), "1".into()], 1)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

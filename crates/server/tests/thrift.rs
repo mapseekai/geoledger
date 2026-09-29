@@ -58,6 +58,66 @@ async fn thrift_roundtrip_auth_errors_and_shared_application() {
         .rpc_timeout(Some(Duration::from_secs(10)))
         .build();
     let auth = Some("Bearer thrift-token-long-enough-for-tests".into());
+    // Exercise real TCP ingress before any authenticated call. A malformed
+    // frame must never turn into the service's typed unauthenticated exception.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    fn frame(payload: &[u8]) -> Vec<u8> {
+        let mut bytes = (payload.len() as i32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+    let mut base = vec![0x80, 1, 0, 1, 0, 0, 0, 6];
+    base.extend_from_slice(b"status");
+    base.extend_from_slice(&1_i32.to_be_bytes());
+    let mut invalid_auth = base.clone();
+    invalid_auth.extend_from_slice(&[11, 0, 2, 0, 0, 0, 1, 0xff, 0]);
+    let mut invalid_method = base.clone();
+    invalid_method[8] = 0xff;
+    invalid_method.push(0);
+    let mut malformed = vec![
+        base.clone(),
+        frame(&invalid_auth),
+        frame(&invalid_method),
+        i32::MAX.to_be_bytes().to_vec(),
+        (-1_i32).to_be_bytes().to_vec(),
+    ];
+    for size in [-1_i32, i32::MAX, 100] {
+        let mut string = base.clone();
+        string.extend_from_slice(&[11, 0, 99]);
+        string.extend_from_slice(&size.to_be_bytes());
+        malformed.push(frame(&string));
+        let mut list = base.clone();
+        list.extend_from_slice(&[15, 0, 99, 11]);
+        list.extend_from_slice(&size.to_be_bytes());
+        malformed.push(frame(&list));
+    }
+    let mut deep = base;
+    deep.extend([12, 0, 99].repeat(64));
+    deep.extend([0; 65]);
+    malformed.push(frame(&deep));
+    for bytes in malformed {
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        stream.write_all(&bytes).await.unwrap();
+        stream.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        let read = tokio::time::timeout(
+            Duration::from_secs(3),
+            stream.take(4096).read_to_end(&mut response),
+        )
+        .await
+        .unwrap();
+        // Closing/resetting the socket or a protocol exception are acceptable;
+        // reaching Rpc::run and returning its auth exception is not.
+        if let Err(error) = read {
+            assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+        }
+        assert!(
+            !response
+                .windows(b"unauthenticated".len())
+                .any(|part| part == b"unauthenticated")
+        );
+        assert!(!directory.path().join(".geoledger").exists());
+    }
     let unauthorized = client
         .status(StatusRequest { limit: 1 }, None)
         .await

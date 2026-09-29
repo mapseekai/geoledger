@@ -163,7 +163,7 @@ pub fn merge_record(
         .chain(ours.fields.keys())
         .chain(theirs.fields.keys())
         .collect();
-    let mut fields = ours.fields.clone();
+    let mut selected_fields = Vec::new();
     let mut conflicts = Vec::new();
     for k in keys {
         let (b, o, t) = (base.fields.get(k), ours.fields.get(k), theirs.fields.get(k));
@@ -175,19 +175,17 @@ pub fn merge_record(
             conflicts.push(k.clone());
             continue;
         };
-        match selected {
-            Some(v) => {
-                fields.insert(k.clone(), v.clone());
-            }
-            None => {
-                fields.remove(k);
-            }
+        if let Some(value) = selected {
+            selected_fields.push((k, value));
         }
     }
     if conflicts.is_empty() {
         Ok(Some(Record {
             key: ours.key.clone(),
-            fields,
+            fields: selected_fields
+                .into_iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         }))
     } else {
         Err(conflicts)
@@ -219,13 +217,29 @@ pub fn three_way_with_defaults(
     theirs: &Snapshot,
     defaults: &mut ProjectionDefaults<'_>,
 ) -> Result<(Snapshot, Vec<Conflict>)> {
+    let mut conflicts = Vec::new();
+    let snapshot = three_way_streaming(store, base, ours, theirs, defaults, &mut |c| {
+        conflicts.push(c);
+        Ok(())
+    })?;
+    Ok((snapshot, conflicts))
+}
+
+/// Deliver conflicts in dataset/key order without retaining their record payloads.
+pub fn three_way_streaming(
+    store: &dyn ObjectStore,
+    base: &Snapshot,
+    ours: &Snapshot,
+    theirs: &Snapshot,
+    defaults: &mut ProjectionDefaults<'_>,
+    sink: &mut dyn FnMut(Conflict) -> Result<()>,
+) -> Result<Snapshot> {
     let names: BTreeSet<_> = base
         .keys()
         .chain(ours.keys())
         .chain(theirs.keys())
         .collect();
     let mut result = ours.clone();
-    let mut conflicts = Vec::new();
     for name in names {
         let (b, o, t) = (base.get(name), ours.get(name), theirs.get(name));
         if o == t || t == b {
@@ -314,14 +328,14 @@ pub fn three_way_with_defaults(
                 let tr = tr.as_ref().map(|r| tp.apply(r));
                 match merge_record(br.as_ref(), or.as_ref(), tr.as_ref()) {
                     Ok(value) => update(store, &mut merged, &key, value.as_ref())?,
-                    Err(fields) => conflicts.push(Conflict {
+                    Err(fields) => sink(Conflict {
                         dataset: name.clone(),
                         key,
                         base: br,
                         ours: or,
                         theirs: tr,
                         fields,
-                    }),
+                    })?,
                 }
             }
             result.insert(name.clone(), merged);
@@ -360,17 +374,17 @@ pub fn three_way_with_defaults(
             );
             match merge_record(base.as_ref(), ours.as_ref(), theirs.as_ref()) {
                 Ok(value) => update(store, &mut merged, &key, value.as_ref())?,
-                Err(fields) => conflicts.push(Conflict {
+                Err(fields) => sink(Conflict {
                     dataset: name.clone(),
                     key,
                     base,
                     ours,
                     theirs,
                     fields,
-                }),
+                })?,
             }
         }
         result.insert(name.clone(), merged);
     }
-    Ok((result, conflicts))
+    Ok(result)
 }

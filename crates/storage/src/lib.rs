@@ -2,7 +2,7 @@
 //! SQLite transactions; the application journals the separate PostGIS commit.
 use fs2::FileExt;
 use geoledger_core::{
-    Error, FORMAT_VERSION, ObjectId, ObjectStore, PendingOperation, RepositoryState, Result,
+    Error, ObjectId, ObjectStore, PendingOperation, RepositoryState, Result, STATE_VERSION,
     object::digest, schema,
 };
 use rusqlite::{Connection, OptionalExtension, params};
@@ -14,12 +14,19 @@ use std::{
     time::Duration,
 };
 
+const STORAGE_VERSION: u32 = 4;
+const CONFLICT_TABLE: &str = "CREATE TABLE conflicts(dataset TEXT NOT NULL, key TEXT NOT NULL, refs TEXT NOT NULL, PRIMARY KEY(dataset,key)) WITHOUT ROWID;
+CREATE TABLE conflict_stats(singleton INTEGER PRIMARY KEY CHECK(singleton=1), count INTEGER NOT NULL CHECK(count>=0));
+INSERT INTO conflict_stats VALUES(1,0);
+CREATE TRIGGER conflict_insert AFTER INSERT ON conflicts BEGIN UPDATE conflict_stats SET count=count+1 WHERE singleton=1; END;
+CREATE TRIGGER conflict_delete AFTER DELETE ON conflicts BEGIN UPDATE conflict_stats SET count=count-1 WHERE singleton=1; END;";
+
 const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
 const APPLICATION_ID: i64 = 0x474c4433; // ASCII GLD3.
 const REPOSITORY_DIRECTORY: &str = ".geoledger";
 
 fn validate_state(state: &RepositoryState) -> Result<()> {
-    if state.version != FORMAT_VERSION {
+    if state.version != STATE_VERSION {
         return Err(Error::Unsupported(
             "GeoLedger repository state format".into(),
         ));
@@ -60,12 +67,15 @@ impl Repository {
         }
         let repo = Self::connect(directory, true)?;
         repo.connection.execute_batch(&format!(
-            "PRAGMA application_id={APPLICATION_ID}; PRAGMA user_version={FORMAT_VERSION};
+            "PRAGMA application_id={APPLICATION_ID}; PRAGMA user_version={STORAGE_VERSION};
              CREATE TABLE objects(id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload BLOB NOT NULL) WITHOUT ROWID;
              CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
              CREATE TABLE reflog(sequence INTEGER PRIMARY KEY AUTOINCREMENT, branch TEXT NOT NULL,
                  old_head TEXT, new_head TEXT NOT NULL, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"
         )).map_err(db_error)?;
+        repo.connection
+            .execute_batch(CONFLICT_TABLE)
+            .map_err(db_error)?;
         Ok(repo)
     }
     pub fn open(root: &Path) -> Result<Self> {
@@ -82,10 +92,53 @@ impl Repository {
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if app != APPLICATION_ID || version != i64::from(FORMAT_VERSION) {
+        if app != APPLICATION_ID || ![3, i64::from(STORAGE_VERSION)].contains(&version) {
             return Err(Error::Unsupported("repository storage format".into()));
         }
+        if version == 3 {
+            repo.migrate_conflicts()?;
+        }
         Ok(repo)
+    }
+    fn migrate_conflicts(&self) -> Result<()> {
+        self.begin()?;
+        let result = (|| {
+            self.connection
+                .execute_batch(CONFLICT_TABLE)
+                .map_err(db_error)?;
+            // A pending cross-database journal must be recovered by its original
+            // reader before migration; never reinterpret an in-flight operation.
+            if self.read_meta::<PendingOperation>("pending")?.is_some() {
+                return Err(Error::Recovery(
+                    "recover pending operation with storage v3 before upgrade".into(),
+                ));
+            }
+            let mut state: RepositoryState = self
+                .read_meta("state")?
+                .ok_or_else(|| Error::Storage("missing repository state".into()))?;
+            if state.version != 3 {
+                return Err(Error::Unsupported(
+                    "v3 repository state required for migration".into(),
+                ));
+            }
+            state.version = STATE_VERSION;
+            validate_state(&state)?;
+            if let Some(merge) = &mut state.merging {
+                for conflict in std::mem::take(&mut merge.conflicts) {
+                    self.insert_conflict(&conflict)?;
+                }
+            }
+            self.write_meta("conflict_owner", &conflict_owner(&state))?;
+            self.write_meta("state", &state)?;
+            self.connection
+                .execute_batch("PRAGMA user_version=4")
+                .map_err(db_error)?;
+            self.commit()
+        })();
+        if result.is_err() {
+            self.rollback()?;
+        }
+        result
     }
     fn connect(directory: PathBuf, create: bool) -> Result<Self> {
         let mut options = OpenOptions::new();
@@ -200,7 +253,12 @@ impl Repository {
             })
             .optional()
             .map_err(db_error)?;
-        value.map(|v| Ok(serde_json::from_str(&v)?)).transpose()
+        value
+            .map(|v| {
+                serde_json::from_str(&v)
+                    .map_err(|e| Error::storage_source(format!("decode metadata {key}"), e))
+            })
+            .transpose()
     }
     fn write_meta<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
         self.connection.execute("INSERT INTO metadata(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -212,10 +270,40 @@ impl Repository {
             .read_meta("state")?
             .ok_or_else(|| Error::Storage("missing repository state".into()))?;
         validate_state(&state)?;
+        if state
+            .merging
+            .as_ref()
+            .is_some_and(|m| !m.conflicts.is_empty())
+        {
+            return Err(Error::Storage("inline conflicts in storage v4".into()));
+        }
+        let owner: Option<Option<(ObjectId, ObjectId, ObjectId)>> =
+            self.read_meta("conflict_owner")?;
+        if owner.flatten() != conflict_owner(&state)
+            || (self.conflict_count()? != 0 && state.merging.is_none())
+        {
+            return Err(Error::Storage(
+                "conflict index/merge identity mismatch".into(),
+            ));
+        }
         Ok(state)
     }
     pub fn save_state(&self, state: &RepositoryState) -> Result<()> {
         validate_state(state)?;
+        if state
+            .merging
+            .as_ref()
+            .is_some_and(|m| !m.conflicts.is_empty())
+        {
+            return Err(Error::Storage(
+                "storage v4 requires indexed conflicts".into(),
+            ));
+        }
+        if state.merging.is_none() {
+            self.connection
+                .execute("DELETE FROM conflicts", [])
+                .map_err(db_error)?;
+        }
         let previous: Option<RepositoryState> = self.read_meta("state")?;
         let old_head = previous.as_ref().map(|s| s.head().cloned()).transpose()?;
         let new_head = state.head()?;
@@ -233,6 +321,7 @@ impl Repository {
                 )
                 .map_err(db_error)?;
         }
+        self.write_meta("conflict_owner", &conflict_owner(state))?;
         self.write_meta("state", state)
     }
     pub fn pending(&self) -> Result<Option<PendingOperation>> {
@@ -255,6 +344,152 @@ impl Repository {
             .map_err(db_error)?;
         Ok(())
     }
+    pub fn insert_conflict(&self, conflict: &geoledger_core::Conflict) -> Result<()> {
+        if self.connection.is_autocommit() {
+            return Err(Error::Storage("conflicts require a transaction".into()));
+        }
+        if [&conflict.base, &conflict.ours, &conflict.theirs]
+            .into_iter()
+            .flatten()
+            .any(|r| r.key != conflict.key)
+        {
+            return Err(Error::Storage("conflict record key mismatch".into()));
+        }
+        let refs = ConflictRefs {
+            base: conflict
+                .base
+                .as_ref()
+                .map(|r| geoledger_core::save(self, "record/v3", r))
+                .transpose()?,
+            ours: conflict
+                .ours
+                .as_ref()
+                .map(|r| geoledger_core::save(self, "record/v3", r))
+                .transpose()?,
+            theirs: conflict
+                .theirs
+                .as_ref()
+                .map(|r| geoledger_core::save(self, "record/v3", r))
+                .transpose()?,
+            fields: conflict.fields.clone(),
+        };
+        self.connection
+            .execute(
+                "INSERT INTO conflicts(dataset,key,refs) VALUES(?1,?2,?3)",
+                params![
+                    conflict.dataset,
+                    conflict.key,
+                    serde_json::to_string(&refs)?
+                ],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+    pub fn conflict_count(&self) -> Result<usize> {
+        self.connection
+            .query_row(
+                "SELECT count FROM conflict_stats WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db_error)
+    }
+    fn decode_conflict(
+        &self,
+        dataset: String,
+        key: String,
+        refs: String,
+    ) -> Result<geoledger_core::Conflict> {
+        let refs: ConflictRefs = serde_json::from_str(&refs)
+            .map_err(|e| Error::storage_source("decode conflict references", e))?;
+        let read = |id: Option<ObjectId>| -> Result<Option<geoledger_core::Record>> {
+            let record: Option<geoledger_core::Record> = id
+                .as_ref()
+                .map(|id| geoledger_core::load(self, "record/v3", id))
+                .transpose()?;
+            if record.as_ref().is_some_and(|r| r.key != key) {
+                return Err(Error::Storage("conflict record key mismatch".into()));
+            }
+            Ok(record)
+        };
+        let (base, ours, theirs) = (read(refs.base)?, read(refs.ours)?, read(refs.theirs)?);
+        Ok(geoledger_core::Conflict {
+            dataset,
+            key,
+            base,
+            ours,
+            theirs,
+            fields: refs.fields,
+        })
+    }
+    pub fn conflict(&self, dataset: &str, key: &str) -> Result<geoledger_core::Conflict> {
+        let refs: String = self
+            .connection
+            .query_row(
+                "SELECT refs FROM conflicts WHERE dataset=?1 AND key=?2",
+                params![dataset, key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| Error::NotFound("unresolved conflict".into()))?;
+        self.decode_conflict(dataset.into(), key.into(), refs)
+    }
+    pub fn conflicts_page(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<geoledger_core::Conflict>> {
+        let mut query = self
+            .connection
+            .prepare(
+                "SELECT dataset,key,refs FROM conflicts ORDER BY dataset,key LIMIT ?1 OFFSET ?2",
+            )
+            .map_err(db_error)?;
+        let mut rows = query
+            .query(params![
+                limit.clamp(1, 1000) as i64,
+                i64::try_from(offset).unwrap_or(i64::MAX)
+            ])
+            .map_err(db_error)?;
+        let mut result = Vec::new();
+        let mut bytes = 0usize;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            let conflict = self.decode_conflict(
+                row.get(0).map_err(db_error)?,
+                row.get(1).map_err(db_error)?,
+                row.get(2).map_err(db_error)?,
+            )?;
+            for record in [&conflict.base, &conflict.ours, &conflict.theirs]
+                .into_iter()
+                .flatten()
+            {
+                bytes = bytes.saturating_add(record.payload_bytes());
+            }
+            result.push(conflict);
+            if bytes >= 8 * 1024 * 1024 {
+                break;
+            }
+        }
+        Ok(result)
+    }
+    pub fn remove_conflict(&self, dataset: &str, key: &str) -> Result<()> {
+        if self.connection.is_autocommit() {
+            return Err(Error::Storage("resolution requires a transaction".into()));
+        }
+        if self
+            .connection
+            .execute(
+                "DELETE FROM conflicts WHERE dataset=?1 AND key=?2",
+                params![dataset, key],
+            )
+            .map_err(db_error)?
+            != 1
+        {
+            return Err(Error::NotFound("unresolved conflict".into()));
+        }
+        Ok(())
+    }
     pub fn reflog(&self, limit: usize) -> Result<Vec<serde_json::Value>> {
         let mut query = self.connection.prepare("SELECT sequence,branch,old_head,new_head,recorded_at FROM reflog ORDER BY sequence DESC LIMIT ?1").map_err(db_error)?;
         let rows = query.query_map([limit.min(1000) as i64], |r| Ok(serde_json::json!({
@@ -270,6 +505,25 @@ impl Repository {
             .map_err(db_error)?;
         if check != "ok" {
             return Err(Error::Storage(format!("SQLite integrity check: {check}")));
+        }
+        let actual_conflicts: usize = self
+            .connection
+            .query_row("SELECT count(*) FROM conflicts", [], |r| r.get(0))
+            .map_err(db_error)?;
+        if actual_conflicts != self.conflict_count()? {
+            return Err(Error::Storage("conflict count mismatch".into()));
+        }
+        let mut conflicts = self
+            .connection
+            .prepare("SELECT dataset,key,refs FROM conflicts ORDER BY dataset,key")
+            .map_err(db_error)?;
+        let mut rows = conflicts.query([]).map_err(db_error)?;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            self.decode_conflict(
+                row.get(0).map_err(db_error)?,
+                row.get(1).map_err(db_error)?,
+                row.get(2).map_err(db_error)?,
+            )?;
         }
         let mut query = self
             .connection
@@ -355,4 +609,19 @@ impl Drop for Repository {
     fn drop(&mut self) {
         let _ = self.rollback();
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ConflictRefs {
+    base: Option<ObjectId>,
+    ours: Option<ObjectId>,
+    theirs: Option<ObjectId>,
+    fields: Vec<String>,
+}
+
+fn conflict_owner(state: &RepositoryState) -> Option<(ObjectId, ObjectId, ObjectId)> {
+    state
+        .merging
+        .as_ref()
+        .map(|m| (m.base.clone(), m.ours.clone(), m.theirs.clone()))
 }

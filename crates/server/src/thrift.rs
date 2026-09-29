@@ -1,5 +1,5 @@
 //! Volo Thrift control plane. All operations enter the shared Application service.
-use crate::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, Service, public_message, thrift_proto::*};
+use crate::{MAX_REQUEST_BYTES, Service, public_message, thrift_proto::*};
 use geoledger::{Application, Command};
 use geoledger_core::{Error, Result};
 use pilota::FastStr;
@@ -265,15 +265,7 @@ pub async fn serve(
 
 /// Also accepts custom incoming streams, allowing orderly shutdown in embedding/tests.
 pub async fn run(service: Service, incoming: impl volo::net::incoming::MakeIncoming) -> Result<()> {
-    use volo_thrift::codec::default::{
-        DefaultMakeCodec, framed::MakeFramedCodec, thrift::MakeThriftCodec,
-    };
-    // Framed binary is usable by Volo and standard Apache Thrift clients. The
-    // frame bound includes response JSON and protocol overhead.
-    let codec = DefaultMakeCodec::new(
-        MakeFramedCodec::new(MakeThriftCodec::default())
-            .with_max_frame_size((MAX_RESPONSE_BYTES + 64 * 1024) as i32),
-    );
+    let codec = crate::thrift_codec::StrictCodec::default();
     GeoLedgerServer::new(Rpc::new(service))
         .make_codec(codec)
         .run(incoming)

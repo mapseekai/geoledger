@@ -2,6 +2,10 @@ use crate::{MAX_REQUEST_BYTES, Service, public_message};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Query, Request, State},
+    extract::{
+        FromRequest, FromRequestParts,
+        rejection::{JsonRejection, QueryRejection},
+    },
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -9,7 +13,11 @@ use axum::{
 };
 use geoledger::Command;
 use geoledger_core::Error;
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+tokio::task_local! { static REQUEST_ID: String; }
+static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
 use serde_json::json;
 
 pub fn router(service: Service) -> Router {
@@ -29,6 +37,7 @@ pub fn router(service: Service) -> Router {
         .route("/v1/merges", post(merge))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(service.clone(), authorize))
+        .layer(middleware::from_fn(correlate))
         .with_state(service)
 }
 async fn authorize(State(service): State<Service>, request: Request, next: Next) -> Response {
@@ -38,23 +47,73 @@ async fn authorize(State(service): State<Service>, request: Request, next: Next)
             .get("authorization")
             .and_then(|v| v.to_str().ok()),
     ) {
-        return (
+        return envelope(
             StatusCode::UNAUTHORIZED,
-            Json(json!({"error":{"code":"unauthenticated","message":"Bearer token required"}})),
-        )
-            .into_response();
+            "unauthenticated",
+            "Bearer token required",
+        );
     }
     next.run(request).await
 }
-pub struct ApiError(Error);
+async fn correlate(request: Request, next: Next) -> Response {
+    // Generate locally: never reflect attacker-controlled IDs into logs/headers.
+    let id = format!(
+        "local-{}-{}",
+        std::process::id(),
+        NEXT_REQUEST.fetch_add(1, Ordering::Relaxed)
+    );
+    REQUEST_ID
+        .scope(id.clone(), async move {
+            let mut response = next.run(request).await;
+            if let Ok(value) = id.parse() {
+                response.headers_mut().insert("x-request-id", value);
+            }
+            response
+        })
+        .await
+}
+pub(crate) fn request_id() -> Option<String> {
+    REQUEST_ID.try_with(Clone::clone).ok()
+}
+fn envelope(status: StatusCode, code: &str, message: &str) -> Response {
+    let request_id = REQUEST_ID
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| "unscoped".into());
+    (
+        status,
+        Json(json!({"error":{"code":code,"message":message,"request_id":request_id}})),
+    )
+        .into_response()
+}
+pub enum ApiError {
+    Application(Error),
+    Extraction(StatusCode),
+}
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
-        Self(e)
+        Self::Application(e)
     }
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match &self.0 {
+        let error = match self {
+            Self::Application(error) => error,
+            Self::Extraction(status) => {
+                let (code, message) = match status {
+                    StatusCode::PAYLOAD_TOO_LARGE => ("payload_too_large", "request exceeds 4 MiB"),
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE => (
+                        "unsupported_media_type",
+                        "application/json content type required",
+                    ),
+                    StatusCode::UNPROCESSABLE_ENTITY => {
+                        ("invalid_argument", "JSON does not match the request schema")
+                    }
+                    _ => ("invalid_argument", "malformed request"),
+                };
+                return envelope(status, code, message);
+            }
+        };
+        let status = match &error {
             Error::Invalid(_) | Error::Json(_) => StatusCode::BAD_REQUEST,
             Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::Dirty | Error::Conflict(_) | Error::Recovery(_) => StatusCode::CONFLICT,
@@ -62,11 +121,30 @@ impl IntoResponse for ApiError {
             Error::Unsupported(_) => StatusCode::UNPROCESSABLE_ENTITY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        (
-            status,
-            Json(json!({"error":{"code":self.0.code(),"message":public_message(&self.0)}})),
-        )
-            .into_response()
+        envelope(status, error.code(), &public_message(&error))
+    }
+}
+struct ApiJson<T>(T);
+impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for ApiJson<T> {
+    type Rejection = ApiError;
+    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        Json::<T>::from_request(request, state)
+            .await
+            .map(|Json(value)| Self(value))
+            .map_err(|error: JsonRejection| ApiError::Extraction(error.status()))
+    }
+}
+struct ApiQuery<T>(T);
+impl<S: Send + Sync, T: DeserializeOwned> FromRequestParts<S> for ApiQuery<T> {
+    type Rejection = ApiError;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Query(value)| Self(value))
+            .map_err(|error: QueryRejection| ApiError::Extraction(error.status()))
     }
 }
 async fn run(service: Service, command: Command) -> Result<Response, ApiError> {
@@ -78,7 +156,7 @@ async fn run(service: Service, command: Command) -> Result<Response, ApiError> {
 }
 async fn execute(
     State(service): State<Service>,
-    Json(command): Json<Command>,
+    ApiJson(command): ApiJson<Command>,
 ) -> Result<Response, ApiError> {
     run(service, command).await
 }
@@ -90,10 +168,16 @@ struct Page {
 fn default_limit() -> usize {
     100
 }
-async fn status(State(s): State<Service>, Query(p): Query<Page>) -> Result<Response, ApiError> {
+async fn status(
+    State(s): State<Service>,
+    ApiQuery(p): ApiQuery<Page>,
+) -> Result<Response, ApiError> {
     run(s, Command::Status { limit: p.limit }).await
 }
-async fn conflicts(State(s): State<Service>, Query(p): Query<Page>) -> Result<Response, ApiError> {
+async fn conflicts(
+    State(s): State<Service>,
+    ApiQuery(p): ApiQuery<Page>,
+) -> Result<Response, ApiError> {
     run(s, Command::Conflicts { limit: p.limit }).await
 }
 #[derive(Deserialize)]
@@ -106,7 +190,10 @@ struct History {
 fn head() -> String {
     "HEAD".into()
 }
-async fn log(State(s): State<Service>, Query(p): Query<History>) -> Result<Response, ApiError> {
+async fn log(
+    State(s): State<Service>,
+    ApiQuery(p): ApiQuery<History>,
+) -> Result<Response, ApiError> {
     run(
         s,
         Command::Log {
@@ -126,7 +213,10 @@ struct NewBranch {
     #[serde(default = "head")]
     from: String,
 }
-async fn branch(State(s): State<Service>, Json(p): Json<NewBranch>) -> Result<Response, ApiError> {
+async fn branch(
+    State(s): State<Service>,
+    ApiJson(p): ApiJson<NewBranch>,
+) -> Result<Response, ApiError> {
     run(
         s,
         Command::Branch {
@@ -143,7 +233,10 @@ struct NewCommit {
     #[serde(default = "geoledger::default_author")]
     author: String,
 }
-async fn commit(State(s): State<Service>, Json(p): Json<NewCommit>) -> Result<Response, ApiError> {
+async fn commit(
+    State(s): State<Service>,
+    ApiJson(p): ApiJson<NewCommit>,
+) -> Result<Response, ApiError> {
     run(
         s,
         Command::Commit {
@@ -162,7 +255,10 @@ struct NewMerge {
     #[serde(default)]
     message: Option<String>,
 }
-async fn merge(State(s): State<Service>, Json(p): Json<NewMerge>) -> Result<Response, ApiError> {
+async fn merge(
+    State(s): State<Service>,
+    ApiJson(p): ApiJson<NewMerge>,
+) -> Result<Response, ApiError> {
     run(
         s,
         Command::Merge {

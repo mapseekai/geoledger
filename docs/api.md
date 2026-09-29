@@ -72,14 +72,14 @@ Unix 构建通过 `gl --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880` �
 
 请求上限为 4 MiB，JSON 响应上限为 16 MiB。列表最多返回 1000 项，预览同时采用约 8 MiB 载荷预算，单条大记录可超过该预算。读取 `total`、`truncated` 判断返回范围；结构变化使用 `schema_changes`、`record_counts_complete` 表达，提交通过 `rescanned_records` 返回整表扫描数量。
 
-HTTP 应用错误返回 `error.code` 与 `error.message`：参数校验 400、鉴权 401、资源查找 404、状态冲突 409、仓库占用 423、能力校验 422、后端异常 500。Thrift 通过 `ApiError` 表达业务结果；客户端同时检查传输状态。连接中断后先通过 `status`、`log`、`recover` 核对结果，再决定是否重新发起写入。
+HTTP 输入解析与应用错误统一返回 `error.code`、`error.message` 和 `error.request_id`：参数校验 400、鉴权 401、资源查找 404、状态冲突 409、仓库占用 423、能力校验 422、后端异常 500。Thrift 通过 `ApiError` 表达业务结果；客户端同时检查传输状态。连接中断后先通过 `status`、`log`、`recover` 核对结果，再决定是否重新发起写入。
 
 ## 中心版
 
 中心 HTTP 操作均为 `POST /api/center/{operation}`，JSON 请求体，`Authorization: Bearer TOKEN`。
 所有操作进入独立的 `CenterApplication`。身份只由服务令牌映射确定；额外的作者字段会被拒绝。
-接口返回 JSON，错误使用 400（参数）、401（认证）、404（缺失或无权访问）、409（版本/合并/幂等冲突）、
-413（大小限制）、422（合并结果校验）、429（繁忙）或 503（数据库操作失败，隐藏连接详情）。
+接口返回 JSON，错误统一为 `error.code`、`error.message`、`error.request_id`，冲突详情保留在响应顶层。状态使用 400（参数）、401（认证）、404（缺失或无权访问）、409（版本/合并/幂等冲突）、
+413（大小限制）、422（合并结果校验）、429（繁忙）、503（数据库操作失败，隐藏连接详情）或 504（操作截止时间）。
 
 | operation | 请求字段（? 表示可选） |
 |---|---|
@@ -107,7 +107,7 @@ Feature 必含 `type: "Feature"`、与 `feature_id` 相等的字符串 `id`、�
 历史列表使用 revision，diff/commit 使用返回的 `cursor`，FeatureCollection 也提供 `next_after`；空页结束。
 正式数据分页续读时携带首屏返回的 `revision`，获得固定版本结果；草稿续页同时核对返回的 `workspace_version`，
 版本变化时重新读取草稿。
-请求及响应限 4 MiB，同时最多 16 个请求；Feature 输入限 16 KiB、256 个属性，属性名/要素 ID 限 256 字节，
+请求及响应限 4 MiB，同时最多 16 个请求；响应预览还按展开后的数据结构计入内存预算。Feature 输入限 16 KiB、256 个属性，属性名/要素 ID 限 256 字节，
 项目/集合名限 256 字节，subject 限 128 字节，提交消息限 2048 字节。文本标识非空且无控制字符。
 普通查询响应超限时减小 `limit`；冲突响应提供 `total`、`truncated` 和 `next_after`，通过 `conflicts` 继续读取。
 已解决选择在正式 HEAD 变化或后续草稿保存后返回 `reason: "stale_resolution"`，保留选择内容并要求再次确认；
@@ -149,3 +149,7 @@ Center 'publish' $request
 Center 'features' @{project=$p; dataset=$d}
 Remove-Variable entry,headers
 ```
+
+中心数值协议按 i64/u64 范围精确保存整数，也识别表示整数的指数和小数写法；非整数采用有限 binary64，并在写入前校验范围。任意精度十进制值可使用字符串属性。浏览器测试台原样发送请求文本并显示响应文本，保留大整数字面量。
+
+`GL_CENTER_OPERATION_TIMEOUT_MS` 配置中心操作的总截止时间，默认 30000 毫秒，范围 1–300000 毫秒；超时后的发布使用原 `request_id` 和相同请求体重试确认结果。Thrift 入口按严格 Framed Binary 校验帧、字段长度、UTF-8 和嵌套深度，单个入站帧上限为 4 MiB + 64 KiB；每个监听器最多接纳 8 个连接，帧读取截止时间为 10 秒、响应写入为 30 秒。客户端空闲后可重新建立连接。

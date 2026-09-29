@@ -3,8 +3,8 @@
 The repository root is the single Cargo workspace. Implementation crates live
 under crates/. Run workspace commands from this directory.
 
-Run python3 scripts/check-docs.py, cargo fmt --all -- --check,
-cargo clippy --workspace --all-targets -- -D warnings, and cargo test --workspace.
+Run ./scripts/check.sh with Python 3 and Node.js 22 available. It checks docs,
+browser protocol regressions, rustfmt, locked workspace Clippy and Rust tests.
 Opt-in PostGIS tests use GL_TEST_DATABASE_URL and a database named geoledger_test.
 Keep fixtures within dedicated disposable test environments.
 
@@ -12,8 +12,9 @@ Core stays independent of databases and transports. Every transport calls Applic
 Keep working-copy triggers enabled during checkout and restoration. Preserve table locks,
 journal/marker ordering, schema validation, clean-copy checks and conflicting-head protection.
 
-Use the current GeoLedger format for objects, schema, repository state and database tracking.
-Encoding changes receive explicit format versions. During development, initialize fresh
+Keep immutable object/schema/PostGIS tracking FORMAT_VERSION distinct from mutable local
+STATE_VERSION and SQLite storage layout. Storage migrations preserve object IDs and run
+transactionally with migration/rollback tests. Encoding changes receive explicit versions. During development, initialize fresh
 repositories and import source tables into dedicated current-format working copies.
 
 Document implemented behavior, operating prerequisites and measured validation scope.

@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{collections::BTreeSet, sync::Arc};
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
@@ -99,14 +99,15 @@ async fn console() -> Response {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        let (status, body) = if self.body.to_string().len() > MAX_BYTES {
-            (413, json!({"error":"response too large"}))
-        } else {
-            (self.status, self.body)
+        let status = self.status;
+        let encoded = match crate::codec::encode(&self.body) {
+            Ok(encoded) => encoded,
+            Err(error) => return error.into_response(),
         };
         (
             StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            axum::Json(body),
+            [("content-type", "application/json")],
+            encoded,
         )
             .into_response()
     }
@@ -115,7 +116,7 @@ async fn call(
     State(s): State<Service>,
     Path(operation): Path<String>,
     request: Request,
-) -> Result<axum::Json<Value>> {
+) -> Result<Response> {
     let subject = s
         .tokens
         .authenticate(request.headers())
@@ -131,14 +132,16 @@ async fn call(
     .await
     .map_err(|_| Error::new(408, "request body timeout"))?
     .map_err(|_| Error::new(413, "request body too large or unreadable"))?;
-    let input = serde_json::from_slice(&body).map_err(|_| bad())?;
+    let input = crate::codec::parse(&body)?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        s.app.execute(&subject, &operation, input)
+        match s.app.execute_encoded(&subject, &operation, input) {
+            Ok((_, encoded)) => ([("content-type", "application/json")], encoded).into_response(),
+            Err(error) => error.into_response(),
+        }
     })
     .await
-    .map_err(|_| Error::new(500, "request failed"))?
-    .map(axum::Json)
+    .map_err(|_| Error::new(500, "request failed"))
 }
 #[cfg(test)]
 mod tests {

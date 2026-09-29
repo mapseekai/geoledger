@@ -365,3 +365,113 @@ impl BulkBuilder {
         Ok(root)
     }
 }
+
+/// Compact validation cache scoped to one fsck. Schema IDs are part of every
+/// cache key: a shared record/tree must be checked again under another schema.
+#[derive(Default)]
+pub struct Validator {
+    trees: std::collections::BTreeMap<(ObjectId, ObjectId), CheckedTree>,
+    records: std::collections::BTreeMap<(ObjectId, ObjectId), String>,
+}
+#[derive(Clone)]
+struct CheckedTree {
+    min: String,
+    max: String,
+    root_key: String,
+    count: u64,
+    height: usize,
+}
+impl Validator {
+    pub fn dataset(&mut self, store: &dyn ObjectStore, dataset: &crate::Dataset) -> Result<()> {
+        let schema = crate::schema::read(store, &dataset.schema)?;
+        let count = match &dataset.root {
+            None => 0,
+            Some(root) => {
+                self.walk(
+                    store,
+                    &dataset.schema,
+                    &schema,
+                    root,
+                    0,
+                    &mut std::collections::BTreeSet::new(),
+                )?
+                .count
+            }
+        };
+        if count != dataset.records {
+            return Err(Error::Storage("dataset record count mismatch".into()));
+        }
+        Ok(())
+    }
+    fn walk(
+        &mut self,
+        store: &dyn ObjectStore,
+        schema_id: &ObjectId,
+        schema: &crate::Schema,
+        id: &ObjectId,
+        depth: usize,
+        active: &mut std::collections::BTreeSet<ObjectId>,
+    ) -> Result<CheckedTree> {
+        depth_guard(depth)?;
+        let identity = (schema_id.clone(), id.clone());
+        if let Some(cached) = self.trees.get(&identity) {
+            depth_guard(depth + cached.height - 1)?;
+            return Ok(cached.clone());
+        }
+        if !active.insert(id.clone()) {
+            return Err(Error::Storage("tree cycle".into()));
+        }
+        let n = node(store, id)?;
+        if n.key.len() > 8192 {
+            return Err(Error::Storage("oversized tree key".into()));
+        }
+        let record_identity = (schema_id.clone(), n.value.clone());
+        if let Some(key) = self.records.get(&record_identity) {
+            if key != &n.key {
+                return Err(Error::Storage("tree key/record key mismatch".into()));
+            }
+        } else {
+            let record: crate::Record = load(store, "record/v3", &n.value)?;
+            if record.key != n.key {
+                return Err(Error::Storage("tree key/record key mismatch".into()));
+            }
+            schema
+                .validate(&record)
+                .map_err(|e| Error::storage_source("invalid stored record", e))?;
+            self.records.insert(record_identity, record.key);
+        }
+        let mut checked = CheckedTree {
+            min: n.key.clone(),
+            max: n.key.clone(),
+            root_key: n.key.clone(),
+            count: 1,
+            height: 1,
+        };
+        for (child, left) in [(&n.left, true), (&n.right, false)] {
+            if let Some(child) = child {
+                let child = self.walk(store, schema_id, schema, child, depth + 1, active)?;
+                if (left && child.max >= n.key)
+                    || (!left && child.min <= n.key)
+                    || priority(&child.root_key) <= priority(&n.key)
+                {
+                    return Err(Error::Storage(
+                        "tree ordering/priority invariant violated".into(),
+                    ));
+                }
+                checked.count = checked
+                    .count
+                    .checked_add(child.count)
+                    .ok_or_else(|| Error::Storage("tree count overflow".into()))?;
+                checked.height = checked.height.max(child.height + 1);
+                if left {
+                    checked.min = child.min;
+                } else {
+                    checked.max = child.max;
+                }
+            }
+        }
+        active.remove(id);
+        self.trees.insert(identity, checked.clone());
+        Ok(checked)
+    }
+}

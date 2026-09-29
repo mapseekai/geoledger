@@ -105,12 +105,9 @@ impl Application {
                 Ok(json!({"branch":name,"head":id}))
             }
             Command::Conflicts { limit } => {
-                let conflicts = state
-                    .merging
-                    .as_ref()
-                    .map(|m| m.conflicts.as_slice())
-                    .unwrap_or(&[]);
-                Ok(page("conflicts", conflicts, limit))
+                let conflicts = repo.conflicts_page(limit, 0)?;
+                let total = repo.conflict_count()?;
+                Ok(json!({"conflicts":conflicts,"total":total,"truncated":total>conflicts.len()}))
             }
             Command::MergeAbort => {
                 if state.merging.is_none() {
@@ -138,9 +135,12 @@ impl Application {
                 result["schema_changes"] = schema_changes(&repo, &a, &b)?;
                 Ok(result)
             }
-            Command::Status { limit } if state.bindings.is_empty() => {
-                Ok(status(&state, &WorkingChanges::default(), limit))
-            }
+            Command::Status { limit } if state.bindings.is_empty() => Ok(status(
+                &state,
+                &WorkingChanges::default(),
+                limit,
+                repo.conflict_count()?,
+            )),
             other => self.execute_working(&repo, state, other),
         }
     }
@@ -156,7 +156,7 @@ impl Application {
             "Initialize GeoLedger repository",
         )?;
         let state = RepositoryState {
-            version: core::FORMAT_VERSION,
+            version: core::STATE_VERSION,
             repository_id: uuid::Uuid::new_v4().to_string(),
             branch: "main".into(),
             branches: BTreeMap::from([("main".into(), initial.clone())]),
@@ -274,7 +274,7 @@ impl Application {
         )?;
         match command {
             Command::Status { limit } => {
-                let mut result = status(&state, &changes, limit);
+                let mut result = status(&state, &changes, limit, repo.conflict_count()?);
                 result["clean"] = json!(changes.is_empty() && schema_dirty.is_empty());
                 result["record_counts_complete"] = json!(schema_dirty.is_empty());
                 result["schema_changes"]=json!(schema_dirty.iter().map(|(name,after)|json!({"dataset":name,"before":state.bindings[name].schema,"after":after,"requires_full_scan":true})).collect::<Vec<_>>());
@@ -335,23 +335,12 @@ impl Application {
                 binding.column_ids = session.column_ids(&binding)?;
                 binding.schema = session.current_schema(&binding)?;
                 session.register(&dataset, &binding)?;
-                let mut tree = tree::BulkBuilder::default();
-                let mut records = 0u64;
-                session.scan(&binding, &mut |record| {
-                    let id = save(repo, "record/v3", &record)?;
-                    tree.push(repo, record.key, id)?;
-                    records += 1;
-                    Ok(())
-                })?;
-                let imported = Dataset {
-                    schema: schema::store(repo, &binding.schema)?,
-                    root: tree.finish(repo)?,
-                    records,
-                };
+                let imported = capture_dataset(repo, &binding, session.as_mut())?;
+                let records = imported.records;
                 let mut snapshot = baseline;
                 snapshot.insert(dataset.clone(), imported);
                 state.bindings.insert(dataset.clone(), binding);
-                state.version = core::FORMAT_VERSION;
+                state.version = core::STATE_VERSION;
                 let message = message.unwrap_or_else(|| format!("Import {dataset}"));
                 let id = create_commit(
                     repo,
@@ -419,7 +408,7 @@ impl Application {
                     &author,
                     &message.unwrap_or_else(|| format!("Alter schema of {dataset}")),
                 )?;
-                state.version = core::FORMAT_VERSION;
+                state.version = core::STATE_VERSION;
                 state.branches.insert(state.branch.clone(), id.clone());
                 finish(repo, session.as_mut(), &before_head, &state)?;
                 Ok(json!({"commit":id,"dataset":dataset,"schema":state.bindings[&dataset].schema}))
@@ -501,12 +490,13 @@ impl Application {
                     return Ok(json!({"commit":theirs,"fast_forward":true}));
                 }
                 let base_snapshot = snapshot_at(repo, &base)?;
-                let (snapshot, conflicts) = merge::three_way_with_defaults(
+                let snapshot = merge::three_way_streaming(
                     repo,
                     &base_snapshot,
                     &baseline,
                     &other,
                     &mut |from, to| session.projection_defaults(from, to),
+                    &mut |conflict| repo.insert_conflict(&conflict),
                 )?;
                 let merge_state = MergeState {
                     base,
@@ -514,7 +504,7 @@ impl Application {
                     theirs: theirs.clone(),
                     parents: vec![before_head.clone(), theirs],
                     snapshot,
-                    conflicts,
+                    conflicts: Vec::new(),
                     author,
                     message: message
                         .unwrap_or_else(|| format!("Merge {source} into {}", state.branch)),
@@ -536,12 +526,13 @@ impl Application {
                     ));
                 }
                 let parent = commit.parents[0].clone();
-                let (snapshot, conflicts) = merge::three_way_with_defaults(
+                let snapshot = merge::three_way_streaming(
                     repo,
                     &snapshot_at(repo, &target)?,
                     &baseline,
                     &snapshot_at(repo, &parent)?,
                     &mut |from, to| session.projection_defaults(from, to),
+                    &mut |conflict| repo.insert_conflict(&conflict),
                 )?;
                 let merge_state = MergeState {
                     base: target.clone(),
@@ -549,7 +540,7 @@ impl Application {
                     theirs: parent,
                     parents: vec![before_head.clone()],
                     snapshot,
-                    conflicts,
+                    conflicts: Vec::new(),
                     author,
                     message: message.unwrap_or_else(|| format!("Revert {target}")),
                 };
@@ -570,12 +561,7 @@ impl Application {
                     .merging
                     .as_mut()
                     .ok_or_else(|| Error::Conflict("no merge in progress".into()))?;
-                let index = pending
-                    .conflicts
-                    .iter()
-                    .position(|c| c.dataset == dataset && c.key == key)
-                    .ok_or_else(|| Error::NotFound("unresolved conflict".into()))?;
-                let conflict = &pending.conflicts[index];
+                let conflict = repo.conflict(&dataset, &key)?;
                 if !matches!(choice, Resolution::Custom) && record.is_some() {
                     return Err(Error::Invalid(
                         "record is only accepted for custom resolution".into(),
@@ -610,8 +596,8 @@ impl Application {
                     .get_mut(&dataset)
                     .ok_or_else(|| Error::Storage("missing merge dataset".into()))?;
                 merge::update(repo, target, &key, selected.as_ref())?;
-                pending.conflicts.remove(index);
-                let remaining = pending.conflicts.len();
+                repo.remove_conflict(&dataset, &key)?;
+                let remaining = repo.conflict_count()?;
                 repo.save_state(&state)?;
                 repo.commit()?;
                 Ok(
@@ -624,7 +610,7 @@ impl Application {
                     .merging
                     .clone()
                     .ok_or_else(|| Error::Conflict("no merge in progress".into()))?;
-                if !pending.conflicts.is_empty() {
+                if repo.conflict_count()? != 0 {
                     return Err(Error::Conflict(
                         "resolve all conflicts before continuing".into(),
                     ));
@@ -831,8 +817,8 @@ fn complete_or_stage(
     session: &mut dyn WorkingCopyTransaction,
 ) -> Result<Value> {
     identity(&pending.author, &pending.message)?;
-    if !pending.conflicts.is_empty() {
-        let count = pending.conflicts.len();
+    if repo.conflict_count()? != 0 {
+        let count = repo.conflict_count()?;
         state.merging = Some(pending);
         repo.save_state(state)?;
         repo.commit()?;
@@ -855,14 +841,15 @@ fn complete_or_stage(
     finish(repo, session, &before, state)?;
     Ok(json!({"commit":id,"state":"normal","fast_forward":false}))
 }
-fn page<T: serde::Serialize>(key: &str, values: &[T], limit: usize) -> Value {
-    let limit = limit.clamp(1, 1000);
-    json!({key:values.iter().take(limit).collect::<Vec<_>>(),"total":values.len(),"truncated":values.len()>limit})
-}
-fn status(state: &RepositoryState, changes: &WorkingChanges, limit: usize) -> Value {
+fn status(
+    state: &RepositoryState,
+    changes: &WorkingChanges,
+    limit: usize,
+    conflicts: usize,
+) -> Value {
     json!({"repository_id":state.repository_id,"branch":state.branch,"head":state.head().ok(),"clean":changes.is_empty(),
         "state":if state.merging.is_some(){"merging"}else{"normal"},
-        "unresolved_conflicts":state.merging.as_ref().map(|m|m.conflicts.len()).unwrap_or(0),
+        "unresolved_conflicts":conflicts,
         "datasets":state.bindings.keys().collect::<Vec<_>>(),
         "summary":{"inserted":changes.inserted,"updated":changes.len()-changes.inserted-changes.deleted,"deleted":changes.deleted},
         "diff":changes.page(limit)})
@@ -875,6 +862,7 @@ fn fsck(repo: &Repository, state: &RepositoryState) -> Result<Value> {
     }
     let mut checked_snapshots = BTreeSet::new();
     let mut checked_datasets = BTreeSet::new();
+    let mut validator = tree::Validator::default();
     for id in &visited {
         let commit = graph::commit(repo, id)?;
         if !checked_snapshots.insert(commit.root.clone()) {
@@ -888,20 +876,7 @@ fn fsck(repo: &Repository, state: &RepositoryState) -> Result<Value> {
             )) {
                 continue;
             }
-            let schema: Schema = schema::read(repo, &dataset.schema)?;
-            let mut count = 0;
-            tree::visit(repo, dataset.root.as_ref(), &mut |key, id| {
-                let row: Record = load(repo, "record/v3", id)?;
-                if key != row.key {
-                    return Err(Error::Storage("tree key/record key mismatch".into()));
-                }
-                schema.validate(&row)?;
-                count += 1;
-                Ok(())
-            })?;
-            if count != dataset.records {
-                return Err(Error::Storage("dataset record count mismatch".into()));
-            }
+            validator.dataset(repo, dataset)?;
         }
     }
     Ok(

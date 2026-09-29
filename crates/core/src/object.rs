@@ -60,7 +60,8 @@ pub fn save<T: Serialize>(store: &dyn ObjectStore, kind: &str, value: &T) -> Res
     store.put(kind, &serde_json::to_vec(value)?)
 }
 pub fn load<T: DeserializeOwned>(store: &dyn ObjectStore, kind: &str, id: &ObjectId) -> Result<T> {
-    Ok(serde_json::from_slice(&store.get(id, kind)?)?)
+    serde_json::from_slice(&store.get(id, kind)?)
+        .map_err(|e| Error::storage_source(format!("decode {kind} object {id}"), e))
 }
 
 #[derive(Default)]

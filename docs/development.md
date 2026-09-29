@@ -7,7 +7,7 @@
 | 层 | 职责 |
 |---|---|
 | `crates/core` | 版本对象、持久化树、提交图、差异与合并算法 |
-| `crates/storage` | SQLite WAL 对象库、Zstd 压缩、文件锁及恢复日志 |
+| `crates/storage` | SQLite WAL 对象库、Zstd 压缩、文件锁、冲突索引及恢复日志 |
 | `crates/postgis` | 表检查、记录编码、字段演进、跟踪触发器及数据库事务 |
 | `crates/app` | 通过 Application / Command 编排全部版本操作 |
 | `crates/server`、`crates/thrift-gen` | HTTP / gRPC / Thrift 服务及协议绑定 |
@@ -17,7 +17,7 @@
 
 PostGIS 保存可编辑工作副本；SQLite 保存历史对象和分支。提交采用“对象与 pending 持久化 → 数据库提交 → 分支状态发布”的顺序，`recover` 通过操作标记协调恢复。数据和字段恢复持续保留跟踪触发器及表锁。
 
-当前持久化格式为 3，本地目录为 `.geoledger`，数据库元数据为 `_geoledger`。对象读取校验类型和哈希，稳定字段 ID 用于结构历史与合并。开发验证使用新建仓库和专用测试表。
+版本对象与 PostGIS 跟踪采用格式 3，本地目录为 `.geoledger`，数据库元数据为 `_geoledger`。SQLite 存储布局为 4，冲突按对象引用独立索引；历史对象与提交 ID 保持原样。正常布局 3 仓库在打开时通过事务更新存储布局；更新前先完成待恢复操作并备份仓库。对象读取校验类型和哈希，`fsck` 按字段结构和子树身份复用校验结果。
 
 ## 构建
 
@@ -38,7 +38,7 @@ cargo build --release --locked --target x86_64-pc-windows-msvc -p geoledger-cli 
 
 ## 验证
 
-macOS / Linux 运行 `./scripts/check.sh`，执行文档、格式、Clippy 和工作区测试。设置 `GL_TEST_DATABASE_URL` 指向专用 `geoledger_test` 数据库后，脚本同时执行 PostGIS 集成测试；测试数据使用隔离环境。
+macOS / Linux 准备 Python 3 和 Node.js 22，运行 `./scripts/check.sh`，执行文档、浏览器协议回归、格式、Clippy 和工作区测试。设置 `GL_TEST_DATABASE_URL` 指向专用 `geoledger_test` 数据库后，脚本同时执行 PostGIS 集成测试；测试数据使用隔离环境。
 
 Windows 使用对应功能组合：
 
@@ -47,6 +47,8 @@ python scripts/check-docs.py
 cargo fmt --all -- --check
 cargo test --locked --workspace --exclude geoledger-thrift-gen --no-default-features
 ```
+
+[自动 CI](../.github/workflows/ci.yml) 在 push / pull request 时运行 Linux 默认功能与独立 PostGIS 回归、Rust 1.88 最低版本检查，以及 Windows 便携功能测试和 Clippy。
 
 ## Windows 打包
 
@@ -58,7 +60,7 @@ cargo test --locked --workspace --exclude geoledger-thrift-gen --no-default-feat
 
 独立包 [geoledger-center](../crates/center/Cargo.toml) 为 `0.2.0-alpha.1`，入口 `gl-center`，
 [CenterApplication](../crates/center/src/lib.rs) 处理全部中心操作，HTTP 层只负责认证、限流、大小限制和阻塞任务调度。
-中心版复用 core 的 `merge_record`；中心属性使用带 JSON Pointer 转义的 `/properties/` 字段，几何使用 `/geometry`，
+中心版按数据库会话、数值编解码、查询、发布和错误处理拆分模块；复用 core 的 `merge_record`。中心属性使用带 JSON Pointer 转义的 `/properties/` 字段，几何使用 `/geometry`，
 JSON 值编码为文本单元，几何编码为保留坐标顺序与 Z 的 XDR EWKB。这是中心格式 1 的内部映射，本地 core 编解码保持原样。
 
 [事务迁移](../crates/center/src/schema.sql) 建立项目范围复合外键、成员、工作区、增量、当前要素、时态历史、提交、幂等记录和审计表。
@@ -80,7 +82,7 @@ cargo test -p geoledger-center --test postgis --offline -- --ignored --test-thre
 
 [中心集成测试](../crates/center/tests/postgis.rs) 在写入前核验数据库名，使用随机项目和身份，可共享中心 schema。
 `migrate` 需要预装 PostGIS；测试保留随机项目的不可变历史，整个测试数据库可由测试操作者重建。
-`scripts/check.sh` 在配置测试 URL 时包含中心测试。中心 crate 直接使用现有 Axum、postgres/native-tls 和 core，
+`scripts/check.sh` 在配置测试 URL 时包含中心测试。中心 crate 直接使用现有 Axum、tokio-postgres/native-tls 和 core，
 Windows 本地 CLI 构建链及 Volo 特性边界保持原样。浏览器测试台由中心服务内嵌提供，令牌保留在内存中，接口按同源部署。
 
 
@@ -90,3 +92,5 @@ Windows 本地 CLI 构建链及 Volo 特性边界保持原样。浏览器测试�
 
 中心二进制的 `--build-info` 提供编译时的提交、目标、配置和运行时信息；打包脚本核对干净工作区与该信息，
 并记录可执行文件 SHA256，保证安装包说明对应实际构建。
+
+中心服务使用最多 16 个数据库会话，复用连接及预处理语句。完整操作截止时间覆盖连接建立、SQL 和提交；到期关闭对应连接并回收执行槽位。冲突按批计算、按页保留预览，候选结果存入事务临时表，再以集合式 SQL 发布。

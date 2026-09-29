@@ -1,0 +1,106 @@
+name: Rust correctness and safety
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    name: Default features and PostGIS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgis:
+        image: imresamu/postgis@sha256:088210a8556029c7b3dafa7c721f40ba4dfda70e1f3ec19a4d53b943902fd33f
+        env:
+          POSTGRES_USER: mapseekai
+          POSTGRES_DB: geoledger_test
+          POSTGRES_PASSWORD: geoledger-ci-disposable
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mapseekai -d geoledger_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CARGO_TERM_COLOR: never
+      GL_TEST_DATABASE_URL: postgresql://mapseekai:geoledger-ci-disposable@127.0.0.1:5432/geoledger_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Prepare build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.92.0
+      - name: Documentation and formatting
+        run: |
+          python3 scripts/check-docs.py
+          node --test scripts/test-browser.mjs
+          cargo fmt --all -- --check
+      - name: Lint all default-feature targets
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Run complete isolated regression
+        run: cargo test --locked --workspace -- --include-ignored --test-threads=1
+      - name: Build all binaries and examples
+        run: cargo build --locked --workspace --bins --examples
+  msrv:
+    name: Rust 1.88 minimum version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          rustup toolchain install 1.88.0 --profile minimal
+          cargo +1.88.0 check --workspace --all-targets --locked
+  windows:
+    name: Windows portable features
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: never
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Prepare Rust and protoc
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustup toolchain install 1.92.0 --profile minimal --component clippy
+          if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
+          rustup default 1.92.0
+          if ($LASTEXITCODE -ne 0) { throw 'Rust selection failed' }
+          gh release download v35.1 --repo protocolbuffers/protobuf --pattern protoc-35.1-win64.zip --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw 'protoc download failed' }
+          $archive = Join-Path $env:RUNNER_TEMP 'protoc-35.1-win64.zip'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082') { throw 'protoc checksum mismatch' }
+          $tools = Join-Path $env:RUNNER_TEMP 'protoc'
+          Expand-Archive -LiteralPath $archive -DestinationPath $tools
+          (Join-Path $tools 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Browser numeric and retry regression
+        run: |
+          node --test scripts/test-browser.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Browser regression failed' }
+      - name: Portable Clippy
+        run: |
+          cargo clippy --locked --workspace --exclude geoledger-thrift-gen --no-default-features --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }
+      - name: Native unit and protocol regressions
+        run: |
+          cargo test --locked --workspace --exclude geoledger-thrift-gen --no-default-features
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }

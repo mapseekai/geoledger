@@ -846,6 +846,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tokio-postgres",
  "tower",
  "uuid",
 ]

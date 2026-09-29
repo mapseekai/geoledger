@@ -1,6 +1,8 @@
 #[cfg(feature = "thrift")]
 pub mod thrift;
 #[cfg(feature = "thrift")]
+mod thrift_codec;
+#[cfg(feature = "thrift")]
 pub use geoledger_thrift_gen::geoledger::v1 as thrift_proto;
 pub mod grpc;
 pub mod http;
@@ -179,7 +181,28 @@ pub async fn serve(application: Application, config: ServerConfig) -> Result<()>
 pub(crate) fn public_message(error: &Error) -> String {
     match error {
         Error::Backend { .. } | Error::Database(_) | Error::Storage(_) | Error::Io(_) => {
-            tracing::error!(error=%error,"operation failed");
+            // Backend Display/Debug and source messages may contain connection
+            // strings or stored data. Preserve safe source metadata across all
+            // transports without printing those messages.
+            let mut source = std::error::Error::source(error);
+            let mut source_depth = 0;
+            let mut source_kind = "opaque";
+            while let Some(current) = source {
+                source_depth += 1;
+                source_kind = if current.is::<std::io::Error>() {
+                    "io"
+                } else if current.is::<serde_json::Error>() {
+                    "json"
+                } else {
+                    "opaque"
+                };
+                if source_depth == 16 {
+                    break;
+                }
+                source = current.source();
+            }
+            tracing::error!(code=error.code(), source_depth, source_kind,
+                request_id=?http::request_id(), "operation failed");
             "operation failed; inspect the server log for details".into()
         }
         _ => error.to_string(),

@@ -772,7 +772,7 @@ fn current_format_supports_field_history_from_first_import() {
     {
         let repo = Repository::open(f._directory.path()).unwrap();
         let state = repo.state().unwrap();
-        assert_eq!(state.version, geoledger_core::FORMAT_VERSION);
+        assert_eq!(state.version, geoledger_core::STATE_VERSION);
         for binding in state.bindings.values() {
             geoledger_core::schema::validate_format(&binding.schema).unwrap();
         }

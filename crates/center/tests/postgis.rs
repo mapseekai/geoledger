@@ -4,6 +4,142 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+#[test]
+#[ignore = "requires isolated GL_TEST_DATABASE_URL database geoledger_test with PostGIS"]
+fn thousand_large_features_publish_and_page_conflicts_without_full_materialization() -> TestResult {
+    let mut f = Fixture::new()?;
+    // This is a large debug-build correctness/memory workload, not the
+    // production latency SLA. Deadline behavior has dedicated short tests.
+    f.app = f
+        .app
+        .clone()
+        .with_timeout(std::time::Duration::from_secs(180));
+    let seed = f.ws(&f.alice);
+    let save_all = |subject: &str, workspace: &str, x: i64| -> TestResult {
+        for batch in 0..10 {
+            let edits: Vec<_> = (batch * 100..(batch + 1) * 100)
+                .map(|i| {
+                    f.edit(
+                        &format!("large-{i:04}"),
+                        json!({"array":vec![0;7000],"x":x,"exact":9007199254740993_u64}),
+                        point(1., 2.),
+                    )
+                })
+                .collect();
+            f.call(
+                subject,
+                "save",
+                json!({"workspace":workspace,"expected_workspace_version":batch,"edits":edits}),
+            )?;
+        }
+        Ok(())
+    };
+    save_all(&f.alice, &seed, 0)?;
+    assert_eq!(f.publish(&f.alice, &seed, 10)?["changes"], 1000);
+    let left = f.ws(&f.alice);
+    let right = f.ws(&f.bob);
+    save_all(&f.alice, &left, 1)?;
+    save_all(&f.bob, &right, 2)?;
+    let diff = f.call(&f.bob, "diff", json!({"workspace":right,"limit":1}))?;
+    assert_eq!(diff["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        diff["changes"][0]["draft"]["properties"]["exact"].as_u64(),
+        Some(9007199254740993)
+    );
+    assert_eq!(f.publish(&f.alice, &left, 10)?["changes"], 1000);
+    let page = f.call(&f.bob, "conflicts", json!({"workspace":right,"limit":1}))?;
+    assert_eq!(page["total"], 1000);
+    assert_eq!(page["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(page["truncated"], true);
+    let next = f.call(
+        &f.bob,
+        "conflicts",
+        json!({"workspace":right,"limit":1,"after":page["next_after"]}),
+    )?;
+    assert_ne!(
+        next["conflicts"][0]["feature_id"],
+        page["conflicts"][0]["feature_id"]
+    );
+    // Classification must include conflicts beyond the retained response page.
+    let resolved = f.call(&f.bob,"resolve",json!({"workspace":right,"expected_workspace_version":10,"expected_head":2,"resolutions":[f.edit("large-0999",json!({"x":3}),point(1.,2.))]}))?;
+    assert_eq!(resolved["remaining_conflicts"], 999);
+    let conflict = f.publish(&f.bob, &right, 11).unwrap_err();
+    assert_eq!(conflict.status, 409);
+    assert_eq!(conflict.body["total"], 999);
+    assert_eq!(f.call(&f.alice, "get_project", json!({}))?["head"], 2);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires isolated GL_TEST_DATABASE_URL database geoledger_test with PostGIS"]
+fn database_errors_retain_source_without_public_diagnostics() -> TestResult {
+    use std::error::Error as _;
+    let f = Fixture::new()?;
+    let error = f
+        .call(&f.alice, "create_dataset", json!({"name":"features"}))
+        .unwrap_err();
+    assert!(error.source().is_some());
+    assert_eq!(error.body["error"]["code"], "unavailable");
+    assert!(error.body["error"]["request_id"].is_string());
+    assert!(!error.to_string().contains("duplicate key"));
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires isolated GL_TEST_DATABASE_URL database geoledger_test with PostGIS"]
+fn write_and_commit_deadlines_allow_atomic_idempotent_retry() -> TestResult {
+    for deferred in [false, true] {
+        let f = Fixture::new()?;
+        let w = f.ws(&f.alice);
+        f.save(
+            &f.alice,
+            &w,
+            0,
+            json!({"exact":18446744073709551615_u64}),
+            point(1., 2.),
+        )?;
+        let mut control = test_connection()?;
+        let name = format!("deadline_{}", Uuid::new_v4().simple());
+        let table = if deferred { "commits" } else { "features" };
+        let trigger = if deferred {
+            "CREATE CONSTRAINT TRIGGER"
+        } else {
+            "CREATE TRIGGER"
+        };
+        let timing = if deferred {
+            "AFTER INSERT"
+        } else {
+            "BEFORE INSERT"
+        };
+        let deferral = if deferred {
+            "DEFERRABLE INITIALLY DEFERRED"
+        } else {
+            ""
+        };
+        control.batch_execute(&format!("CREATE FUNCTION _geoledger_center.{name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.project='{}'::uuid THEN PERFORM pg_sleep(1); END IF; RETURN NEW; END $$; {trigger} {name} {timing} ON _geoledger_center.{table} {deferral} FOR EACH ROW EXECUTE FUNCTION _geoledger_center.{name}();",f.p))?;
+        let payload = json!({"project":f.p,"workspace":w,"expected_workspace_version":1,"request_id":Uuid::new_v4(),"message":"deadline retry"});
+        let timed = f
+            .app
+            .clone()
+            .with_timeout(std::time::Duration::from_millis(250));
+        let error = timed
+            .execute(&f.alice, "publish", payload.clone())
+            .unwrap_err();
+        assert_eq!(error.status, 504);
+        // Waits for the isolated backend to leave the test trigger and release
+        // its table lock. A COMMIT reply may be lost, so retry the original ID.
+        control.batch_execute(&format!("DROP TRIGGER {name} ON _geoledger_center.{table}; DROP FUNCTION _geoledger_center.{name}();"))?;
+        let published = f.app.execute(&f.alice, "publish", payload.clone())?;
+        assert_eq!(published["revision"], 1);
+        assert_eq!(f.app.execute(&f.alice, "publish", payload)?, published);
+        assert_eq!(
+            f.get(&f.alice, None)["properties"]["exact"].as_u64(),
+            Some(u64::MAX)
+        );
+    }
+    Ok(())
+}
 struct Fixture {
     app: CenterApplication,
     p: String,

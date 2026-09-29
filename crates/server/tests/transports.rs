@@ -9,6 +9,148 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn http_extractor_errors_share_envelope_status_and_correlation() {
+    let directory = tempfile::tempdir().unwrap();
+    let router = http::router(Service::new(Application::new(directory.path()), None));
+    let cases = [
+        (
+            "/v1/commands",
+            "POST",
+            Some("application/json"),
+            "{".to_owned(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/v1/commands",
+            "POST",
+            Some("application/json"),
+            r#"{"op":"status","bogus":1}"#.into(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "/v1/commands",
+            "POST",
+            None,
+            "{}".into(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (
+            "/v1/commands",
+            "POST",
+            Some("application/json"),
+            " ".repeat(geoledger_server::MAX_REQUEST_BYTES + 1),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (
+            "/v1/status?limit=secret-value",
+            "GET",
+            None,
+            String::new(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/v1/log?limit=bad",
+            "GET",
+            None,
+            String::new(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/v1/conflicts?limit=bad",
+            "GET",
+            None,
+            String::new(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/v1/branches",
+            "POST",
+            Some("application/json"),
+            "{}".into(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "/v1/commits",
+            "POST",
+            Some("application/json"),
+            "{}".into(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "/v1/merges",
+            "POST",
+            Some("application/json"),
+            "{}".into(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ];
+    let mut ids = std::collections::HashSet::new();
+    for (uri, method, content_type, body, expected) in cases {
+        let mut builder = Request::builder()
+            .uri(uri)
+            .method(method)
+            .header("x-request-id", "untrusted-secret");
+        if let Some(content_type) = content_type {
+            builder = builder.header("content-type", content_type);
+        }
+        let response = router
+            .clone()
+            .oneshot(builder.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{uri}");
+        let id = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(ids.insert(id.clone()));
+        assert_ne!(id, "untrusted-secret");
+        assert_eq!(response.headers()["content-type"], "application/json");
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["error"]["request_id"], id);
+        assert!(value["error"]["code"].is_string());
+        assert!(value["error"]["message"].is_string());
+        assert!(!String::from_utf8_lossy(&bytes).contains("secret"));
+    }
+    assert!(!directory.path().join(".geoledger").exists());
+}
+
+#[tokio::test]
+async fn http_backend_failure_is_redacted_and_correlated() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = directory.path().join(".geoledger");
+    std::fs::create_dir(&storage).unwrap();
+    std::fs::write(
+        storage.join("repository.sqlite"),
+        b"secret-credential: corrupt database",
+    )
+    .unwrap();
+    let router = http::router(Service::new(Application::new(directory.path()), None));
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/v1/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let request_id = response.headers()["x-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"]["code"], "storage_error");
+    assert_eq!(value["error"]["request_id"], request_id);
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(!body.contains("secret-credential"));
+    assert!(!body.contains("private-storage-path"));
+}
+
+#[tokio::test]
 async fn http_executes_shared_application_and_requires_token() {
     let dir = tempfile::tempdir().unwrap();
     let router = http::router(Service::new(
@@ -26,6 +168,14 @@ async fn http_executes_shared_application_and_requires_token() {
         .await
         .unwrap();
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    let request_id = unauthorized.headers()["x-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let bytes = unauthorized.into_body().collect().await.unwrap().to_bytes();
+    let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(error["error"]["code"], "unauthenticated");
+    assert_eq!(error["error"]["request_id"], request_id);
     let init = router
         .clone()
         .oneshot(
