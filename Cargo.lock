@@ -884,9 +884,11 @@ dependencies = [
  "fallible-iterator 0.2.0",
  "geoledger-core",
  "native-tls",
- "postgres",
  "postgres-native-tls",
  "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
 ]
 
 [[package]]

@@ -1,15 +1,15 @@
 //! PostGIS v1 working-copy adapter. Uses one database transaction and locks all
 //! tracked tables in stable order. Triggers remain enabled during checkout.
 mod schema_ops;
+mod session;
 use fallible_iterator::FallibleIterator;
 use geoledger_core::{adapter::*, *};
-use postgres::{Client, Config, Row, types::ToSql};
-use postgres_native_tls::MakeTlsConnector;
+use session::Client;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    str::FromStr,
     time::Duration,
 };
+use tokio_postgres::{Row, types::ToSql};
 
 pub struct PostgisProvider {
     connection_string: String,
@@ -61,7 +61,16 @@ impl PostgisProvider {
     }
 }
 // Intentionally no Debug: connection strings may contain passwords.
-fn pg_error(error: postgres::Error) -> Error {
+fn pg_error(error: impl Into<session::Failure>) -> Error {
+    let error = match error.into() {
+        session::Failure::Config => {
+            return Error::Invalid("invalid PostgreSQL connection string (redacted)".into());
+        }
+        session::Failure::Postgres(error) => error,
+        session::Failure::Io(error) => {
+            return Error::database_source("PostGIS connection or network deadline failure", error);
+        }
+    };
     let message = match error.as_db_error() {
         Some(db) => format!("SQLSTATE {}: {}", db.code().code(), db.message()),
         None => "connection or protocol failure; connection details are redacted".into(),
@@ -110,8 +119,8 @@ fn projection(schema: &Schema) -> Result<String> {
         .collect::<Result<Vec<_>>>()
         .map(|v| v.join(","))
 }
-// Materialize only keys and sizes, never all suffix record payloads. The final
-// join projects just the prefix that can cross the application's byte budget.
+// Walk only the budgeted prefix. Each consumed row is sized once; later calls
+// on the suffix never re-encode geometry that was already measured and skipped.
 fn bounded_read_query(binding: &Binding) -> Result<String> {
     let schema = &binding.schema;
     let sizes = schema
@@ -131,19 +140,24 @@ fn bounded_read_query(binding: &Binding) -> Result<String> {
     let pk = ident(&schema.primary_key)?;
     let native = native(key_field(schema)?)?;
     Ok(format!(
-        "WITH sized AS MATERIALIZED (
-           SELECT requested.key,requested.ordinal,
+        "WITH RECURSIVE bounded AS (
+           SELECT 1 AS ordinal, requested.key,
              octet_length(requested.key)::bigint + CASE WHEN r.{pk} IS NULL THEN 0 ELSE
              octet_length(r.{pk}::text)::bigint + {names} + {sizes} END AS bytes
-           FROM unnest($1::text[]) WITH ORDINALITY AS requested(key,ordinal)
+           FROM (SELECT ($1::text[])[1] AS key) requested
            LEFT JOIN {table} r ON r.{pk} = requested.key::{native}
-         ), bounded AS (
-           SELECT key,ordinal,coalesce(sum(bytes) OVER
-             (ORDER BY ordinal ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) AS prior_bytes FROM sized
+           WHERE cardinality($1::text[]) > 0
+           UNION ALL
+           SELECT previous.ordinal + 1, requested.key, previous.bytes +
+             octet_length(requested.key)::bigint + CASE WHEN r.{pk} IS NULL THEN 0 ELSE
+             octet_length(r.{pk}::text)::bigint + {names} + {sizes} END
+           FROM bounded previous
+           CROSS JOIN LATERAL (SELECT ($1::text[])[previous.ordinal + 1] AS key) requested
+           LEFT JOIN {table} r ON r.{pk} = requested.key::{native}
+           WHERE previous.bytes < $2::bigint AND previous.ordinal < cardinality($1::text[])
          )
          SELECT {projection} FROM bounded requested
          LEFT JOIN {table} r ON r.{pk} = requested.key::{native}
-         WHERE requested.ordinal=1 OR requested.prior_bytes < $2::bigint
          ORDER BY requested.ordinal"
     ))
 }
@@ -186,18 +200,13 @@ impl WorkingCopyProvider for PostgisProvider {
         bindings: &BTreeMap<String, Binding>,
         extra_table: Option<(&str, &str)>,
     ) -> Result<Box<dyn WorkingCopyTransaction>> {
-        let mut config = Config::from_str(&self.connection_string).map_err(|_| {
-            Error::Invalid("invalid PostgreSQL connection string (redacted)".into())
-        })?;
-        config
-            .connect_timeout(Duration::from_secs(10))
-            .application_name("geoledger");
-        let tls = native_tls::TlsConnector::builder()
-            .build()
-            .map_err(|_| Error::Database("failed to initialize TLS".into()))?;
-        let mut client = config
-            .connect(MakeTlsConnector::new(tls))
-            .map_err(pg_error)?;
+        // Allow the server's statement timeout to report SQLSTATE before the
+        // client deadline closes a stalled socket. Startup has its own 10s bound.
+        let mut client = Client::connect(
+            &self.connection_string,
+            Duration::from_millis(u64::from(self.statement_timeout_ms)) + Duration::from_secs(1),
+        )
+        .map_err(pg_error)?;
         self.start_transaction(&mut client)?;
         let mut session = PostgisTransaction {
             client,
@@ -813,7 +822,7 @@ mod tests {
     #[allow(clippy::unwrap_used, clippy::expect_used)]
     fn statement_timeout_is_enforced_and_transaction_local() {
         let dsn = std::env::var("GL_TEST_DATABASE_URL").expect("set disposable test database URL");
-        let mut client = Client::connect(&dsn, postgres::NoTls).unwrap();
+        let mut client = Client::connect(&dsn, Duration::from_secs(120)).unwrap();
         let database: String = client
             .query_one("SELECT current_database()", &[])
             .unwrap()
@@ -844,8 +853,11 @@ mod tests {
         provider.start_transaction(&mut client).unwrap();
         let error = client.query_one("SELECT pg_sleep(0.2)", &[]).unwrap_err();
         assert_eq!(
-            error.code(),
-            Some(&postgres::error::SqlState::QUERY_CANCELED)
+            match &error {
+                session::Failure::Postgres(e) => e.code(),
+                _ => None,
+            },
+            Some(&tokio_postgres::error::SqlState::QUERY_CANCELED)
         );
         client.batch_execute("ROLLBACK").unwrap();
         assert_eq!(setting(&mut client), original);
@@ -863,13 +875,13 @@ mod tests {
     #[allow(clippy::unwrap_used, clippy::expect_used)]
     fn bounded_read_returns_each_megabyte_payload_once() {
         let dsn = std::env::var("GL_TEST_DATABASE_URL").expect("set disposable test database URL");
-        let config = Config::from_str(&dsn).unwrap();
+        let config: tokio_postgres::Config = dsn.parse().unwrap();
         assert_eq!(
             config.get_dbname(),
             Some("geoledger_test"),
             "refusing a non-test database before connect"
         );
-        let mut client = config.connect(postgres::NoTls).unwrap();
+        let mut client = Client::connect(&dsn, Duration::from_secs(120)).unwrap();
         assert_eq!(
             client
                 .query_one("SELECT current_database()", &[])
@@ -898,7 +910,11 @@ mod tests {
             schema,
             column_ids: BTreeMap::new(),
         };
-        let query = bounded_read_query(&binding).unwrap();
+        tx.client.batch_execute("CREATE TEMP SEQUENCE projection_calls; CREATE FUNCTION pg_temp.count_projection(v text) RETURNS text LANGUAGE plpgsql VOLATILE AS $$ BEGIN PERFORM nextval('pg_temp.projection_calls'); RETURN v; END $$").unwrap();
+        let query = bounded_read_query(&binding).unwrap().replace(
+            "r.\"payload\"::text",
+            "pg_temp.count_projection(r.\"payload\"::text)",
+        );
         let keys: Vec<_> = (1..=100).map(|i| i.to_string()).collect();
         let mut offset = 0;
         let mut returned_rows = 0;
@@ -927,6 +943,13 @@ mod tests {
         }
         assert_eq!(returned_rows, 100);
         assert_eq!(queries, 13);
+        let projections: i64 = tx
+            .client
+            .query_one("SELECT last_value FROM pg_temp.projection_calls", &[])
+            .unwrap()
+            .get(0);
+        // One size calculation and one returned projection per consumed row.
+        assert_eq!(projections, 200, "suffix rows must not be projected early");
         tx.client.batch_execute("DELETE FROM bounded_rows WHERE id=2; UPDATE bounded_rows SET payload=NULL WHERE id=3").unwrap();
         let keys = vec!["3".into(), "2".into(), "1".into(), "3".into()];
         let batch = tx

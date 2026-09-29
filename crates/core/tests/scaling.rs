@@ -238,3 +238,65 @@ fn fsck_caches_shared_structure_and_records_per_schema() {
     dataset.records += 1;
     assert!(validator.dataset(&s, &dataset).is_err());
 }
+
+#[test]
+fn merge_delivers_first_conflict_without_collecting_all_changed_keys() {
+    let store = Counting::default();
+    let schema = object::digest("schema", b"shared");
+    let mut sides = Vec::new();
+    for value in ["left", "right"] {
+        let mut builder = tree::BulkBuilder::default();
+        for i in 0..2000 {
+            let key = format!("{i:06}");
+            let record = Record {
+                key: key.clone(),
+                fields: BTreeMap::from([("v".into(), Cell::Text(value.into()))]),
+            };
+            builder
+                .push(&store, key, save(&store, "record/v3", &record).unwrap())
+                .unwrap();
+        }
+        sides.push(Snapshot::from([(
+            "rows".into(),
+            Dataset {
+                schema: schema.clone(),
+                root: builder.finish(&store).unwrap(),
+                records: 2000,
+            },
+        )]));
+    }
+    store.reads.set(0);
+    let result = merge::three_way_streaming(
+        &store,
+        &Snapshot::new(),
+        &sides[0],
+        &sides[1],
+        &mut |_, _| Ok(BTreeMap::new()),
+        &mut |c| {
+            assert_eq!(c.key, "000000");
+            Err(Error::Invalid("stop at first conflict".into()))
+        },
+    );
+    assert!(result.is_err());
+    assert!(
+        store.reads.get() < 150,
+        "read {} objects before the first conflict",
+        store.reads.get()
+    );
+    let mut count = 0;
+    let result = merge::three_way_streaming(
+        &store,
+        &Snapshot::new(),
+        &sides[0],
+        &sides[1],
+        &mut |_, _| Ok(BTreeMap::new()),
+        &mut |c| {
+            assert_eq!(c.key, format!("{count:06}"));
+            count += 1;
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(count, 2000);
+    assert_eq!(result, sides[0]);
+}

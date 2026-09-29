@@ -28,7 +28,7 @@ fn depth_guard(depth: usize) -> Result<()> {
         Ok(())
     }
 }
-fn validate_key(key: &str) -> Result<()> {
+pub(crate) fn validate_key(key: &str) -> Result<()> {
     if key.len() > 8192 {
         return Err(Error::Invalid("record key exceeds 8192 bytes".into()));
     }
@@ -242,80 +242,108 @@ pub fn visit_diff(
     after: Option<&ObjectId>,
     visit: &mut dyn FnMut(Delta) -> Result<()>,
 ) -> Result<()> {
-    let mut a: Vec<_> = before
-        .into_iter()
-        .map(|id| DiffTask::Tree(id.clone(), 0))
-        .collect();
-    let mut b: Vec<_> = after
-        .into_iter()
-        .map(|id| DiffTask::Tree(id.clone(), 0))
-        .collect();
-    loop {
-        match (a.last(), b.last()) {
-            (None, None) => return Ok(()),
-            (Some(DiffTask::Tree(x, _)), Some(DiffTask::Tree(y, _))) if x == y => {
-                a.pop();
-                b.pop();
-            }
-            (Some(DiffTask::Tree(x, dx)), Some(DiffTask::Tree(y, dy))) => {
-                depth_guard(*dx)?;
-                depth_guard(*dy)?;
-                let (x, y, dx, dy) = (node(store, x)?, node(store, y)?, *dx, *dy);
-                // Expand the root with the earlier treap priority first. Keeping
-                // the other subtree intact allows shared children to align.
-                let order = priority(&x.key).cmp(&priority(&y.key));
-                if !order.is_gt() {
-                    expand(&mut a, x, dx)?;
+    let mut diff = Diff::new(store, before, after);
+    while let Some(delta) = diff.next()? {
+        visit(delta)?;
+    }
+    Ok(())
+}
+
+/// Resumable sorted traversal; retains only the two search stacks.
+pub(crate) struct Diff<'a> {
+    store: &'a dyn ObjectStore,
+    before: Vec<DiffTask>,
+    after: Vec<DiffTask>,
+}
+impl<'a> Diff<'a> {
+    pub(crate) fn new(
+        store: &'a dyn ObjectStore,
+        before: Option<&ObjectId>,
+        after: Option<&ObjectId>,
+    ) -> Self {
+        Self {
+            store,
+            before: before
+                .into_iter()
+                .map(|id| DiffTask::Tree(id.clone(), 0))
+                .collect(),
+            after: after
+                .into_iter()
+                .map(|id| DiffTask::Tree(id.clone(), 0))
+                .collect(),
+        }
+    }
+    pub(crate) fn next(&mut self) -> Result<Option<Delta>> {
+        let store = self.store;
+        let a = &mut self.before;
+        let b = &mut self.after;
+        loop {
+            match (a.last(), b.last()) {
+                (None, None) => return Ok(None),
+                (Some(DiffTask::Tree(x, _)), Some(DiffTask::Tree(y, _))) if x == y => {
+                    a.pop();
+                    b.pop();
                 }
-                if !order.is_lt() {
-                    expand(&mut b, y, dy)?;
+                (Some(DiffTask::Tree(x, dx)), Some(DiffTask::Tree(y, dy))) => {
+                    depth_guard(*dx)?;
+                    depth_guard(*dy)?;
+                    let (x, y, dx, dy) = (node(store, x)?, node(store, y)?, *dx, *dy);
+                    // Expand the root with the earlier treap priority first. Keeping
+                    // the other subtree intact allows shared children to align.
+                    let order = priority(&x.key).cmp(&priority(&y.key));
+                    if !order.is_gt() {
+                        expand(a, x, dx)?;
+                    }
+                    if !order.is_lt() {
+                        expand(b, y, dy)?;
+                    }
                 }
-            }
-            (Some(DiffTask::Tree(id, depth)), _) => {
-                let (n, depth) = (node(store, id)?, *depth);
-                expand(&mut a, n, depth)?;
-            }
-            (_, Some(DiffTask::Tree(id, depth))) => {
-                let (n, depth) = (node(store, id)?, *depth);
-                expand(&mut b, n, depth)?;
-            }
-            (Some(DiffTask::Entry(x, _)), Some(DiffTask::Entry(y, _))) if x == y => {
-                if let (Some(DiffTask::Entry(key, before)), Some(DiffTask::Entry(_, after))) =
-                    (a.pop(), b.pop())
-                    && before != after
-                {
-                    visit(Delta {
-                        key,
-                        before: Some(before),
-                        after: Some(after),
-                    })?;
+                (Some(DiffTask::Tree(id, depth)), _) => {
+                    let (n, depth) = (node(store, id)?, *depth);
+                    expand(a, n, depth)?;
                 }
-            }
-            (Some(DiffTask::Entry(x, _)), Some(DiffTask::Entry(y, _))) if x < y => {
-                if let Some(DiffTask::Entry(key, value)) = a.pop() {
-                    visit(Delta {
-                        key,
-                        before: Some(value),
-                        after: None,
-                    })?;
+                (_, Some(DiffTask::Tree(id, depth))) => {
+                    let (n, depth) = (node(store, id)?, *depth);
+                    expand(b, n, depth)?;
                 }
-            }
-            (Some(DiffTask::Entry(_, _)), None) => {
-                if let Some(DiffTask::Entry(key, value)) = a.pop() {
-                    visit(Delta {
-                        key,
-                        before: Some(value),
-                        after: None,
-                    })?;
+                (Some(DiffTask::Entry(x, _)), Some(DiffTask::Entry(y, _))) if x == y => {
+                    if let (Some(DiffTask::Entry(key, before)), Some(DiffTask::Entry(_, after))) =
+                        (a.pop(), b.pop())
+                        && before != after
+                    {
+                        return Ok(Some(Delta {
+                            key,
+                            before: Some(before),
+                            after: Some(after),
+                        }));
+                    }
                 }
-            }
-            _ => {
-                if let Some(DiffTask::Entry(key, value)) = b.pop() {
-                    visit(Delta {
-                        key,
-                        before: None,
-                        after: Some(value),
-                    })?;
+                (Some(DiffTask::Entry(x, _)), Some(DiffTask::Entry(y, _))) if x < y => {
+                    if let Some(DiffTask::Entry(key, value)) = a.pop() {
+                        return Ok(Some(Delta {
+                            key,
+                            before: Some(value),
+                            after: None,
+                        }));
+                    }
+                }
+                (Some(DiffTask::Entry(_, _)), None) => {
+                    if let Some(DiffTask::Entry(key, value)) = a.pop() {
+                        return Ok(Some(Delta {
+                            key,
+                            before: Some(value),
+                            after: None,
+                        }));
+                    }
+                }
+                _ => {
+                    if let Some(DiffTask::Entry(key, value)) = b.pop() {
+                        return Ok(Some(Delta {
+                            key,
+                            before: None,
+                            after: Some(value),
+                        }));
+                    }
                 }
             }
         }

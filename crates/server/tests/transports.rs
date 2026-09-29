@@ -268,3 +268,75 @@ fn non_loopback_requires_authentication() {
     };
     assert!(config.validate().is_err());
 }
+
+#[tokio::test(start_paused = true)]
+async fn http_admission_covers_body_reads_and_timeout_releases_capacity() {
+    use tokio_stream::StreamExt;
+    let directory = tempfile::tempdir().unwrap();
+    let service = http::router(Service::new(
+        Application::new(directory.path()),
+        Some("secret".into()),
+    ));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let tx = tx.clone();
+        let stream = tokio_stream::once(axum::body::Bytes::from_static(b"{ "))
+            .chain(tokio_stream::pending())
+            .map(move |bytes| {
+                tx.try_send(()).unwrap();
+                Ok::<_, std::io::Error>(bytes)
+            });
+        let request = Request::post("/v1/commands")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer secret")
+            .body(Body::from_stream(stream))
+            .unwrap();
+        tasks.push(tokio::spawn(service.clone().oneshot(request)));
+    }
+    for _ in 0..8 {
+        rx.recv().await.unwrap();
+    }
+    let request = |auth| {
+        Request::post("/v1/commands")
+            .header("content-type", "application/json")
+            .header("authorization", auth)
+            .body(Body::from("{"))
+            .unwrap()
+    };
+    assert_eq!(
+        service
+            .clone()
+            .oneshot(request("Bearer forged"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        service
+            .clone()
+            .oneshot(request("Bearer secret"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::LOCKED
+    );
+    tokio::time::advance(std::time::Duration::from_secs(30)).await;
+    for task in tasks {
+        let response = task.await.unwrap().unwrap();
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "deadline_exceeded");
+    }
+    // Reaching JSON validation proves ingress capacity was recovered.
+    assert_eq!(
+        service
+            .oneshot(request("Bearer secret"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+}

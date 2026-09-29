@@ -14,6 +14,8 @@ pub fn record(
         .map(|id| load(store, "record/v3", id))
         .transpose()
 }
+/// Update a record, leaving the Dataset unchanged on failure. Object stores may
+/// retain unreachable writes unless the caller rolls back its transaction.
 pub fn update(
     store: &dyn ObjectStore,
     dataset: &mut Dataset,
@@ -23,18 +25,18 @@ pub fn update(
     if value.is_some_and(|r| r.key != key) {
         return Err(Error::Invalid("record key mismatch".into()));
     }
+    tree::validate_key(key)?;
     let old = tree::get(store, dataset.root.as_ref(), key)?;
     let new = value.map(|r| save(store, "record/v3", r)).transpose()?;
-    if old.is_none() && new.is_some() {
-        dataset.records += 1;
+    let records = match (old.is_some(), new.is_some()) {
+        (false, true) => dataset.records.checked_add(1),
+        (true, false) => dataset.records.checked_sub(1),
+        _ => Some(dataset.records),
     }
-    if old.is_some() && new.is_none() {
-        dataset.records = dataset
-            .records
-            .checked_sub(1)
-            .ok_or_else(|| Error::Storage("invalid record count".into()))?;
-    }
-    dataset.root = tree::set(store, dataset.root.as_ref(), key, new.as_ref())?;
+    .ok_or_else(|| Error::Storage("invalid record count".into()))?;
+    let root = tree::set(store, dataset.root.as_ref(), key, new.as_ref())?;
+    dataset.records = records;
+    dataset.root = root;
     Ok(())
 }
 pub fn changed_fields(a: Option<&Record>, b: Option<&Record>) -> Vec<String> {
@@ -284,15 +286,7 @@ pub fn three_way_streaming(
                 })?;
                 merged.root = builder.finish(store)?;
             }
-            let mut keys = BTreeSet::new();
-            for side in [o, t] {
-                keys.extend(
-                    tree::diff(store, b.root.as_ref(), side.root.as_ref())?
-                        .into_iter()
-                        .map(|d| d.key),
-                );
-            }
-            for key in keys {
+            visit_merge_keys(store, Some(b), Some(o), Some(t), &mut |key| {
                 let br = record(store, Some(b), &key)?;
                 let or = record(store, Some(o), &key)?;
                 let tr = record(store, Some(t), &key)?;
@@ -337,7 +331,8 @@ pub fn three_way_streaming(
                         fields,
                     })?,
                 }
-            }
+                Ok(())
+            })?;
             result.insert(name.clone(), merged);
             continue;
         }
@@ -354,19 +349,7 @@ pub fn three_way_streaming(
             root: None,
             records: 0,
         });
-        let mut keys = BTreeSet::new();
-        for side in [o, t] {
-            keys.extend(
-                tree::diff(
-                    store,
-                    b.and_then(|d| d.root.as_ref()),
-                    side.and_then(|d| d.root.as_ref()),
-                )?
-                .into_iter()
-                .map(|d| d.key),
-            );
-        }
-        for key in keys {
+        visit_merge_keys(store, b, o, t, &mut |key| {
             let (base, ours, theirs) = (
                 record(store, b, &key)?,
                 record(store, o, &key)?,
@@ -383,8 +366,43 @@ pub fn three_way_streaming(
                     fields,
                 })?,
             }
-        }
+            Ok(())
+        })?;
         result.insert(name.clone(), merged);
     }
     Ok(result)
+}
+
+fn visit_merge_keys(
+    store: &dyn ObjectStore,
+    base: Option<&Dataset>,
+    ours: Option<&Dataset>,
+    theirs: Option<&Dataset>,
+    visit: &mut dyn FnMut(String) -> Result<()>,
+) -> Result<()> {
+    fn root(d: Option<&Dataset>) -> Option<&ObjectId> {
+        d.and_then(|d| d.root.as_ref())
+    }
+    let mut left = tree::Diff::new(store, root(base), root(ours));
+    let mut right = tree::Diff::new(store, root(base), root(theirs));
+    let mut a = left.next()?;
+    let mut b = right.next()?;
+    while a.is_some() || b.is_some() {
+        let order = match (&a, &b) {
+            (Some(a), Some(b)) => a.key.cmp(&b.key),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            _ => std::cmp::Ordering::Greater,
+        };
+        let key = if order.is_gt() { b.take() } else { a.take() };
+        if let Some(delta) = key {
+            visit(delta.key)?;
+        }
+        if !order.is_gt() {
+            a = left.next()?;
+        }
+        if !order.is_lt() {
+            b = right.next()?;
+        }
+    }
+    Ok(())
 }

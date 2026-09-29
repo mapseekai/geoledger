@@ -37,6 +37,7 @@ geoledger-thrift-gen = { path = "../thrift-gen", optional = true }
 tonic-prost-build = "0.14"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 geoledger-postgis.workspace = true
 postgres = "0.19"
 uuid.workspace = true

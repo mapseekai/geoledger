@@ -409,3 +409,38 @@ fn fsck_rejects_corrupt_references_order_and_keys_even_with_cached_subtrees() {
             .is_err()
     );
 }
+
+#[test]
+fn failed_update_preserves_dataset_and_rejects_count_overflow() {
+    struct FailTree(MemoryStore);
+    impl ObjectStore for FailTree {
+        fn put(&self, kind: &str, bytes: &[u8]) -> Result<ObjectId> {
+            if kind == "tree-node/v3" {
+                return Err(Error::Storage("injected tree failure".into()));
+            }
+            self.0.put(kind, bytes)
+        }
+        fn get(&self, id: &ObjectId, kind: &str) -> Result<Vec<u8>> {
+            self.0.get(id, kind)
+        }
+    }
+    let store = FailTree(MemoryStore::default());
+    let mut dataset = Dataset {
+        schema: object::digest("schema", b"test"),
+        root: None,
+        records: 0,
+    };
+    let initial = dataset.clone();
+    let mut record = row("a", "b");
+    record.key = "x".repeat(8193);
+    assert!(merge::update(&store, &mut dataset, &record.key, Some(&record)).is_err());
+    assert_eq!(dataset, initial);
+    assert_eq!(store.0.object_count(), 0, "validate keys before writes");
+    record.key = "1".into();
+    assert!(merge::update(&store, &mut dataset, &record.key, Some(&record)).is_err());
+    assert_eq!(dataset, initial);
+    dataset.records = u64::MAX;
+    let initial = dataset.clone();
+    assert!(merge::update(&store.0, &mut dataset, &record.key, Some(&record)).is_err());
+    assert_eq!(dataset, initial);
+}

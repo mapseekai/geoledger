@@ -25,6 +25,7 @@ pub struct Service {
     application: Application,
     token: Option<Arc<str>>,
     permits: Arc<tokio::sync::Semaphore>,
+    ingress: Arc<tokio::sync::Semaphore>,
 }
 impl Service {
     pub fn new(application: Application, token: Option<String>) -> Self {
@@ -32,6 +33,7 @@ impl Service {
             application,
             token: token.map(Arc::from),
             permits: Arc::new(tokio::sync::Semaphore::new(8)),
+            ingress: Arc::new(tokio::sync::Semaphore::new(8)),
         }
     }
     pub fn authorized(&self, authorization: Option<&str>) -> bool {

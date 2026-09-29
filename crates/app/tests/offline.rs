@@ -387,3 +387,66 @@ mod import_regression {
         }
     }
 }
+
+#[test]
+fn stalled_database_releases_repository_lock_without_changing_head() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let app = Application::new(dir.path());
+    let initial = app
+        .execute(Command::Init {
+            author: "test".into(),
+        })
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = std::thread::spawn(move || -> std::io::Result<()> {
+        let (mut socket, _) = listener.accept()?;
+        socket.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let mut size = [0; 4];
+        socket.read_exact(&mut size)?;
+        let size = u32::from_be_bytes(size) as usize;
+        assert!((8..=4096).contains(&size));
+        socket.read_exact(&mut vec![0; size - 4])?;
+        socket.write_all(b"R\0\0\0\x08\0\0\0\0Z\0\0\0\x05I")?;
+        let mut bytes = [0; 4096];
+        loop {
+            match socket.read(&mut bytes) {
+                Ok(0) => return Ok(()),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => return Ok(()),
+                Err(e) => return Err(e),
+            }
+        }
+    });
+    let provider = geoledger_postgis::PostgisProvider::new(format!(
+        "host=127.0.0.1 port={} user=stub dbname=stub sslmode=disable",
+        address.port()
+    ))
+    .with_statement_timeout(Duration::from_millis(10))
+    .unwrap();
+    let started = Instant::now();
+    let error = app
+        .clone()
+        .with_provider(Arc::new(provider))
+        .execute(Command::Import {
+            dataset: "rows".into(),
+            schema: "public".into(),
+            table: "rows".into(),
+            author: "test".into(),
+            message: None,
+        })
+        .unwrap_err();
+    assert_eq!(error.code(), "database_error");
+    assert!(started.elapsed() < Duration::from_secs(4));
+    peer.join().unwrap().unwrap();
+    let status = app.execute(Command::Status { limit: 1 }).unwrap();
+    assert_eq!(status["head"], initial["head"]);
+    assert_eq!(status["clean"], true);
+    assert!(status["datasets"].as_array().unwrap().is_empty());
+}

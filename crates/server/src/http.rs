@@ -53,6 +53,9 @@ async fn authorize(State(service): State<Service>, request: Request, next: Next)
             "Bearer token required",
         );
     }
+    let Ok(_permit) = service.ingress.try_acquire_owned() else {
+        return ApiError::Application(Error::Busy).into_response();
+    };
     next.run(request).await
 }
 async fn correlate(request: Request, next: Next) -> Response {
@@ -100,6 +103,7 @@ impl IntoResponse for ApiError {
             Self::Application(error) => error,
             Self::Extraction(status) => {
                 let (code, message) = match status {
+                    StatusCode::REQUEST_TIMEOUT => ("deadline_exceeded", "request body timeout"),
                     StatusCode::PAYLOAD_TOO_LARGE => ("payload_too_large", "request exceeds 4 MiB"),
                     StatusCode::UNSUPPORTED_MEDIA_TYPE => (
                         "unsupported_media_type",
@@ -128,10 +132,14 @@ struct ApiJson<T>(T);
 impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for ApiJson<T> {
     type Rejection = ApiError;
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
-        Json::<T>::from_request(request, state)
-            .await
-            .map(|Json(value)| Self(value))
-            .map_err(|error: JsonRejection| ApiError::Extraction(error.status()))
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            Json::<T>::from_request(request, state),
+        )
+        .await
+        .map_err(|_| ApiError::Extraction(StatusCode::REQUEST_TIMEOUT))?
+        .map(|Json(value)| Self(value))
+        .map_err(|error: JsonRejection| ApiError::Extraction(error.status()))
     }
 }
 struct ApiQuery<T>(T);
