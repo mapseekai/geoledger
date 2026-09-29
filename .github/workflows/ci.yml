@@ -61,7 +61,7 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
-          rustup toolchain install 1.88.0 --profile minimal
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt
           cargo +1.88.0 check --workspace --all-targets --locked
   windows:
     name: Windows portable features
