@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use spatial_version::{Application, Command};
+use geoledger::{Application, Command};
 #[test]
 fn init_log_branch_fsck_and_reflog_work_without_postgis() {
     let dir = tempfile::tempdir().unwrap();

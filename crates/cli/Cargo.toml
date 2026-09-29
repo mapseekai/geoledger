@@ -1,23 +1,26 @@
 [package]
-name = "spatial-version-cli"
+name = "geoledger-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "spatial-version"
+name = "gl"
 path = "src/main.rs"
 
 [dependencies]
-spatial-version.workspace = true
-spatial-version-core.workspace = true
-spatial-version-postgis.workspace = true
-spatial-version-server.workspace = true
+geoledger.workspace = true
+geoledger-core.workspace = true
+geoledger-postgis.workspace = true
+geoledger-server.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

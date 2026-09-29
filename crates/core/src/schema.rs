@@ -4,6 +4,7 @@ use crate::{Cell, Field, ObjectId, ObjectStore, Record, Result, Schema, load, sa
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+// Persisted schema key: retain it across the GeoLedger product rename.
 pub const COLUMN_ID: &str = "spatial-version.column-id";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

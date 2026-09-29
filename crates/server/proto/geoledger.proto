@@ -1,9 +1,9 @@
 syntax = "proto3";
-package spatial.version.v1;
+package geoledger.v1;
 
 // Versioned control-plane API. Common requests are typed. JSON result envelopes
 // preserve arbitrary dataset schemas and exact scalar strings in the MVP.
-service SpatialVersion {
+service GeoLedger {
   rpc Execute(ExecuteRequest) returns (JsonReply);
   rpc Status(StatusRequest) returns (JsonReply);
   rpc Import(ImportRequest) returns (JsonReply);

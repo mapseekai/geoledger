@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
-use spatial_version::Application;
-use spatial_version_server::{Service, thrift, thrift_proto::*};
+use geoledger::Application;
+use geoledger_server::{Service, thrift, thrift_proto::*};
 use std::{io, time::Duration};
 use volo::net::{
     conn::Conn,
@@ -51,7 +51,7 @@ async fn thrift_roundtrip_auth_errors_and_shared_application() {
             stop: rx,
         },
     ));
-    let client = SpatialVersionClientBuilder::new("spatial-version")
+    let client = GeoLedgerClientBuilder::new("geoledger")
         .address(address)
         .make_codec(DefaultMakeCodec::framed())
         .rpc_timeout(Some(Duration::from_secs(10)))
@@ -62,12 +62,13 @@ async fn thrift_roundtrip_auth_errors_and_shared_application() {
         .await
         .unwrap();
     match unauthorized {
-        MaybeException::Exception(SpatialVersionStatusException::Error(e)) => {
+        MaybeException::Exception(GeoLedgerStatusException::Error(e)) => {
             assert_eq!(e.code, "unauthenticated")
         }
         _ => panic!("missing authorization accepted"),
     }
     // Rejected calls must not create repository state.
+    assert!(!directory.path().join(".geoledger").exists());
     assert!(!directory.path().join(".spatial-version").exists());
     reply(
         client
@@ -122,7 +123,7 @@ async fn thrift_roundtrip_auth_errors_and_shared_application() {
         .await
         .unwrap();
     assert!(
-        matches!(invalid, MaybeException::Exception(SpatialVersionStatusException::Error(e)) if e.code == "invalid_argument")
+        matches!(invalid, MaybeException::Exception(GeoLedgerStatusException::Error(e)) if e.code == "invalid_argument")
     );
     let invalid = client
         .execute(
@@ -134,7 +135,7 @@ async fn thrift_roundtrip_auth_errors_and_shared_application() {
         .await
         .unwrap();
     assert!(
-        matches!(invalid, MaybeException::Exception(SpatialVersionExecuteException::Error(e)) if e.code == "invalid_argument")
+        matches!(invalid, MaybeException::Exception(GeoLedgerExecuteException::Error(e)) if e.code == "invalid_argument")
     );
     let missing = client
         .log(
@@ -147,21 +148,19 @@ async fn thrift_roundtrip_auth_errors_and_shared_application() {
         .await
         .unwrap();
     assert!(
-        matches!(missing, MaybeException::Exception(SpatialVersionLogException::Error(e)) if e.code == "not_found")
+        matches!(missing, MaybeException::Exception(GeoLedgerLogException::Error(e)) if e.code == "not_found")
     );
     let large = client
         .execute(
             ExecuteRequest {
-                command_json: " "
-                    .repeat(spatial_version_server::MAX_REQUEST_BYTES + 1)
-                    .into(),
+                command_json: " ".repeat(geoledger_server::MAX_REQUEST_BYTES + 1).into(),
             },
             auth,
         )
         .await
         .unwrap();
     assert!(
-        matches!(large, MaybeException::Exception(SpatialVersionExecuteException::Error(e)) if e.code == "invalid_argument")
+        matches!(large, MaybeException::Exception(GeoLedgerExecuteException::Error(e)) if e.code == "invalid_argument")
     );
     drop(client);
     stop.send(()).unwrap();
@@ -181,27 +180,24 @@ async fn thrift_refuses_non_loopback_without_token_before_binding() {
         None,
     )
     .await;
-    assert!(matches!(
-        result,
-        Err(spatial_version_core::Error::Invalid(_))
-    ));
+    assert!(matches!(result, Err(geoledger_core::Error::Invalid(_))));
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn thrift_postgis_schema_changes_roundtrip() {
-    let dsn = std::env::var("SV_TEST_DATABASE_URL").unwrap();
+    let dsn = std::env::var("GL_TEST_DATABASE_URL").unwrap();
     let mut db = postgres::Client::connect(&dsn, postgres::NoTls).unwrap();
     let name: String = db
         .query_one("SELECT current_database()", &[])
         .unwrap()
         .get(0);
-    assert_eq!(name, "spatial_version_test", "refusing a non-test database");
-    let schema = format!("svthrift_{}", uuid::Uuid::new_v4().simple());
+    assert_eq!(name, "geoledger_test", "refusing a non-test database");
+    let schema = format!("glthrift_{}", uuid::Uuid::new_v4().simple());
     db.batch_execute(&format!("CREATE SCHEMA {schema}; CREATE TABLE {schema}.roads (id bigint PRIMARY KEY, name text); INSERT INTO {schema}.roads VALUES (1, 'road')")).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let app = Application::new(directory.path()).with_provider(std::sync::Arc::new(
-        spatial_version_postgis::PostgisProvider::new(dsn),
+        geoledger_postgis::PostgisProvider::new(dsn),
     ));
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
@@ -209,7 +205,7 @@ fn thrift_postgis_schema_changes_roundtrip() {
         let address = listener.local_addr().unwrap();
         let (stop, rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(thrift::run(Service::new(app, None), StoppableIncoming { inner: listener.into(), stop: rx }));
-        let client = SpatialVersionClientBuilder::new("spatial-version")
+        let client = GeoLedgerClientBuilder::new("geoledger")
             .address(address).make_codec(DefaultMakeCodec::framed())
             .rpc_timeout(Some(Duration::from_secs(30))).build();
         use serde_json::json;

@@ -4,8 +4,8 @@ This repository root is the single Cargo workspace. All implementation crates
 live under crates/. Run workspace commands from this directory.
 
 Run cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings,
-and cargo test --workspace. Opt-in PostGIS tests require SV_TEST_DATABASE_URL and
-refuse databases not named spatial_version_test. Never run those fixtures on business data.
+and cargo test --workspace. Opt-in PostGIS tests require GL_TEST_DATABASE_URL and
+refuse databases not named geoledger_test. Never run those fixtures on business data.
 
 Keep core independent of databases/transports. Every transport must call Application.
 Do not disable working-copy triggers to implement checkout. Preserve the journal/marker

@@ -1,20 +1,20 @@
 pub mod thrift;
-pub use spatial_version_thrift_gen::spatial::version::v1 as thrift_proto;
+pub use geoledger_thrift_gen::geoledger::v1 as thrift_proto;
 pub mod grpc;
 pub mod http;
 pub mod proto {
-    tonic::include_proto!("spatial.version.v1");
+    tonic::include_proto!("geoledger.v1");
 }
 
+use geoledger::{Application, Command};
+use geoledger_core::{Error, Result};
 use serde_json::Value;
-use spatial_version::{Application, Command};
-use spatial_version_core::{Error, Result};
 use std::{net::SocketAddr, sync::Arc};
 use subtle::ConstantTimeEq;
 
 pub const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-pub const DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("spatial_version_descriptor");
+pub const DESCRIPTOR: &[u8] = tonic::include_file_descriptor_set!("geoledger_descriptor");
 
 #[derive(Clone)]
 pub struct Service {
@@ -112,13 +112,13 @@ impl ServerConfig {
     pub fn validate(&self) -> Result<()> {
         if self.token.as_ref().is_some_and(|t| t.len() < 24) {
             return Err(Error::Invalid(
-                "SV_API_TOKEN must contain at least 24 bytes".into(),
+                "GL_API_TOKEN must contain at least 24 bytes".into(),
             ));
         }
         if (!self.http.ip().is_loopback() || !self.grpc.ip().is_loopback()) && self.token.is_none()
         {
             return Err(Error::Invalid(
-                "non-loopback listeners require SV_API_TOKEN; put TLS at a trusted reverse proxy"
+                "non-loopback listeners require GL_API_TOKEN; put TLS at a trusted reverse proxy"
                     .into(),
             ));
         }
@@ -152,7 +152,7 @@ pub async fn serve(application: Application, config: ServerConfig) -> Result<()>
                 let _ = grpc_shutdown.changed().await;
             },
         );
-    tracing::info!(http=%config.http,grpc=%config.grpc,"spatial-version listeners started");
+    tracing::info!(http=%config.http,grpc=%config.grpc,"geoledger listeners started");
     let mut http_task = tokio::spawn(async move { http.await });
     let mut grpc_task = tokio::spawn(grpc);
     tokio::select! {

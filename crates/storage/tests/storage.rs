@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
-use spatial_version_core::{Error, ObjectStore};
-use spatial_version_storage::Repository;
+use geoledger_core::{Error, ObjectStore};
+use geoledger_storage::Repository;
 #[test]
 fn lock_is_cross_instance_and_released_on_drop() {
     let dir = tempfile::tempdir().unwrap();
@@ -72,8 +72,8 @@ fn staged_bulk_objects_are_readable_deduplicated_and_rolled_back() {
             Ok(added)
         })
         .unwrap();
-    let lost = spatial_version_core::object::digest("record/v1", b"lost");
-    let failed: spatial_version_core::Result<()> = repo.bulk_write(|store| {
+    let lost = geoledger_core::object::digest("record/v1", b"lost");
+    let failed: geoledger_core::Result<()> = repo.bulk_write(|store| {
         store.put("record/v1", b"lost")?;
         Err(Error::Invalid("simulated scan error".into()))
     });
@@ -93,4 +93,68 @@ fn staged_bulk_objects_are_readable_deduplicated_and_rolled_back() {
     assert_eq!(repo.get(&added, "record/v1").unwrap(), b"added");
     assert!(repo.get(&lost, "record/v1").is_err());
     assert_eq!(repo.verify_objects().unwrap(), 2);
+}
+
+#[test]
+fn new_repositories_use_geoledger_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    assert_eq!(repo.directory, dir.path().join(".geoledger"));
+    assert!(repo.directory.join("repository.sqlite").is_file());
+    assert!(!dir.path().join(".spatial-version").exists());
+}
+
+#[test]
+fn legacy_repositories_remain_readable_locked_and_cannot_be_reinitialized() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let id = repo.put("record/v1", b"legacy payload").unwrap();
+    drop(repo);
+    std::fs::rename(
+        dir.path().join(".geoledger"),
+        dir.path().join(".spatial-version"),
+    )
+    .unwrap();
+    let repo = Repository::open(dir.path()).unwrap();
+    assert_eq!(repo.directory, dir.path().join(".spatial-version"));
+    assert_eq!(repo.get(&id, "record/v1").unwrap(), b"legacy payload");
+    assert!(matches!(Repository::open(dir.path()), Err(Error::Busy)));
+    assert!(matches!(
+        Repository::init(dir.path()),
+        Err(Error::Conflict(_))
+    ));
+    assert!(!dir.path().join(".geoledger").exists());
+    assert_eq!(repo.verify_objects().unwrap(), 1);
+}
+
+#[test]
+fn ambiguous_repository_directories_fail_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    drop(Repository::init(dir.path()).unwrap());
+    std::fs::create_dir(dir.path().join(".spatial-version")).unwrap();
+    assert!(matches!(
+        Repository::open(dir.path()),
+        Err(Error::Conflict(_))
+    ));
+    assert!(matches!(
+        Repository::init(dir.path()),
+        Err(Error::Conflict(_))
+    ));
+    assert!(dir.path().join(".geoledger/repository.sqlite").is_file());
+    assert!(
+        !dir.path()
+            .join(".spatial-version/repository.sqlite")
+            .exists()
+    );
+}
+
+#[test]
+fn opening_a_missing_repository_does_not_create_either_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        Repository::open(dir.path()),
+        Err(Error::NotFound(_))
+    ));
+    assert!(!dir.path().join(".geoledger").exists());
+    assert!(!dir.path().join(".spatial-version").exists());
 }

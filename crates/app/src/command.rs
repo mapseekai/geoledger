@@ -1,5 +1,5 @@
+use geoledger_core::Record;
 use serde::{Deserialize, Serialize};
-use spatial_version_core::Record;
 fn head() -> String {
     "HEAD".into()
 }
@@ -21,7 +21,7 @@ pub enum Command {
     Upgrade,
     AlterSchema {
         dataset: String,
-        change: spatial_version_core::schema::SchemaEdit,
+        change: geoledger_core::schema::SchemaEdit,
         #[serde(default = "author")]
         author: String,
         #[serde(default)]

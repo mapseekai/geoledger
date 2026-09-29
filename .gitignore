@@ -1,6 +1,7 @@
 /target/
 .env
 /demo-repo/
+/.geoledger/
 /.spatial-version/
 *.log
 /.reference/

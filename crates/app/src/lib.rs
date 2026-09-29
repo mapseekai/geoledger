@@ -5,12 +5,12 @@ mod command;
 mod merge_working;
 use changes::*;
 pub use command::{Command, Resolution};
+pub use geoledger_core as core;
 use merge_working::*;
-pub use spatial_version_core as core;
 
 use core::{adapter::*, graph, merge, tree, *};
+use geoledger_storage::Repository;
 use serde_json::{Value, json};
-use spatial_version_storage::Repository;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -38,7 +38,7 @@ impl Application {
     }
     fn provider(&self) -> Result<&dyn WorkingCopyProvider> {
         self.provider.as_deref().ok_or_else(|| {
-            Error::Invalid("configure a working-copy provider (CLI: SV_DATABASE_URL)".into())
+            Error::Invalid("configure a working-copy provider (CLI: GL_DATABASE_URL)".into())
         })
     }
     pub fn execute(&self, command: Command) -> Result<Value> {

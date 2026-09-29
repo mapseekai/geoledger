@@ -1,6 +1,6 @@
-//! cargo run -p spatial-version --example library -- ./demo-repo
-use spatial_version::{Application, Command};
-use spatial_version_postgis::PostgisProvider;
+//! cargo run -p geoledger --example library -- ./demo-repo
+use geoledger::{Application, Command};
+use geoledger_postgis::PostgisProvider;
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .unwrap_or_else(|| "./demo-repo".to_owned());
     let mut app = Application::new(repository);
-    if let Ok(url) = std::env::var("SV_DATABASE_URL") {
+    if let Ok(url) = std::env::var("GL_DATABASE_URL") {
         app = app.with_provider(Arc::new(PostgisProvider::new(url)));
     }
     // Initialize/import explicitly through the CLI first. This example is read-only.

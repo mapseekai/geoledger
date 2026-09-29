@@ -7,10 +7,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use geoledger::Command;
+use geoledger_core::Error;
 use serde::Deserialize;
 use serde_json::json;
-use spatial_version::Command;
-use spatial_version_core::Error;
 
 pub fn router(service: Service) -> Router {
     Router::new()

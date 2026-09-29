@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Opt-in integration tests; fixtures remain inside the disposable test database.
+use geoledger::{Application, Command};
+use geoledger_postgis::PostgisProvider;
 use postgres::{Client, NoTls};
 use serde_json::{Value, json};
-use spatial_version::{Application, Command};
-use spatial_version_postgis::PostgisProvider;
 use std::sync::Arc;
 
 struct Fixture {
@@ -14,19 +14,16 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let dsn = std::env::var("SV_TEST_DATABASE_URL").expect("set disposable test database URL");
+        let dsn = std::env::var("GL_TEST_DATABASE_URL").expect("set disposable test database URL");
         let mut db = Client::connect(&dsn, NoTls).unwrap();
         let database: String = db
             .query_one("SELECT current_database()", &[])
             .unwrap()
             .get(0);
-        assert_eq!(
-            database, "spatial_version_test",
-            "refusing a non-test database"
-        );
+        assert_eq!(database, "geoledger_test", "refusing a non-test database");
         db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis")
             .unwrap();
-        let schema = format!("svtest_{}", uuid::Uuid::new_v4().simple());
+        let schema = format!("gltest_{}", uuid::Uuid::new_v4().simple());
         db.batch_execute(&format!(r#"
             CREATE SCHEMA "{schema}";
             CREATE TABLE "{schema}".roads (
@@ -90,7 +87,7 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn regression_nondefault_collations_are_rejected_before_import() {
     let mut f = Fixture::new();
     let head = f.head();
@@ -116,7 +113,7 @@ fn regression_nondefault_collations_are_rejected_before_import() {
             .unwrap(),
         );
         assert!(
-            matches!(result, Err(spatial_version::core::Error::Unsupported(_))),
+            matches!(result, Err(geoledger::core::Error::Unsupported(_))),
             "{result:?}"
         );
         let count: i64 =
@@ -138,7 +135,7 @@ fn regression_nondefault_collations_are_rejected_before_import() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn regression_collation_drift_blocks_destructive_commands() {
     let mut f = Fixture::new();
     f.sql("ALTER TABLE $roads ADD COLUMN note text; UPDATE $roads SET note='One'");
@@ -161,7 +158,7 @@ fn regression_collation_drift_blocks_destructive_commands() {
     ] {
         let result = f.app.execute(serde_json::from_value(command).unwrap());
         assert!(
-            matches!(result, Err(spatial_version::core::Error::Unsupported(_))),
+            matches!(result, Err(geoledger::core::Error::Unsupported(_))),
             "{result:?}"
         );
         assert_eq!(f.head(), head);
@@ -177,7 +174,7 @@ fn regression_collation_drift_blocks_destructive_commands() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn regression_unique_value_swaps_restore_across_batches() {
     for rows in [2, 1002] {
         let mut f = Fixture::new();
@@ -234,7 +231,7 @@ fn regression_unique_value_swaps_restore_across_batches() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn regression_historical_working_diff_includes_schema_changes() {
     let mut f = Fixture::new();
     let original = f.head();
@@ -254,7 +251,7 @@ fn regression_historical_working_diff_includes_schema_changes() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn regression_long_primary_key_import_rolls_back() {
     let mut f = Fixture::new();
     let head = f.head();
@@ -271,7 +268,7 @@ fn regression_long_primary_key_import_rolls_back() {
         .unwrap(),
     );
     assert!(
-        matches!(result, Err(spatial_version::core::Error::Invalid(_))),
+        matches!(result, Err(geoledger::core::Error::Invalid(_))),
         "{result:?}"
     );
     assert_eq!(f.head(), head);
@@ -289,7 +286,7 @@ fn regression_long_primary_key_import_rolls_back() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn schema_merge_refuses_lossy_values_and_accepts_exact_target_values() {
     let mut f = Fixture::new();
     f.run(json!({"op":"branch","name":"edit"}));
@@ -317,7 +314,7 @@ fn schema_merge_refuses_lossy_values_and_accepts_exact_target_values() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn deleted_column_conflicts_with_new_row_values_in_both_merge_directions() {
     for reverse in [false, true] {
         let mut f = Fixture::new();
@@ -337,7 +334,7 @@ fn deleted_column_conflicts_with_new_row_values_in_both_merge_directions() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn defaulted_column_is_filled_for_rows_from_the_older_schema() {
     let mut f = Fixture::new();
     f.run(json!({"op":"branch","name":"edit"}));
@@ -364,7 +361,7 @@ fn defaulted_column_is_filled_for_rows_from_the_older_schema() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn previews_have_a_byte_budget_and_keyset_restore_visits_every_dirty_row() {
     let mut f = Fixture::new();
     f.sql("INSERT INTO $roads(id,name,width) SELECT i,repeat('a',8192)||i,0 FROM generate_series(3,1502) i");
@@ -396,7 +393,7 @@ fn previews_have_a_byte_budget_and_keyset_restore_visits_every_dirty_row() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn column_rename_preserves_same_named_table_index_and_function() {
     let mut f = Fixture::new();
     f.db.batch_execute(&format!(
@@ -427,7 +424,7 @@ fn column_rename_preserves_same_named_table_index_and_function() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn import_tracks_edits_and_exact_numeric_geometry_encoding() {
     let mut f = Fixture::new();
     let record = f.run(json!({"op":"show","dataset":"roads","key":"1"}))["record"].clone();
@@ -461,7 +458,7 @@ fn import_tracks_edits_and_exact_numeric_geometry_encoding() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn independent_fields_merge_and_same_field_conflicts_are_resolved() {
     let mut f = Fixture::new();
     f.run(json!({"op":"branch","name":"draft"}));
@@ -510,9 +507,9 @@ fn independent_fields_merge_and_same_field_conflicts_are_resolved() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn restores_test_fixture_and_reverts_by_creating_a_new_commit() {
-    // Fixture refuses any database whose name is not spatial_version_test.
+    // Fixture refuses any database whose name is not geoledger_test.
     let mut f = Fixture::new();
     let initial = f.head();
     f.run(json!({"op":"branch","name":"draft"}));
@@ -533,7 +530,7 @@ fn restores_test_fixture_and_reverts_by_creating_a_new_commit() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn geometry_conflicts_abort_without_changing_working_copy() {
     let mut f = Fixture::new();
     f.run(json!({"op":"branch","name":"draft"}));
@@ -562,7 +559,7 @@ fn geometry_conflicts_abort_without_changing_working_copy() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn constraint_failure_keeps_head_and_database_unchanged() {
     let mut f = Fixture::new();
     f.run(json!({"op":"branch","name":"draft"}));
@@ -581,7 +578,7 @@ fn constraint_failure_keeps_head_and_database_unchanged() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn unsupported_schema_drift_is_rejected() {
     let mut f = Fixture::new();
     f.sql("ALTER TABLE $roads ALTER COLUMN width SET NOT NULL");
@@ -589,7 +586,7 @@ fn unsupported_schema_drift_is_rejected() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn schema_commands_preserve_history_and_restore_lossy_casts() {
     let mut f = Fixture::new();
     let initial = f.head();
@@ -657,7 +654,7 @@ fn schema_commands_preserve_history_and_restore_lossy_casts() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn external_ddl_is_detected_committed_and_discarded() {
     let mut f = Fixture::new();
     let initial = f.head();
@@ -693,7 +690,7 @@ fn external_ddl_is_detected_committed_and_discarded() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn invalid_schema_commands_roll_back_without_changing_head_or_table() {
     let mut f = Fixture::new();
     let head = f.head();
@@ -707,7 +704,7 @@ fn invalid_schema_commands_roll_back_without_changing_head_or_table() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn schema_rename_merges_with_independent_row_edits() {
     let mut f = Fixture::new();
     f.run(json!({"op":"branch","name":"draft"}));
@@ -730,10 +727,10 @@ fn schema_rename_merges_with_independent_row_edits() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn schema_commit_recovery_uses_the_new_binding() {
-    use spatial_version_core::PendingOperation;
-    use spatial_version_storage::Repository;
+    use geoledger_core::PendingOperation;
+    use geoledger_storage::Repository;
     let mut f = Fixture::new();
     let before = {
         Repository::open(f._directory.path())
@@ -767,10 +764,10 @@ fn schema_commit_recovery_uses_the_new_binding() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn legacy_upgrade_preserves_history_and_enables_external_rename() {
-    use spatial_version_core::{Commit, Snapshot, load, save, schema::COLUMN_ID};
-    use spatial_version_storage::Repository;
+    use geoledger_core::{Commit, Snapshot, load, save, schema::COLUMN_ID};
+    use geoledger_storage::Repository;
     let mut f = Fixture::new();
     let legacy_head;
     let repository_id;
@@ -814,7 +811,7 @@ fn legacy_upgrade_preserves_history_and_enables_external_rename() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn concurrent_schema_conflicts_fail_without_overwriting_working_copy() {
     let mut f = Fixture::new();
     f.run(json!({"op":"branch","name":"draft"}));
@@ -830,7 +827,7 @@ fn concurrent_schema_conflicts_fail_without_overwriting_working_copy() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn batched_inserts_updates_deletes_restore_exact_rows() {
     let mut f = Fixture::new();
     f.sql(
@@ -856,7 +853,7 @@ fn batched_inserts_updates_deletes_restore_exact_rows() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn quoted_column_rename_preserves_unique_constraint_and_indexes() {
     let mut f = Fixture::new();
     let initial = f.head();
@@ -875,7 +872,7 @@ fn quoted_column_rename_preserves_unique_constraint_and_indexes() {
 }
 
 #[test]
-#[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+#[ignore = "requires disposable GL_TEST_DATABASE_URL"]
 fn independent_schema_additions_merge_and_incompatible_renames_fail() {
     let f = Fixture::new();
     f.run(json!({"op":"branch","name":"draft"}));

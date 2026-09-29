@@ -9,11 +9,11 @@ rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
-spatial-version-core = { path = "crates/core" }
-spatial-version-storage = { path = "crates/storage" }
-spatial-version-postgis = { path = "crates/postgis" }
-spatial-version = { path = "crates/app" }
-spatial-version-server = { path = "crates/server" }
+geoledger-core = { path = "crates/core" }
+geoledger-storage = { path = "crates/storage" }
+geoledger-postgis = { path = "crates/postgis" }
+geoledger = { path = "crates/app" }
+geoledger-server = { path = "crates/server" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

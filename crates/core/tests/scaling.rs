@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use spatial_version_core::{graph, object::MemoryStore, tree, *};
+use geoledger_core::{graph, object::MemoryStore, tree, *};
 use std::{cell::Cell as Counter, collections::BTreeMap};
 
 #[derive(Default)]

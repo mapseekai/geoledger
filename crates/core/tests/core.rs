@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use spatial_version_core::{merge::merge_record, object::MemoryStore, tree, *};
+use geoledger_core::{merge::merge_record, object::MemoryStore, tree, *};
 use std::collections::BTreeMap;
 fn row(a: &str, b: &str) -> Record {
     Record {
@@ -176,4 +176,14 @@ fn regression_bulk_and_incremental_key_limits_match() {
     bulk.push(&store, "c".into(), value.clone()).unwrap();
     let expected = tree::set(&store, root.as_ref(), "c", Some(&value)).unwrap();
     assert_eq!(bulk.finish(&store).unwrap(), expected);
+}
+
+#[test]
+fn product_rename_preserves_object_and_schema_identities() {
+    // Captured from the original spatial-version implementation before the rename.
+    assert_eq!(
+        object::digest("record/v1", b"geoledger rename compatibility").as_str(),
+        "b12a591944627e77b064cd2b235cc20e5dde3ff24dc74c96680ee40747be883d"
+    );
+    assert_eq!(schema::COLUMN_ID, "spatial-version.column-id");
 }

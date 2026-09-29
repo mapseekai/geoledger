@@ -2,9 +2,9 @@
 //! tracked tables in stable order. Triggers remain enabled during checkout.
 mod schema_ops;
 use fallible_iterator::FallibleIterator;
+use geoledger_core::{adapter::*, *};
 use postgres::{Client, Config, Row, types::ToSql};
 use postgres_native_tls::MakeTlsConnector;
-use spatial_version_core::{adapter::*, *};
 use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
@@ -152,7 +152,7 @@ impl WorkingCopyProvider for PostgisProvider {
         })?;
         config
             .connect_timeout(Duration::from_secs(10))
-            .application_name("spatial-version");
+            .application_name("geoledger");
         let tls = native_tls::TlsConnector::builder()
             .build()
             .map_err(|_| Error::Database("failed to initialize TLS".into()))?;
@@ -270,7 +270,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
     fn edit_schema(
         &mut self,
         binding: &Binding,
-        edit: &spatial_version_core::schema::SchemaEdit,
+        edit: &geoledger_core::schema::SchemaEdit,
     ) -> Result<Schema> {
         schema_ops::edit(self, binding, edit)
     }
@@ -431,7 +431,7 @@ impl WorkingCopyTransaction for PostgisTransaction {
     fn verify(&mut self, dataset: &str, binding: &Binding) -> Result<()> {
         let actual = self.inspect(&binding.schema_name, &binding.table_name)?;
         if binding.schema.version == 1
-            && !spatial_version_core::schema::equivalent(&actual, &binding.schema)
+            && !geoledger_core::schema::equivalent(&actual, &binding.schema)
         {
             return Err(Error::Unsupported(format!(
                 "schema drift in dataset {dataset}; DDL is not versioned"
@@ -777,19 +777,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires disposable SV_TEST_DATABASE_URL"]
+    #[ignore = "requires disposable GL_TEST_DATABASE_URL"]
     #[allow(clippy::unwrap_used, clippy::expect_used)]
     fn statement_timeout_is_enforced_and_transaction_local() {
-        let dsn = std::env::var("SV_TEST_DATABASE_URL").expect("set disposable test database URL");
+        let dsn = std::env::var("GL_TEST_DATABASE_URL").expect("set disposable test database URL");
         let mut client = Client::connect(&dsn, postgres::NoTls).unwrap();
         let database: String = client
             .query_one("SELECT current_database()", &[])
             .unwrap()
             .get(0);
-        assert_eq!(
-            database, "spatial_version_test",
-            "refusing a non-test database"
-        );
+        assert_eq!(database, "geoledger_test", "refusing a non-test database");
         let setting = |client: &mut Client| -> String {
             client
                 .query_one("SHOW statement_timeout", &[])

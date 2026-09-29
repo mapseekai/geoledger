@@ -1,26 +1,26 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use spatial_version::{Application, Command, Resolution};
-use spatial_version_core::{Error, Result};
-use spatial_version_postgis::PostgisProvider;
-use spatial_version_server::ServerConfig;
+use geoledger::{Application, Command, Resolution};
+use geoledger_core::{Error, Result};
+use geoledger_postgis::PostgisProvider;
+use geoledger_server::ServerConfig;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 #[derive(Parser)]
 #[command(
-    name = "spatial-version",
+    name = "gl",
     version,
-    about = "PostGIS spatial data version control"
+    about = "GeoLedger: PostGIS spatial data version control"
 )]
 struct Cli {
     #[arg(long, global = true, default_value = ".")]
     repo: PathBuf,
-    #[arg(long, global = true, env = "SV_AUTHOR", default_value = "unknown")]
+    #[arg(long, global = true, env = "GL_AUTHOR", default_value = "unknown")]
     author: String,
     /// Name of an environment variable; credentials are never stored in the repository.
-    #[arg(long, global = true, default_value = "SV_DATABASE_URL")]
+    #[arg(long, global = true, default_value = "GL_DATABASE_URL")]
     database_env: String,
     /// Per-statement PostGIS timeout, including streaming reads during import.
-    #[arg(long, global = true, env = "SV_STATEMENT_TIMEOUT_SECS", default_value_t = 120,
+    #[arg(long, global = true, env = "GL_STATEMENT_TIMEOUT_SECS", default_value_t = 120,
         value_parser = clap::value_parser!(u64).range(1..=2_147_483))]
     statement_timeout_secs: u64,
     #[command(subcommand)]
@@ -162,7 +162,7 @@ enum Action {
         #[arg(long, default_value = "127.0.0.1:7880")]
         thrift: SocketAddr,
     },
-    /// Start HTTP API and gRPC listeners. Use SV_API_TOKEN for authentication.
+    /// Start HTTP API and gRPC listeners. Use GL_API_TOKEN for authentication.
     Serve {
         #[arg(long, default_value = "127.0.0.1:7878")]
         http: SocketAddr,
@@ -216,7 +216,7 @@ async fn run(cli: Cli) -> Result<()> {
             message,
         } => Command::AlterSchema {
             dataset,
-            change: spatial_version::core::schema::SchemaEdit::Add { name, data_type },
+            change: geoledger::core::schema::SchemaEdit::Add { name, data_type },
             author,
             message,
         },
@@ -227,7 +227,7 @@ async fn run(cli: Cli) -> Result<()> {
             message,
         } => Command::AlterSchema {
             dataset,
-            change: spatial_version::core::schema::SchemaEdit::Drop { name, discard },
+            change: geoledger::core::schema::SchemaEdit::Drop { name, discard },
             author,
             message,
         },
@@ -238,7 +238,7 @@ async fn run(cli: Cli) -> Result<()> {
             message,
         } => Command::AlterSchema {
             dataset,
-            change: spatial_version::core::schema::SchemaEdit::Rename { name, new_name },
+            change: geoledger::core::schema::SchemaEdit::Rename { name, new_name },
             author,
             message,
         },
@@ -249,7 +249,7 @@ async fn run(cli: Cli) -> Result<()> {
             message,
         } => Command::AlterSchema {
             dataset,
-            change: spatial_version::core::schema::SchemaEdit::AlterType { name, data_type },
+            change: geoledger::core::schema::SchemaEdit::AlterType { name, data_type },
             author,
             message,
         },
@@ -327,9 +327,7 @@ async fn run(cli: Cli) -> Result<()> {
             };
             let record = record
                 .map(|p| {
-                    if std::fs::metadata(&p)?.len()
-                        > spatial_version_server::MAX_REQUEST_BYTES as u64
-                    {
+                    if std::fs::metadata(&p)?.len() > geoledger_server::MAX_REQUEST_BYTES as u64 {
                         return Err(Error::Invalid("resolution file exceeds 4 MiB".into()));
                     }
                     Ok(serde_json::from_slice(&std::fs::read(p)?)?)
@@ -346,20 +344,20 @@ async fn run(cli: Cli) -> Result<()> {
         Action::Fsck => Command::Fsck,
         Action::Reflog { limit } => Command::Reflog { limit },
         Action::ServeThrift { thrift } => {
-            return spatial_version_server::thrift::serve(
+            return geoledger_server::thrift::serve(
                 app,
                 thrift,
-                std::env::var("SV_API_TOKEN").ok(),
+                std::env::var("GL_API_TOKEN").ok(),
             )
             .await;
         }
         Action::Serve { http, grpc } => {
-            return spatial_version_server::serve(
+            return geoledger_server::serve(
                 app,
                 ServerConfig {
                     http,
                     grpc,
-                    token: std::env::var("SV_API_TOKEN").ok(),
+                    token: std::env::var("GL_API_TOKEN").ok(),
                 },
             )
             .await;

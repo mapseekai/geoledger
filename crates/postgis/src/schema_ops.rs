@@ -1,5 +1,5 @@
 use super::*;
-use spatial_version_core::schema::{COLUMN_ID, SchemaEdit, column_id};
+use geoledger_core::schema::{COLUMN_ID, SchemaEdit, column_id};
 
 // Accept type declarations, never arbitrary SQL expressions or USING clauses.
 pub(super) fn type_sql(input: &str) -> Result<String> {
@@ -360,9 +360,9 @@ pub(super) fn replace(
     let table = table(&binding.schema_name, &binding.table_name)?;
     let mut before = binding.schema.clone();
     if before.version == 1 {
-        before = spatial_version_core::schema::with_identities(before);
+        before = geoledger_core::schema::with_identities(before);
     }
-    let target_ids = spatial_version_core::schema::with_identities(target.clone());
+    let target_ids = geoledger_core::schema::with_identities(target.clone());
     validate_transition(&before, &target_ids)?;
     session
         .client
@@ -390,7 +390,7 @@ pub(super) fn replace(
     }
     for (id, f) in &mut existing {
         if desired.get(id).is_some_and(|target| target.name != f.name) {
-            let temp = format!("sv_rename_{}", blake3::hash(id.as_bytes()).to_hex());
+            let temp = format!("gl_rename_{}", blake3::hash(id.as_bytes()).to_hex());
             let temp = &temp[..60];
             session
                 .client
@@ -448,7 +448,7 @@ pub(super) fn replace(
     target_binding.schema = target.clone();
     target_binding.column_ids = positions(session, &target_binding)?;
     let actual = current(session, &target_binding)?;
-    if !spatial_version_core::schema::equivalent(&actual, target) {
+    if !geoledger_core::schema::equivalent(&actual, target) {
         return Err(Error::Unsupported(
             "historical schema cannot be reproduced exactly".into(),
         ));

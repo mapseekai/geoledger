@@ -1,5 +1,5 @@
 [package]
-name = "spatial-version-core"
+name = "geoledger-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

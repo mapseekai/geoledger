@@ -1,3 +1,4 @@
+-- Persistent v1 schema and trigger identities are retained for existing repositories.
 CREATE SCHEMA IF NOT EXISTS _spatial_version;
 CREATE TABLE IF NOT EXISTS _spatial_version.format(version integer PRIMARY KEY CHECK(version=1));
 INSERT INTO _spatial_version.format VALUES(1) ON CONFLICT DO NOTHING;

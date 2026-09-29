@@ -1,13 +1,13 @@
 use crate::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, Service, proto::*, public_message};
-use spatial_version::Command;
-use spatial_version_core::Error;
+use geoledger::Command;
+use geoledger_core::Error;
 use tonic::{Request, Response, Status};
 
 pub struct Rpc {
     service: Service,
 }
-pub fn server(service: Service) -> spatial_version_server::SpatialVersionServer<Rpc> {
-    spatial_version_server::SpatialVersionServer::new(Rpc { service })
+pub fn server(service: Service) -> geo_ledger_server::GeoLedgerServer<Rpc> {
+    geo_ledger_server::GeoLedgerServer::new(Rpc { service })
         .max_decoding_message_size(MAX_REQUEST_BYTES)
         .max_encoding_message_size(MAX_RESPONSE_BYTES)
 }
@@ -67,7 +67,7 @@ fn limit(value: u32) -> usize {
 }
 
 #[tonic::async_trait]
-impl spatial_version_server::SpatialVersion for Rpc {
+impl geo_ledger_server::GeoLedger for Rpc {
     async fn execute(&self, r: Request<ExecuteRequest>) -> Result<Response<JsonReply>, Status> {
         self.check(&r)?;
         let p = r.into_inner();

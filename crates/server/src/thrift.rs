@@ -1,8 +1,8 @@
 //! Volo Thrift control plane. All operations enter the shared Application service.
 use crate::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, Service, public_message, thrift_proto::*};
+use geoledger::{Application, Command};
+use geoledger_core::{Error, Result};
 use pilota::FastStr;
-use spatial_version::{Application, Command};
-use spatial_version_core::{Error, Result};
 use std::net::SocketAddr;
 use volo_thrift::MaybeException;
 
@@ -96,23 +96,17 @@ macro_rules! method {
         }
     };
 }
-impl SpatialVersion for Rpc {
-    method!(
-        execute,
-        ExecuteRequest,
-        SpatialVersionExecuteException,
-        p,
-        {
-            if p.command_json.len() > MAX_REQUEST_BYTES {
-                return Err(Error::Invalid("command exceeds 4 MiB".into()));
-            }
-            Ok(serde_json::from_str(&p.command_json)?)
+impl GeoLedger for Rpc {
+    method!(execute, ExecuteRequest, GeoLedgerExecuteException, p, {
+        if p.command_json.len() > MAX_REQUEST_BYTES {
+            return Err(Error::Invalid("command exceeds 4 MiB".into()));
         }
-    );
+        Ok(serde_json::from_str(&p.command_json)?)
+    });
     method!(
         status,
         StatusRequest,
-        SpatialVersionStatusException,
+        GeoLedgerStatusException,
         p,
         Ok(Command::Status {
             limit: limit(p.limit)?
@@ -121,7 +115,7 @@ impl SpatialVersion for Rpc {
     method!(
         import,
         ImportRequest,
-        SpatialVersionImportException,
+        GeoLedgerImportException,
         p,
         Ok(Command::Import {
             dataset: p.dataset.to_string(),
@@ -138,7 +132,7 @@ impl SpatialVersion for Rpc {
     method!(
         commit,
         CommitRequest,
-        SpatialVersionCommitException,
+        GeoLedgerCommitException,
         p,
         Ok(Command::Commit {
             message: p.message.to_string(),
@@ -148,7 +142,7 @@ impl SpatialVersion for Rpc {
     method!(
         log,
         LogRequest,
-        SpatialVersionLogException,
+        GeoLedgerLogException,
         p,
         Ok(Command::Log {
             reference: reference(p.reference),
@@ -158,7 +152,7 @@ impl SpatialVersion for Rpc {
     method!(
         diff,
         DiffRequest,
-        SpatialVersionDiffException,
+        GeoLedgerDiffException,
         p,
         Ok(Command::Diff {
             from: option(p.from),
@@ -169,7 +163,7 @@ impl SpatialVersion for Rpc {
     method!(
         branch,
         BranchRequest,
-        SpatialVersionBranchException,
+        GeoLedgerBranchException,
         p,
         Ok(Command::Branch {
             name: p.name.to_string(),
@@ -179,7 +173,7 @@ impl SpatialVersion for Rpc {
     method!(
         switch,
         ReferenceRequest,
-        SpatialVersionSwitchException,
+        GeoLedgerSwitchException,
         p,
         Ok(Command::Switch {
             branch: p.reference.to_string()
@@ -188,7 +182,7 @@ impl SpatialVersion for Rpc {
     method!(
         merge,
         MergeRequest,
-        SpatialVersionMergeException,
+        GeoLedgerMergeException,
         p,
         Ok(Command::Merge {
             source: p.reference.to_string(),
@@ -199,7 +193,7 @@ impl SpatialVersion for Rpc {
     method!(
         revert,
         MergeRequest,
-        SpatialVersionRevertException,
+        GeoLedgerRevertException,
         p,
         Ok(Command::Revert {
             target: p.reference.to_string(),
@@ -210,7 +204,7 @@ impl SpatialVersion for Rpc {
     method!(
         reset,
         ResetRequest,
-        SpatialVersionResetException,
+        GeoLedgerResetException,
         p,
         Ok(Command::Reset {
             target: p.target.to_string(),
@@ -220,28 +214,28 @@ impl SpatialVersion for Rpc {
     method!(
         restore,
         RestoreRequest,
-        SpatialVersionRestoreException,
+        GeoLedgerRestoreException,
         p,
         Ok(Command::Restore { discard: p.discard })
     );
     method!(
         r#continue,
         Empty,
-        SpatialVersionContinueException,
+        GeoLedgerContinueException,
         _p,
         Ok(Command::MergeContinue)
     );
     method!(
         abort,
         Empty,
-        SpatialVersionAbortException,
+        GeoLedgerAbortException,
         _p,
         Ok(Command::MergeAbort)
     );
     method!(
         recover,
         Empty,
-        SpatialVersionRecoverException,
+        GeoLedgerRecoverException,
         _p,
         Ok(Command::Recover)
     );
@@ -261,7 +255,7 @@ pub async fn serve(
     }
     .validate()?;
     let listener = tokio::net::TcpListener::bind(address).await?;
-    tracing::info!(thrift=%listener.local_addr()?, "spatial-version Thrift listener started");
+    tracing::info!(thrift=%listener.local_addr()?, "geoledger Thrift listener started");
     run(
         Service::new(application, token),
         volo::net::incoming::DefaultIncoming::from(listener),
@@ -280,12 +274,12 @@ pub async fn run(service: Service, incoming: impl volo::net::incoming::MakeIncom
         MakeFramedCodec::new(MakeThriftCodec::default())
             .with_max_frame_size((MAX_RESPONSE_BYTES + 64 * 1024) as i32),
     );
-    SpatialVersionServer::new(Rpc::new(service))
+    GeoLedgerServer::new(Rpc::new(service))
         .make_codec(codec)
         .run(incoming)
         .await
         .map_err(|e| Error::Backend {
-            kind: spatial_version_core::BackendKind::Storage,
+            kind: geoledger_core::BackendKind::Storage,
             message: "Thrift server failed".into(),
             source: e,
         })

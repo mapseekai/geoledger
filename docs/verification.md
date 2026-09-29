@@ -1,5 +1,7 @@
 # 验证记录：2026-09-21
 
+> 本文保留改名前的历史命令、路径与实测结果；当前项目名为 `geoledger`，命令为 `gl`，配置使用 `GL_*`。重命名与兼容边界见 [重命名说明](rename-to-geoledger.md)。
+
 ## 实测环境
 
 macOS Apple Silicon；Rust 1.92.0；protoc 35.1；隔离容器中的 PostgreSQL 17.7 / PostGIS 3.6.1。

@@ -816,6 +816,112 @@ dependencies = [
 ]
 
 [[package]]
+name = "geoledger"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "geoledger-core",
+ "geoledger-postgis",
+ "geoledger-storage",
+ "postgres",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "geoledger-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "geoledger",
+ "geoledger-core",
+ "geoledger-postgis",
+ "geoledger-server",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "geoledger-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "geoledger-postgis"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "fallible-iterator 0.2.0",
+ "geoledger-core",
+ "native-tls",
+ "postgres",
+ "postgres-native-tls",
+ "serde_json",
+]
+
+[[package]]
+name = "geoledger-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "geoledger",
+ "geoledger-core",
+ "geoledger-postgis",
+ "geoledger-thrift-gen",
+ "http-body-util",
+ "pilota",
+ "postgres",
+ "prost",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tonic-reflection",
+ "tower",
+ "tracing",
+ "uuid",
+ "volo",
+ "volo-thrift",
+]
+
+[[package]]
+name = "geoledger-storage"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "geoledger-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "zstd",
+]
+
+[[package]]
+name = "geoledger-thrift-gen"
+version = "0.1.0"
+dependencies = [
+ "pilota",
+ "volo",
+ "volo-build",
+ "volo-thrift",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2836,111 +2942,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f99e664ecd2d85a68c87e3c7a3cfe691f647ea9e835de984aba4d54a41f817d4"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "spatial-version"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "postgres",
- "serde",
- "serde_json",
- "spatial-version-core",
- "spatial-version-postgis",
- "spatial-version-storage",
- "tempfile",
- "uuid",
-]
-
-[[package]]
-name = "spatial-version-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "serde_json",
- "spatial-version",
- "spatial-version-core",
- "spatial-version-postgis",
- "spatial-version-server",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "spatial-version-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "spatial-version-postgis"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "fallible-iterator 0.2.0",
- "native-tls",
- "postgres",
- "postgres-native-tls",
- "serde_json",
- "spatial-version-core",
-]
-
-[[package]]
-name = "spatial-version-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "http-body-util",
- "pilota",
- "postgres",
- "prost",
- "serde",
- "serde_json",
- "spatial-version",
- "spatial-version-core",
- "spatial-version-postgis",
- "spatial-version-thrift-gen",
- "subtle",
- "tempfile",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tonic-reflection",
- "tower",
- "tracing",
- "uuid",
- "volo",
- "volo-thrift",
-]
-
-[[package]]
-name = "spatial-version-storage"
-version = "0.1.0"
-dependencies = [
- "fs2",
- "rusqlite",
- "serde",
- "serde_json",
- "spatial-version-core",
- "tempfile",
- "zstd",
-]
-
-[[package]]
-name = "spatial-version-thrift-gen"
-version = "0.1.0"
-dependencies = [
- "pilota",
- "volo",
- "volo-build",
- "volo-thrift",
 ]
 
 [[package]]

@@ -4,15 +4,15 @@
 
 ## 工具命令
 
-下列 `sv` 代表 `./target/release/spatial-version --repo /path/to/repo`，连接通过 `SV_DATABASE_URL` 提供。
+下列 `gl` 代表 `./target/release/gl --repo /path/to/repo`，连接通过 `GL_DATABASE_URL` 提供。
 
 ```bash
-sv upgrade
-sv add-field roads note --type text -m '新增备注'
-sv rename-field roads note memo -m '备注字段改名'
-sv alter-field-type roads memo --type 'varchar(200)' -m '调整字段类型'
-sv drop-field roads memo --discard -m '删除备注'
-sv schema roads --reference HEAD
+gl upgrade
+gl add-field roads note --type text -m '新增备注'
+gl rename-field roads note memo -m '备注字段改名'
+gl alter-field-type roads memo --type 'varchar(200)' -m '调整字段类型'
+gl drop-field roads memo --discard -m '删除备注'
+gl schema roads --reference HEAD
 ```
 
 每条字段命令要求整个工作副本干净并自动提交。删除必须带 `--discard`。命令中的 DDL、记录扫描、dirty 清理和数据库标记在同一个 PostgreSQL 事务内完成；类型转换失败、约束失败或不支持的定义会回滚，不发布新 HEAD。
@@ -25,7 +25,7 @@ ALTER TABLE public.roads RENAME COLUMN note TO memo;
 ALTER TABLE public.roads ALTER COLUMN memo TYPE varchar(200) USING memo::varchar(200);
 ```
 
-随后执行 `sv status`、`sv diff`、`sv commit -m '调整字段结构'`。也支持外部 `DROP COLUMN`。稳定字段 ID 配合 PostgreSQL 表 OID / attnum 识别改名；删除后同名新增会得到不同 ID。多个受支持的 DDL 可以合并为一次提交，并可包含同时发生的数据编辑。
+随后执行 `gl status`、`gl diff`、`gl commit -m '调整字段结构'`。也支持外部 `DROP COLUMN`。稳定字段 ID 配合 PostgreSQL 表 OID / attnum 识别改名；删除后同名新增会得到不同 ID。多个受支持的 DDL 可以合并为一次提交，并可包含同时发生的数据编辑。
 
 `status` / 工作副本 `diff` 的 `schema_changes` 给出结构前后值。发生结构变化的数据集暂不逐行计算预览差异，而是标记 `requires_full_scan: true`；`record_counts_complete: false` 表示记录统计不完整，不能把显示的 0 当成没有数据变化。提交会完整扫描这些数据集，返回 `changed_records: null`、`rescanned_records` 及其他数据集的 `incremental_changed_records`。历史版本 diff 流式计数并返回精确记录变化总数，按 limit 和约 8 MiB 载荷预算解码预览。status/diff 的返回条数可能小于 limit；以 truncated 判断是否完整。单条大记录可超过预算。
 

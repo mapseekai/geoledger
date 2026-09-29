@@ -1,11 +1,11 @@
 //! Local, crash-consistent object storage. Immutable content and mutable refs use
 //! SQLite transactions; the application journals the separate PostGIS commit.
 use fs2::FileExt;
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Serialize, de::DeserializeOwned};
-use spatial_version_core::{
+use geoledger_core::{
     Error, ObjectId, ObjectStore, PendingOperation, RepositoryState, Result, object::digest,
 };
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{
     cell::RefCell,
     fs::{self, File, OpenOptions},
@@ -14,7 +14,23 @@ use std::{
 };
 
 const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
+// Persistent SQLite format identity; branding changes must not change this value.
 const APPLICATION_ID: i64 = 0x53565031;
+const REPOSITORY_DIRECTORY: &str = ".geoledger";
+const LEGACY_REPOSITORY_DIRECTORY: &str = ".spatial-version";
+
+fn existing_directory(root: &Path) -> Result<Option<PathBuf>> {
+    let current = root.join(REPOSITORY_DIRECTORY);
+    let legacy = root.join(LEGACY_REPOSITORY_DIRECTORY);
+    match (current.try_exists()?, legacy.try_exists()?) {
+        (true, true) => Err(Error::Conflict(
+            "both .geoledger and .spatial-version exist; refusing an ambiguous repository".into(),
+        )),
+        (true, false) => Ok(Some(current)),
+        (false, true) => Ok(Some(legacy)),
+        (false, false) => Ok(None),
+    }
+}
 fn db_error(e: rusqlite::Error) -> Error {
     Error::storage_source(e.to_string(), e)
 }
@@ -29,7 +45,10 @@ pub struct Repository {
 impl Repository {
     pub fn init(root: &Path) -> Result<Self> {
         fs::create_dir_all(root)?;
-        let directory = root.join(".spatial-version");
+        if existing_directory(root)?.is_some() {
+            return Err(Error::Conflict("repository already exists".into()));
+        }
+        let directory = root.join(REPOSITORY_DIRECTORY);
         fs::create_dir(&directory).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
                 Error::Conflict("repository already exists".into())
@@ -53,7 +72,8 @@ impl Repository {
         Ok(repo)
     }
     pub fn open(root: &Path) -> Result<Self> {
-        let directory = root.join(".spatial-version");
+        let directory = existing_directory(root)?
+            .ok_or_else(|| Error::NotFound(format!("repository at {}", root.display())))?;
         if !directory.join("repository.sqlite").is_file() {
             return Err(Error::NotFound(format!("repository at {}", root.display())));
         }

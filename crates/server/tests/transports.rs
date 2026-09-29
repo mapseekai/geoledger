@@ -3,9 +3,9 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use geoledger::Application;
+use geoledger_server::{Service, grpc, http, proto};
 use http_body_util::BodyExt;
-use spatial_version::Application;
-use spatial_version_server::{Service, grpc, http, proto};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -72,7 +72,7 @@ async fn grpc_roundtrip_uses_real_http2_and_typed_methods() {
             ),
     );
     let mut client =
-        proto::spatial_version_client::SpatialVersionClient::connect(format!("http://{address}"))
+        proto::geo_ledger_client::GeoLedgerClient::connect(format!("http://{address}"))
             .await
             .unwrap();
     client
@@ -110,7 +110,7 @@ async fn grpc_roundtrip_uses_real_http2_and_typed_methods() {
 }
 #[test]
 fn non_loopback_requires_authentication() {
-    let config = spatial_version_server::ServerConfig {
+    let config = geoledger_server::ServerConfig {
         http: "0.0.0.0:7878".parse().unwrap(),
         grpc: "127.0.0.1:7879".parse().unwrap(),
         token: None,

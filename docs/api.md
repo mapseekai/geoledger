@@ -2,9 +2,9 @@
 
 ## Rust 库
 
-依赖 `crates/app` 的包 `spatial-version`，使用 `Application::new(path)`、`with_provider(Arc<dyn WorkingCopyProvider>)` 和 `execute(Command)`。返回 `Result<serde_json::Value, spatial_version_core::Error>`。同步数据库连接在调用线程内创建，异步宿主应通过 spawn_blocking 执行。
+依赖 `crates/app` 的包 `geoledger`，使用 `Application::new(path)`、`with_provider(Arc<dyn WorkingCopyProvider>)` 和 `execute(Command)`。返回 `Result<serde_json::Value, geoledger_core::Error>`。同步数据库连接在调用线程内创建，异步宿主应通过 spawn_blocking 执行。
 
-实际示例：`cargo run -p spatial-version --example library -- ./demo-repo`。先通过 CLI 初始化并导入工作副本；示例本身只查询状态。
+实际示例：`cargo run -p geoledger --example library -- ./demo-repo`。先通过 CLI 初始化并导入工作副本；示例本身只查询状态。
 
 ## 统一命令协议
 
@@ -87,19 +87,19 @@ status 的记录差异在 `diff.changes`，汇总在 `summary`，而不是顶层
 
 ## gRPC
 
-协议：`crates/server/proto/spatial_version.proto`，包 `spatial.version.v1`，服务 `SpatialVersion`。提供 Execute、Status、Import、Commit、Log、Diff、Branch、Switch、Merge、Revert、Reset、Restore、Continue、Abort、Recover。
+协议：`crates/server/proto/geoledger.proto`，包 `geoledger.v1`，服务 `GeoLedger`。提供 Execute、Status、Import、Commit、Log、Diff、Branch、Switch、Merge、Revert、Reset、Restore、Continue、Abort、Recover。
 
 `Switch` 使用 `ReferenceRequest.reference`；`Merge` / `Revert` 使用 `MergeRequest.reference`。响应暂为 JsonReply.json，需再次按 JSON 解码；这是真实 gRPC 传输，但尚不是完全类型化的业务响应模型。
 
 ```bash
-grpcurl -plaintext -import-path crates/server/proto -proto spatial_version.proto \
-  -H "Authorization: Bearer $SV_API_TOKEN" \
-  -d '{"reference":"HEAD","limit":20}' 127.0.0.1:7879 spatial.version.v1.SpatialVersion/Log
+grpcurl -plaintext -import-path crates/server/proto -proto geoledger.proto \
+  -H "Authorization: Bearer $GL_API_TOKEN" \
+  -d '{"reference":"HEAD","limit":20}' 127.0.0.1:7879 geoledger.v1.GeoLedger/Log
 
-grpcurl -plaintext -import-path crates/server/proto -proto spatial_version.proto \
-  -H "Authorization: Bearer $SV_API_TOKEN" \
+grpcurl -plaintext -import-path crates/server/proto -proto geoledger.proto \
+  -H "Authorization: Bearer $GL_API_TOKEN" \
   -d '{"command_json":"{\"op\":\"branches\"}"}' \
-  127.0.0.1:7879 spatial.version.v1.SpatialVersion/Execute
+  127.0.0.1:7879 geoledger.v1.GeoLedger/Execute
 ```
 
 支持 gRPC reflection，当前 reflection 仅暴露公开协议元数据，未绑定业务 token 校验；业务方法均执行鉴权。外部部署需要网关限制 reflection 或关闭它。
@@ -108,15 +108,15 @@ grpcurl -plaintext -import-path crates/server/proto -proto spatial_version.proto
 
 Bearer token 应是至少 24 字节的随机值，HTTP/gRPC 使用同一令牌。仓库路径和数据库连接在服务启动时绑定，调用者不能通过请求指定任意路径或数据库。没有租户隔离和用户权限分级。
 
-请求大小上限 4 MiB，回复序列化上限 16 MiB，同时执行槽位 8。回复在阻塞工作线程中使用有界 writer 编码一次，HTTP/gRPC 复用编码结果；槽位在编码完成后才释放。跨进程仓库文件锁使同仓库操作串行，竞争时可返回 busy；初版不要把并发槽位当成多分支并发写能力。数据库等待表锁上限 5 秒、语句超时默认 120 秒，可用 SV_STATEMENT_TIMEOUT_SECS 配置。初始导入仍可能执行多条语句，并无统一总任务时限。
+请求大小上限 4 MiB，回复序列化上限 16 MiB，同时执行槽位 8。回复在阻塞工作线程中使用有界 writer 编码一次，HTTP/gRPC 复用编码结果；槽位在编码完成后才释放。跨进程仓库文件锁使同仓库操作串行，竞争时可返回 busy；初版不要把并发槽位当成多分支并发写能力。数据库等待表锁上限 5 秒、语句超时默认 120 秒，可用 GL_STATEMENT_TIMEOUT_SECS 配置。初始导入仍可能执行多条语句，并无统一总任务时限。
 
 客户端断开不表示数据库操作被取消。不要自动重试可能已经成功的非幂等写入；先查询状态、历史与 recover。服务尚无请求幂等键，也没有 HTTP OpenAPI 自动生成文件。
 
 ## Volo Thrift
 
-IDL：`crates/thrift-gen/idl/spatial_version.thrift`，Rust 命名空间 `spatial.version.v1`，服务 `SpatialVersion`。使用 Volo 0.12.4、volo-thrift 0.12.6、volo-build 0.12.3；构建时需要当前工具链安装 rustfmt（`rustup component add rustfmt`）。版本由 Cargo.lock 固定，建议 `cargo build --workspace --locked`。
+IDL：`crates/thrift-gen/idl/geoledger.thrift`，Rust 命名空间 `geoledger.v1`，服务 `GeoLedger`。使用 Volo 0.12.4、volo-thrift 0.12.6、volo-build 0.12.3；构建时需要当前工具链安装 rustfmt（`rustup component add rustfmt`）。版本由 Cargo.lock 固定，建议 `cargo build --workspace --locked`。
 
-启动：`spatial-version --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880`。它是独立进程入口，Volo 负责 SIGINT/SIGTERM 的连接排空。数据库连接和 SQL 超时沿用 CLI 全局配置。与另一个入口同时操作同一仓库时仍遵守仓库锁。
+启动：`gl --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880`。它是独立进程入口，Volo 负责 SIGINT/SIGTERM 的连接排空。数据库连接和 SQL 超时沿用 CLI 全局配置。与另一个入口同时操作同一仓库时仍遵守仓库锁。
 
 提供 `execute`、`status`、`import`、`commit`、`log`、`diff`、`branch`、`switch`、`merge`、`revert`、`reset`、`restore`、`continue`、`abort`、`recover`，语义与上述 gRPC 对应。所有方法接受 `(request, optional authorization)`，后者为完整 `Bearer <token>` 字符串。IDL 的 request 字段是 required；空 author 默认 unknown，空 schema 默认 public，空 reference/分支起点默认 HEAD（switch 除外），limit=0 默认 100，负数返回 invalid_argument。
 
@@ -125,11 +125,11 @@ IDL：`crates/thrift-gen/idl/spatial_version.thrift`，Rust 命名空间 `spatia
 客户端使用 **Framed transport + Binary protocol**，不要使用默认 TTHeader 客户端配置：Rust 示例通过 `DefaultMakeCodec::framed()` 显式选择。其他语言可从此 IDL 生成 Apache Thrift 客户端，使用 TFramedTransport 和 TBinaryProtocol；本轮自动化验证的是 Volo Rust 客户端。读取示例：
 
 ```bash
-cargo run -p spatial-version-server --example thrift_client -- 127.0.0.1:7880
+cargo run -p geoledger-server --example thrift_client -- 127.0.0.1:7880
 ```
 
 四种字段变更通过 `execute(ExecuteRequest { command_json }, authorization)` 传入统一命令协议中的 `alter_schema` JSON。所有方法调用同一个 Service/Application，复用 8 个执行槽位、阻塞任务隔离和 16 MiB JSON 响应上限。解码后的 request 按 Binary 编码大小限制为 4 MiB；帧上限为 16 MiB + 64 KiB，以容纳回复和协议开销。这两个限制含义不同，帧解码仍可能先分配大于 4 MiB 的缓冲区。
 
 ### 生成代码与内存安全边界
 
-`crates/thrift-gen` 构建时从 IDL 生成绑定，依赖的 Volo 生成器会产生含 unsafe 的多服务路由实现。因此只有该生成 crate 不继承 workspace 的 `unsafe_code = forbid`；手写代码继续禁止 unsafe。当前服务器使用类型化 `SpatialVersionServer::new`，不使用字节路由器，也未启用 Volo 的 `unsafe-codec` / `unsafe_unchecked` 特性。生成代码不手工修改。升级生成器时应重新检查这条边界和 MSRV；当前锁文件把间接依赖 ordered-float 保持在支持 Rust 1.88 的 5.1.0。
+`crates/thrift-gen` 构建时从 IDL 生成绑定，依赖的 Volo 生成器会产生含 unsafe 的多服务路由实现。因此只有该生成 crate 不继承 workspace 的 `unsafe_code = forbid`；手写代码继续禁止 unsafe。当前服务器使用类型化 `GeoLedgerServer::new`，不使用字节路由器，也未启用 Volo 的 `unsafe-codec` / `unsafe_unchecked` 特性。生成代码不手工修改。升级生成器时应重新检查这条边界和 MSRV；当前锁文件把间接依赖 ordered-float 保持在支持 Rust 1.88 的 5.1.0。

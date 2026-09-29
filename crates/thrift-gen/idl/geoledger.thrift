@@ -1,7 +1,7 @@
-namespace rs spatial.version.v1
+namespace rs geoledger.v1
 
 // Commands and result JSON follow the same v1 contract as HTTP/gRPC.
-// authorization contains "Bearer <SV_API_TOKEN>" when enabled.
+// authorization contains "Bearer <GL_API_TOKEN>" when enabled.
 exception ApiError {
   1: required string code,
   2: required string message
@@ -71,7 +71,7 @@ struct RestoreRequest {
   1: required bool discard
 }
 
-service SpatialVersion {
+service GeoLedger {
   JsonReply execute(1: ExecuteRequest request, 2: optional string authorization) throws (1: ApiError error),
   JsonReply status(1: StatusRequest request, 2: optional string authorization) throws (1: ApiError error),
   JsonReply import(1: ImportRequest request, 2: optional string authorization) throws (1: ApiError error),

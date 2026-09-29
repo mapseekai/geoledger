@@ -1,5 +1,7 @@
 # 真实大数据测试：2026-09-22
 
+> 本文保留改名前的历史命令、路径与实测结果；当前项目名为 `geoledger`，命令为 `gl`，配置使用 `GL_*`。重命名与兼容边界见 [重命名说明](rename-to-geoledger.md)。
+
 ## 环境与输入
 
 macOS arm64，Rust 1.92.0 release 构建；本地 Docker `postgres-container`，PostgreSQL 17.7 / PostGIS 3.6.1，GDAL 3.12.2。输入源文件未修改。
