@@ -15,8 +15,8 @@ journal/marker ordering, schema validation, clean-copy checks and conflicting-he
 Use the current GeoLedger format for objects, schema, repository state and database tracking.
 Encoding changes receive explicit format versions. During development, initialize fresh
 repositories and import source tables into dedicated current-format working copies.
-All entry points share the default author mapseekai and preserve explicit author overrides.
 
 Document implemented behavior, operating prerequisites and measured validation scope.
-Keep planned work in the roadmap. Use repository-relative links to tracked files;
-identify generated paths and service addresses through their setup commands.
+Keep README as the overview, with guides for getting started, daily operations, API,
+and development. Keep each topic in one place. Use repository-relative links to tracked
+files; identify generated paths and service addresses through their setup commands.

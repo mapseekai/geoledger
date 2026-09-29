@@ -4,13 +4,34 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
 import tomllib
 import zipfile
+from urllib.parse import quote, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def render_document(source: Path, names: dict[Path, str], commit: str) -> str:
+    """Keep guide links local; pin source references to the packaged revision."""
+    def rewrite(match: re.Match[str]) -> str:
+        target = urlsplit(match.group(2))
+        if target.scheme:
+            return match.group(0)
+        path = (source.parent / unquote(target.path)).resolve() if target.path else source.resolve()
+        relative = path.relative_to(ROOT).as_posix()
+        if not path.is_file():
+            raise ValueError(f'Missing documentation target: {relative}')
+        destination = names.get(path)
+        if destination is None:
+            destination = f'https://github.com/mapseekai/geoledger/blob/{commit}/{quote(relative)}'
+        if target.fragment:
+            destination += '#' + target.fragment
+        return match.group(1) + destination + match.group(3)
+    return re.sub(r'(\[[^\]\n]+\]\()([^\s)]+)(\))', rewrite, source.read_text(encoding='utf-8'))
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -28,22 +49,32 @@ def main() -> None:
     stage.mkdir()
     sources = {
         args.binary: 'gl.exe',
-        ROOT / 'docs/windows-testing.md': 'README-WINDOWS.md',
+        ROOT / 'README.md': 'README.md',
+        ROOT / 'docs/getting-started.md': 'README-WINDOWS.md',
+        ROOT / 'docs/user-guide.md': 'USER-GUIDE.md',
+        ROOT / 'docs/api.md': 'API.md',
+        ROOT / 'docs/development.md': 'DEVELOPMENT.md',
+        ROOT / 'crates/server/proto/geoledger.proto': 'geoledger.proto',
+        ROOT / 'crates/thrift-gen/idl/geoledger.thrift': 'geoledger.thrift',
         ROOT / 'LICENSE': 'LICENSE',
         ROOT / '.env.example': 'config.env.example',
         ROOT / 'scripts/smoke-windows.ps1': 'smoke-test.ps1',
         ROOT / 'scripts/windows-test-data.sql': 'test-data.sql',
     }
+    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    names = {source.resolve(): destination for source, destination in sources.items()}
     for source, destination in sources.items():
-        shutil.copyfile(source, stage / destination)
+        if source.suffix == '.md':
+            (stage / destination).write_text(render_document(source, names, commit), encoding='utf-8')
+        else:
+            shutil.copyfile(source, stage / destination)
     info = {
         'version': version,
-        'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+        'commit': commit,
         'target': 'x86_64-pc-windows-msvc',
         'profile': 'release',
         'features': ['cli', 'http', 'grpc'],
         'format_version': 3,
-        'default_author': 'mapseekai',
         'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
         'c_runtime': 'static',
         'signature': 'unsigned',

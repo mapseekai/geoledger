@@ -18,6 +18,7 @@ LINK = re.compile(r"\[[^\]\n]+\]\(([^\s)]+)(?:\s+\"[^\"]*\")?\)")
 URL = re.compile(r"https?://[^\s<>\)\]\"'`]+")
 STALE = re.compile(r"spatial[-_.]version|SpatialVersion|\bSV_|/Users/|/tmp/|/path/to/|\.reference/|rename-to-geoledger")
 NEGATIVE = re.compile(r"不支持|尚未|尚无|暂不|不兼容|未实现")
+AUTHOR_NOTE = re.compile(r"默认作者|默认署名|作者.{0,20}(?:默认|mapseekai)|default[ _-]author", re.IGNORECASE)
 
 
 def anchors(path: Path) -> set[str]:
@@ -60,14 +61,14 @@ def main() -> int:
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT
     ).decode().split("\0")
     tracked = {name for name in indexed if name and (ROOT / name).is_file()}
-    documents = [ROOT / "README.md", ROOT / "AGENTS.md", *sorted((ROOT / "docs").glob("*.md"))]
+    documents = [ROOT / "README.md", ROOT / "AGENTS.md", *sorted((ROOT / "docs").rglob("*.md"))]
     errors: list[str] = []
     external: set[str] = set()
     local_count = 0
     for document in documents:
         text = document.read_text(encoding="utf-8")
         label = document.relative_to(ROOT)
-        for pattern in [STALE, NEGATIVE]:
+        for pattern in [STALE, NEGATIVE, AUTHOR_NOTE]:
             for match in pattern.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1
                 errors.append(f"{label}:{line}: review terminology: {match.group()}")

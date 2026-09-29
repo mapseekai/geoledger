@@ -1,96 +1,75 @@
-# GeoLedger API v1
+# API
 
-## Rust 与统一命令
+[项目概览](../README.md) · [快速开始](getting-started.md) · [功能指南](user-guide.md) · [开发说明](development.md)
 
-依赖 [geoledger 应用包](../crates/app/Cargo.toml)，通过 `Application::new(path)`、`with_provider(Arc<dyn WorkingCopyProvider>)` 和 `execute(Command)` 调用，返回 `Result<serde_json::Value, geoledger_core::Error>`。同步调用在当前线程执行，异步宿主使用 `spawn_blocking`。示例见 [library.rs](../crates/app/examples/library.rs)。
+## 统一命令
 
-HTTP `POST /v1/commands`、gRPC `Execute` 和 Thrift `execute` 接收同一 Command JSON。完整字段定义见 [command.rs](../crates/app/src/command.rs)。作者省略时统一为 `mapseekai`；类型化 gRPC / Thrift 的空作者同样使用该值。显式作者优先。schema 默认 `public`，查询起点默认 `HEAD`，limit 默认 100、最多 1000 项。请求字段按声明严格校验。
-
-以下每行是一个独立请求：
+Rust、HTTP、gRPC 和 Thrift 共用 Application。HTTP `POST /v1/commands`、gRPC `Execute`、Thrift `execute` 接收相同 JSON。以下每行是一个独立请求，完整字段见 [Command 定义](../crates/app/src/command.rs)：
 
 ```json
-{"op":"init","author":"mapseekai"}
-{"op":"import","dataset":"roads","schema":"public","table":"roads"}
+{"op":"init"}
+{"op":"import","dataset":"roads","schema":"geoledger_demo","table":"roads"}
 {"op":"status","limit":100}
-{"op":"diff","from":"main","to":"draft","limit":100}
 {"op":"commit","message":"更新道路"}
-{"op":"log","reference":"HEAD","limit":100}
-{"op":"show","reference":"HEAD","dataset":"roads","key":"1001"}
-{"op":"schema","dataset":"roads","reference":"HEAD"}
+{"op":"log","reference":"HEAD","limit":20}
 {"op":"alter_schema","dataset":"roads","change":{"action":"add","name":"note","data_type":"text"}}
-{"op":"alter_schema","dataset":"roads","change":{"action":"rename","name":"note","new_name":"memo"}}
-{"op":"alter_schema","dataset":"roads","change":{"action":"alter_type","name":"memo","data_type":"varchar(200)"}}
-{"op":"alter_schema","dataset":"roads","change":{"action":"drop","name":"memo","discard":true}}
-```
-
-```json
-{"op":"branches"}
-{"op":"branch","name":"draft","from":"HEAD"}
-{"op":"switch","branch":"draft"}
 {"op":"merge","source":"draft"}
-{"op":"conflicts","limit":100}
-{"op":"resolve","dataset":"roads","key":"1001","choice":"theirs"}
-{"op":"merge_continue"}
-{"op":"merge_abort"}
-{"op":"restore","discard":true}
-{"op":"reset","target":"HEAD","hard":true}
-{"op":"revert","target":"FULL_COMMIT_ID"}
-{"op":"recover"}
+{"op":"resolve","dataset":"roads","key":"1","choice":"theirs"}
 {"op":"fsck"}
-{"op":"reflog","limit":100}
 ```
 
-`FULL_COMMIT_ID` 替换为 log 返回的完整提交 ID。diff 省略 to 时比较工作副本；show 的 dataset 与 key 成对提供，省略时查看提交。merge 返回值同时表达提交或冲突状态，客户端按业务结果进入后续流程。
+记录以主键 `key` 和字段映射 `fields` 表达。属性使用数据库规范文本，几何使用小写 XDR EWKB；自定义冲突结果提供符合 schema 的完整记录。合并响应包含提交或冲突状态，客户端据此继续处理。
 
-自定义解决使用 `choice: "custom"` 和完整 `record`，例如 `{"key":"1001","fields":{"id":{"type":"text","value":"1001"},"name":{"type":"text","value":"road"},"geom":{"type":"null"}}}`。提供 schema 的全部字段，主键字段值与 key 一致，NULL 符合可空性定义。几何使用 `type: "geometry"` 和小写 XDR EWKB 十六进制 value，由适配器进行类型校验及规范化。
-
-status 的差异位于 `diff.changes`，汇总位于 `summary`。diff / conflicts 返回结果数组、total 与 truncated。status/diff 预览采用约 8 MiB 载荷预算，单条大记录可超过预算；输出条数由 limit 和实际载荷共同决定。结构变化通过 `schema_changes` 与 `record_counts_complete` 表达，提交返回 rescanned_records 等统计，详见 [字段结构版本管理](schema-evolution.md)。
-
-## HTTP 路由
+## HTTP
 
 | 路由 | 功能 |
 |---|---|
-| GET /health | 服务版本与存活 |
-| POST /v1/commands | 全部统一命令 |
-| GET /v1/status、GET /v1/log | 状态和历史，可携带 limit 等查询参数 |
-| GET /v1/branches、POST /v1/branches | 查询或创建分支 |
-| GET /v1/conflicts | 查询合并冲突 |
-| POST /v1/commits、POST /v1/merges | 提交或合并，省略 author 时使用 mapseekai |
+| `GET /health` | 服务版本与存活 |
+| `POST /v1/commands` | 执行统一命令 |
+| `GET /v1/status`、`GET /v1/log` | 查询状态与历史 |
+| `GET /v1/branches`、`POST /v1/branches` | 查询或创建分支 |
+| `GET /v1/conflicts` | 查询记录冲突 |
+| `POST /v1/commits`、`POST /v1/merges` | 提交或合并 |
 
-路由定义见 [http.rs](../crates/server/src/http.rs)。错误以 `error.code` 和 `error.message` 表达：invalid_argument 对应 400，not_found 对应 404，conflict / dirty_working_copy / recovery_required 对应 409，busy 对应 423，unsupported 对应 422，后端错误对应 500。鉴权错误为 401。完整内部诊断保存在服务端日志。
+下面在 PowerShell 生成令牌并启动服务，监听地址由该命令创建：
 
-## gRPC
-
-[geoledger.proto](../crates/server/proto/geoledger.proto) 定义 `geoledger.v1.GeoLedger`，提供 Execute、Status、Import、Commit、Log、Diff、Branch、Switch、Merge、Revert、Reset、Restore、Continue、Abort 和 Recover。Switch 使用 reference；Merge / Revert 使用 MergeRequest.reference。响应通过 `JsonReply.json` 表达动态数据，客户端按 JSON 解码。
-
-从项目根目录启动 `gl --repo ./demo-repo serve --http 127.0.0.1:7878 --grpc 127.0.0.1:7879`，在服务运行时从另一个终端调用：
-
-```bash
-grpcurl -plaintext -import-path crates/server/proto -proto geoledger.proto \
-  -H "Authorization: Bearer $GL_API_TOKEN" \
-  -d '{"reference":"HEAD","limit":20}' 127.0.0.1:7879 geoledger.v1.GeoLedger/Log
+```powershell
+$bytes = New-Object byte[] 32
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+$rng.Dispose()
+$env:GL_API_TOKEN = [Convert]::ToBase64String($bytes)
+.\gl.exe --repo '.\demo-repo' serve --http 127.0.0.1:7878 --grpc 127.0.0.1:7879
 ```
 
-地址由上述启动命令创建；两个终端配置相同的 GL_API_TOKEN。Rust 客户端见 [client.rs](../crates/server/examples/client.rs)。gRPC reflection 提供公开协议元数据，业务方法执行令牌鉴权，外部部署通过网关控制 reflection 的访问范围。
+沿用快速开始的 `GL_DATABASE_URL`。服务运行时，在另一终端输入相同令牌读取状态；服务终端通过 Ctrl+C 结束：
 
-## Volo Thrift
+```powershell
+$token = Read-Host '输入服务端配置的 GL_API_TOKEN'
+Invoke-RestMethod -Headers @{Authorization="Bearer $token"} -Uri 'http://127.0.0.1:7878/v1/status'
+```
 
-[geoledger.thrift](../crates/thrift-gen/idl/geoledger.thrift) 定义 `geoledger.v1.GeoLedger`，提供与 gRPC 对等的 15 个方法。启动命令为 `gl --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880`，该进程创建对应的本地监听地址。客户端示例见 [thrift_client.rs](../crates/server/examples/thrift_client.rs)，服务运行时执行 `cargo run -p geoledger-server --example thrift_client -- 127.0.0.1:7880`。
+## gRPC 与 Thrift
 
-客户端采用 **Framed transport + Binary protocol**，Rust 示例通过 `DefaultMakeCodec::framed()` 选择协议。所有方法接受 request 与 optional authorization，后者使用完整 `Bearer <token>`。空作者默认 mapseekai，空 schema 默认 public，查询起点默认 HEAD；limit 为 0 时采用 100，负数返回 invalid_argument。Switch 的 reference 显式指定目标分支。
+| 接口 | 定义与调用方式 |
+|---|---|
+| gRPC | [geoledger.proto](../crates/server/proto/geoledger.proto) 定义 `geoledger.v1.GeoLedger`，通过 HTTP/2 调用，令牌放入 Authorization metadata |
+| Volo Thrift | [geoledger.thrift](../crates/thrift-gen/idl/geoledger.thrift) 定义 `GeoLedger`，采用 Framed Binary，令牌通过 authorization 参数传入 |
 
-成功响应为 JsonReply.json，业务错误通过 ApiError exception 返回。客户端同时处理外层传输结果及 MaybeException 业务结果。四种字段操作通过 execute 传入 alter_schema JSON，全部方法复用 Service / Application。
+两种接口提供执行、状态、导入、提交、历史、差异、分支、切换、合并、撤销、重置、恢复工作副本、继续、取消与恢复中断操作共 15 个方法。响应使用 `JsonReply.json`，客户端按 JSON 解码；字段演进通过 Execute / execute 调用统一命令。
 
-## 安全、并发与容量
+Unix 构建通过 `gl --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880` 启动 Thrift。客户端示例见 [gRPC](../crates/server/examples/client.rs) 和 [Thrift](../crates/server/examples/thrift_client.rs)。
 
-Bearer token 使用至少 24 字节的随机值，授权范围为绑定仓库的读写及恢复操作。仓库路径和数据库连接在服务启动时确定。服务默认使用 loopback，跨机器部署通过 TLS 反向代理保护传输，并在部署层配置访问隔离。
+## Rust
 
-请求容量为 4 MiB，JSON 响应容量为 16 MiB，同时执行槽位为 8。Thrift 帧容量为 16 MiB + 64 KiB，解码后按请求 Binary 编码大小执行 4 MiB 检查，因此帧解码可以使用更大的缓冲区。响应在阻塞工作线程中有界编码，编码期间持续持有执行槽位。跨进程仓库锁串行化同一仓库的操作。
+使用 `Application::new(path)` 创建入口，`with_provider` 绑定工作副本，`execute(Command)` 执行操作。返回值为 `Result<serde_json::Value, geoledger_core::Error>`。异步宿主通过 `spawn_blocking` 调用同步应用层，示例见 [library.rs](../crates/app/examples/library.rs)。
 
-数据库表锁等待为 5 秒，每条事务内 SQL 默认超时 120 秒，GL_STATEMENT_TIMEOUT_SECS 可调整。一个命令可以包含多条 SQL。客户端断连后的操作状态通过 status、log 和 recover 核查，再决定是否重新发起写入。
+## 配置与响应
 
-## 生成代码与内存安全
+`GL_DATABASE_URL` 配置数据库连接；`--database-env` 可指定连接变量名称。`GL_STATEMENT_TIMEOUT_SECS` 或 `--statement-timeout-secs` 配置每条 SQL 的超时，默认 120 秒，范围 1–2147483 秒。
 
-[thrift-gen](../crates/thrift-gen) 在构建时由 IDL 生成绑定。Volo 生成器产生包含 unsafe 的路由代码，因此该生成 crate 单独管理其构建安全约束；手写 workspace 代码使用 unsafe_code = forbid。服务器使用类型化 GeoLedgerServer，绑定通过构建脚本维护。
+服务使用至少 24 字节的随机 Bearer token，授权范围为绑定仓库的读写及恢复操作。跨机器部署使用 TLS 反向代理；gRPC reflection 提供协议元数据，通过网关管理其访问范围。
 
-Cargo.lock 固定 Volo 及相关依赖，构建器使用 rustfmt。生成器升级时一并检查生成代码和 Rust 工具链要求。功能验证见 [验证记录](verification.md)。
+请求上限为 4 MiB，JSON 响应上限为 16 MiB。列表最多返回 1000 项，预览同时采用约 8 MiB 载荷预算，单条大记录可超过该预算。读取 `total`、`truncated` 判断返回范围；结构变化使用 `schema_changes`、`record_counts_complete` 表达，提交通过 `rescanned_records` 返回整表扫描数量。
+
+HTTP 应用错误返回 `error.code` 与 `error.message`：参数校验 400、鉴权 401、资源查找 404、状态冲突 409、仓库占用 423、能力校验 422、后端异常 500。Thrift 通过 `ApiError` 表达业务结果；客户端同时检查传输状态。连接中断后先通过 `status`、`log`、`recover` 核对结果，再决定是否重新发起写入。
