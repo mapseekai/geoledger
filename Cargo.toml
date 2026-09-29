@@ -3,7 +3,7 @@ members = ["crates/core", "crates/storage", "crates/postgis", "crates/app", "cra
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -13,7 +13,7 @@ geoledger-core = { path = "crates/core" }
 geoledger-storage = { path = "crates/storage" }
 geoledger-postgis = { path = "crates/postgis" }
 geoledger = { path = "crates/app" }
-geoledger-server = { path = "crates/server" }
+geoledger-server = { path = "crates/server", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

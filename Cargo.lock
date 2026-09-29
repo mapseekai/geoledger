@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "chrono",
  "geoledger-core",
@@ -832,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-cli"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "clap",
  "geoledger",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "serde",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-postgis"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "fallible-iterator 0.2.0",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-server"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "axum",
  "geoledger",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-storage"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "fs2",
  "geoledger-core",
@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-thrift-gen"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "pilota",
  "volo",

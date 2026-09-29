@@ -155,6 +155,7 @@ enum Action {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
+    #[cfg(feature = "thrift")]
     /// Start the Volo Thrift API.
     ServeThrift {
         #[arg(long, default_value = "127.0.0.1:7880")]
@@ -340,6 +341,7 @@ async fn run(cli: Cli) -> Result<()> {
         Action::Recover => Command::Recover,
         Action::Fsck => Command::Fsck,
         Action::Reflog { limit } => Command::Reflog { limit },
+        #[cfg(feature = "thrift")]
         Action::ServeThrift { thrift } => {
             return geoledger_server::thrift::serve(
                 app,

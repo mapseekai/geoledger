@@ -1,3 +1,4 @@
+#![cfg(feature = "thrift")]
 #![allow(clippy::unwrap_used)]
 use geoledger::Application;
 use geoledger_server::{Service, thrift, thrift_proto::*};

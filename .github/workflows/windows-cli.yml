@@ -1,0 +1,80 @@
+name: Windows CLI test package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-cli-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Configure Rust and protoc
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy
+          if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
+          rustup default 1.92.0
+          if ($LASTEXITCODE -ne 0) { throw 'Rust selection failed' }
+          gh release download v35.1 --repo protocolbuffers/protobuf --pattern protoc-35.1-win64.zip --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw 'protoc download failed' }
+          $archive = Join-Path $env:RUNNER_TEMP 'protoc-35.1-win64.zip'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082') { throw 'protoc checksum mismatch' }
+          $tools = Join-Path $env:RUNNER_TEMP 'protoc'
+          Expand-Archive -LiteralPath $archive -DestinationPath $tools
+          (Join-Path $tools 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          rustc --version
+          python --version
+      - name: Check documentation and formatting
+        run: |
+          python scripts/check-docs.py
+          if ($LASTEXITCODE -ne 0) { throw 'Documentation check failed' }
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Formatting check failed' }
+      - name: Build release CLI with static C runtime
+        run: |
+          cargo build --release --locked --target x86_64-pc-windows-msvc -p geoledger-cli --no-default-features
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+      - name: Run native Windows release tests
+        run: |
+          cargo test --release --locked --target x86_64-pc-windows-msvc --workspace --exclude geoledger-thrift-gen --no-default-features 2>&1 | Tee-Object windows-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows tests failed' }
+      - name: Smoke test the distributable
+        run: ./scripts/smoke-windows.ps1 -Executable ./target/x86_64-pc-windows-msvc/release/gl.exe
+      - name: Inspect Windows runtime dependencies
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          $dumpbin = Get-ChildItem "$vs/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          $deps = & $dumpbin.FullName /DEPENDENTS ./target/x86_64-pc-windows-msvc/release/gl.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Binary inspection failed' }
+          $deps | Tee-Object windows-dependencies.log
+          if (($deps -join "`n") -match '(?i)VCRUNTIME|MSVCP|libssl|libcrypto|sqlite3\.dll|zstd\.dll') { throw 'Unexpected dynamic runtime dependency' }
+      - name: Package ZIP and SHA256
+        run: |
+          python scripts/package-windows.py --binary target/x86_64-pc-windows-msvc/release/gl.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+      - name: Upload tested package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: geoledger-windows-x86_64
+          path: |
+            target/dist/*.zip
+            target/dist/*.sha256
+            windows-tests.log
+            windows-dependencies.log
+          if-no-files-found: error
+          retention-days: 14

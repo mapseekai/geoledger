@@ -97,7 +97,7 @@ impl Repository {
         }
         let lock = options.open(directory.join("lock"))?;
         lock.try_lock_exclusive().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::WouldBlock {
+            if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
                 Error::Busy
             } else {
                 Error::Io(e)

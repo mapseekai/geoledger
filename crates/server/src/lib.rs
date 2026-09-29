@@ -1,4 +1,6 @@
+#[cfg(feature = "thrift")]
 pub mod thrift;
+#[cfg(feature = "thrift")]
 pub use geoledger_thrift_gen::geoledger::v1 as thrift_proto;
 pub mod grpc;
 pub mod http;

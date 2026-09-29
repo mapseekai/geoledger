@@ -16,7 +16,9 @@ pub fn router(service: Service) -> Router {
     Router::new()
         .route(
             "/health",
-            get(|| async { Json(json!({"ok":true,"version":"0.1.0","api":"v1"})) }),
+            get(|| async {
+                Json(json!({"ok":true,"version":env!("CARGO_PKG_VERSION"),"api":"v1"}))
+            }),
         )
         .route("/v1/commands", post(execute))
         .route("/v1/status", get(status))

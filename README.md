@@ -1,6 +1,6 @@
 # GeoLedger
 
-GeoLedger 是 PostGIS-first 的 Rust 空间数据版本控制引擎，当前为 **0.1.0 开发版**。它结合可编辑的 PostGIS 工作副本和本地版本历史，提供记录变更、字段演进、分支合并及历史恢复能力。
+GeoLedger 是 PostGIS-first 的 Rust 空间数据版本控制引擎，当前为 **0.1.0-alpha.1 测试版**。它结合可编辑的 PostGIS 工作副本和本地版本历史，提供记录变更、字段演进、分支合并及历史恢复能力。
 
 命令行入口为 **`gl`**，Cargo 包使用 `geoledger` / `geoledger-*`，配置使用 `GL_*`，默认作者为 **`mapseekai`**。CLI、Rust 库、HTTP、gRPC 和 Volo Thrift 共用 Application 应用层。
 
@@ -17,6 +17,10 @@ GeoLedger 是 PostGIS-first 的 Rust 空间数据版本控制引擎，当前为 
 | 服务入口 | 同步 Rust API、HTTP JSON API、HTTP/2 + Protobuf gRPC、Volo Thrift Framed Binary |
 
 适用表采用单列主键、默认列排序规则和适配器声明的字段类型。主键规范文本最多为 8192 UTF-8 字节。几何以 XDR EWKB 保存 SRID、Z/M 和坐标表达；属性使用数据库规范文本保存精确数值。
+
+## Windows 测试版
+
+Windows x64 包提供 `gl.exe`，覆盖版本管理 CLI、HTTP 和 gRPC。解压与 PowerShell 测试步骤见 [Windows 测试指南](docs/windows-testing.md)。Unix 构建默认启用 Volo Thrift；Windows 包使用 `--no-default-features` 选择 CLI、HTTP 和 gRPC 构建。
 
 ## 构建与安装
 
@@ -73,7 +77,7 @@ grpcurl -plaintext -H "Authorization: Bearer $GL_API_TOKEN" \
   -d '{"limit":20}' 127.0.0.1:7879 geoledger.v1.GeoLedger/Status
 ```
 
-Thrift 通过 `gl --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880` 单独启动。该服务运行时，可用 `cargo run -p geoledger-server --example thrift_client -- 127.0.0.1:7880` 调用。服务默认绑定 loopback，跨机器访问配置至少 24 字节的 Bearer token，并通过 TLS 反向代理保护传输。令牌授权范围为绑定仓库的读写及恢复操作。
+Unix 构建的 Thrift 通过 `gl --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880` 单独启动。该服务运行时，可用 `cargo run -p geoledger-server --example thrift_client -- 127.0.0.1:7880` 调用。服务默认绑定 loopback，跨机器访问配置至少 24 字节的 Bearer token，并通过 TLS 反向代理保护传输。令牌授权范围为绑定仓库的读写及恢复操作。
 
 gRPC 和 Thrift 均提供 15 个方法，`Execute` / `execute` 接受统一 JSON 命令，响应使用 `JsonReply.json`。详细路由、IDL、作者规则和调用方式见 [API 文档](docs/api.md)。Rust 嵌入方式见 [库示例](crates/app/examples/library.rs)，异步宿主通过 `spawn_blocking` 调用同步 Application。
 

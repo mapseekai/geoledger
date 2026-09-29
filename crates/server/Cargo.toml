@@ -6,6 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 build = "build.rs"
 
+[features]
+default = ["thrift"]
+thrift = ["dep:volo", "dep:volo-thrift", "dep:pilota", "dep:geoledger-thrift-gen"]
+
+[[example]]
+name = "thrift_client"
+required-features = ["thrift"]
+
 [dependencies]
 geoledger.workspace = true
 geoledger-core.workspace = true
@@ -20,10 +28,10 @@ tonic-reflection = "0.14"
 tokio-stream = { version = "0.1", features = ["net"] }
 subtle = "2"
 tracing = "0.1"
-volo = "0.12.4"
-volo-thrift = "0.12.6"
-pilota = "0.13"
-geoledger-thrift-gen = { path = "../thrift-gen" }
+volo = { version = "0.12.4", optional = true }
+volo-thrift = { version = "0.12.6", optional = true }
+pilota = { version = "0.13", optional = true }
+geoledger-thrift-gen = { path = "../thrift-gen", optional = true }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

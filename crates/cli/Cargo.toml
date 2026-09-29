@@ -9,6 +9,10 @@ license.workspace = true
 name = "gl"
 path = "src/main.rs"
 
+[features]
+default = ["thrift"]
+thrift = ["geoledger-server/thrift"]
+
 [dependencies]
 geoledger.workspace = true
 geoledger-core.workspace = true

@@ -123,3 +123,22 @@ fn gl_defaults_to_mapseekai_and_explicit_author_takes_precedence() {
     assert!(!help.contains("upgrade"));
     assert!(help.contains("mapseekai"));
 }
+
+#[test]
+fn help_matches_selected_transport_features() {
+    let output = success(gl().arg("--help"));
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("serve"));
+    assert_eq!(help.contains("serve-thrift"), cfg!(feature = "thrift"));
+}
+
+#[test]
+fn repository_paths_accept_unicode_and_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("地图版本 test");
+    let init = json(gl().arg("--repo").arg(&path).arg("init"));
+    let status = json(gl().arg("--repo").arg(&path).arg("status"));
+    assert_eq!(status["head"], init["head"]);
+    assert_eq!(status["clean"], true);
+    assert_eq!(json(gl().arg("--repo").arg(&path).arg("fsck"))["ok"], true);
+}
