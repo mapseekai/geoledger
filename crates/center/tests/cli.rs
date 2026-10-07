@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+#![cfg(feature = "http")]
 use serde_json::Value;
 use std::process::Command;
 

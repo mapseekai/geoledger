@@ -7,6 +7,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
+  cargo test --locked -p geoledger-center --test collaboration -- --ignored --test-threads=1
   cargo test --locked -p geoledger-center --test postgis -- --ignored --test-threads=1
   cargo test --locked -p geoledger --test postgis -- --ignored --test-threads=1
   cargo test --locked -p geoledger-server --test thrift -- --ignored --test-threads=1

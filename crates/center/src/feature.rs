@@ -165,7 +165,7 @@ pub(super) fn geojson(t: &mut Transaction<'_>, key: &str, value: Option<&Stored>
     };
     let geometry = match &v.geometry {
         None => Value::Null,
-        Some(g) if t.geometry_cache.contains_key(g) => t.geometry_cache[g].clone(),
+        Some(g) if t.geometry_cache().contains_key(g) => t.geometry_cache()[g].clone(),
         Some(g) => serde_json::from_str::<Value>(
             &t.query_one(
                 "SELECT ST_AsGeoJSON(ST_GeomFromEWKB(decode($1,'hex')),17,0)",

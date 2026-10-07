@@ -234,20 +234,29 @@ impl Client {
         Ok(Transaction(self))
     }
 }
-pub(crate) struct Transaction<'a>(&'a mut Client);
-impl std::ops::Deref for Transaction<'_> {
-    type Target = Client;
-    fn deref(&self) -> &Client {
-        self.0
-    }
-}
-impl std::ops::DerefMut for Transaction<'_> {
-    fn deref_mut(&mut self) -> &mut Client {
-        self.0
-    }
-}
+/// Trusted in-process host access to the application's deadline-bound transaction.
+/// Hosts must not issue transaction-control SQL or independently modify Center history.
+pub struct Transaction<'a>(&'a mut Client);
 impl Transaction<'_> {
-    pub fn commit(self) -> Result<()> {
+    pub fn query(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>> {
+        self.0.query(sql, params)
+    }
+    pub fn query_one(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Row> {
+        self.0.query_one(sql, params)
+    }
+    pub fn query_opt(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>> {
+        self.0.query_opt(sql, params)
+    }
+    pub fn execute(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64> {
+        self.0.execute(sql, params)
+    }
+    pub fn batch_execute(&mut self, sql: &str) -> Result<()> {
+        self.0.batch_execute(sql)
+    }
+    pub(crate) fn geometry_cache(&mut self) -> &mut HashMap<String, serde_json::Value> {
+        &mut self.0.geometry_cache
+    }
+    pub(crate) fn commit(self) -> Result<()> {
         self.0.batch_execute("COMMIT")?;
         self.0.reusable = true;
         Ok(())

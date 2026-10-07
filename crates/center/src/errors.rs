@@ -33,7 +33,24 @@ impl Error {
         }
         self
     }
-    pub(crate) fn new(status: u16, message: &str) -> Self {
+    pub(crate) fn invalid_table_value(mut self) -> Self {
+        // Data and integrity errors reject the transaction definitively, even
+        // when a deferred constraint is checked by COMMIT. Network failures do not.
+        if self
+            .source
+            .as_deref()
+            .and_then(|e| e.downcast_ref::<tokio_postgres::Error>())
+            .and_then(|e| e.code())
+            .is_some_and(|c| c.code().starts_with("22") || c.code().starts_with("23"))
+        {
+            self.status = 422;
+            self.body["error"]["code"] = json!("invalid_argument");
+            self.body["error"]["message"] =
+                json!("data violates managed table types or constraints; revise the draft");
+        }
+        self
+    }
+    pub fn new(status: u16, message: &str) -> Self {
         let code = match status {
             400 | 422 => "invalid_argument",
             401 => "unauthenticated",

@@ -1,6 +1,6 @@
 CREATE SCHEMA _geoledger_center;
-CREATE TABLE _geoledger_center.format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=1));
-INSERT INTO _geoledger_center.format VALUES(true,1);
+CREATE TABLE _geoledger_center.format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=2));
+INSERT INTO _geoledger_center.format VALUES(true,2);
 CREATE TABLE _geoledger_center.projects (
  id uuid PRIMARY KEY, name text NOT NULL, head bigint NOT NULL DEFAULT 0 CHECK(head>=0));
 CREATE TABLE _geoledger_center.project_members (
@@ -68,3 +68,39 @@ BEGIN
  RAISE EXCEPTION 'immutable history value';
 END $$;
 CREATE TRIGGER history_immutable BEFORE UPDATE OR DELETE ON _geoledger_center.history FOR EACH ROW EXECUTE FUNCTION _geoledger_center.close_history();
+
+-- Managed tables use their own Dataset revision sequence and native value history.
+CREATE TABLE _geoledger_center.collab_datasets (
+ tenant text NOT NULL, project text NOT NULL, dataset text NOT NULL, epoch uuid PRIMARY KEY,
+ source_schema text NOT NULL, source_table text NOT NULL, id_column text NOT NULL,
+ geometry_column text NOT NULL, srid integer NOT NULL, head bigint NOT NULL DEFAULT 0,
+ UNIQUE(tenant,project,dataset), UNIQUE(source_schema,source_table));
+CREATE TABLE _geoledger_center.collab_schemas (
+ epoch uuid NOT NULL REFERENCES _geoledger_center.collab_datasets(epoch), revision bigint NOT NULL,
+ columns jsonb NOT NULL, PRIMARY KEY(epoch,revision));
+CREATE TABLE _geoledger_center.collab_rows (
+ epoch uuid NOT NULL REFERENCES _geoledger_center.collab_datasets(epoch), id text COLLATE "C" NOT NULL,
+ revision bigint NOT NULL, value jsonb, feature jsonb, PRIMARY KEY(epoch,id,revision));
+CREATE INDEX collab_rows_revision ON _geoledger_center.collab_rows(epoch,revision,id);
+CREATE TABLE _geoledger_center.collab_workspaces (
+ epoch uuid NOT NULL REFERENCES _geoledger_center.collab_datasets(epoch), id uuid PRIMARY KEY,
+ owner text NOT NULL, base_revision bigint NOT NULL, version bigint NOT NULL DEFAULT 0,
+ columns jsonb NOT NULL, resolved_schema_head bigint, closed boolean NOT NULL DEFAULT false);
+CREATE TABLE _geoledger_center.collab_drafts (
+ workspace uuid NOT NULL REFERENCES _geoledger_center.collab_workspaces(id), id text COLLATE "C" NOT NULL,
+ value jsonb, resolved_head bigint, PRIMARY KEY(workspace,id));
+CREATE TABLE _geoledger_center.collab_ids (
+ workspace uuid NOT NULL REFERENCES _geoledger_center.collab_workspaces(id), client_id text NOT NULL,
+ id text NOT NULL, PRIMARY KEY(workspace,client_id), UNIQUE(workspace,id));
+CREATE TABLE _geoledger_center.collab_requests (
+ epoch uuid NOT NULL REFERENCES _geoledger_center.collab_datasets(epoch), subject text NOT NULL,
+ request_id uuid NOT NULL, payload jsonb NOT NULL, result jsonb NOT NULL,
+ PRIMARY KEY(epoch,subject,request_id));
+CREATE TABLE _geoledger_center.collab_commits (
+ epoch uuid NOT NULL REFERENCES _geoledger_center.collab_datasets(epoch), revision bigint NOT NULL,
+ subject text NOT NULL, message text NOT NULL, changes bigint NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(epoch,revision));
+CREATE TRIGGER collab_rows_immutable BEFORE UPDATE OR DELETE ON _geoledger_center.collab_rows FOR EACH ROW EXECUTE FUNCTION _geoledger_center.immutable();
+CREATE TRIGGER collab_schemas_immutable BEFORE UPDATE OR DELETE ON _geoledger_center.collab_schemas FOR EACH ROW EXECUTE FUNCTION _geoledger_center.immutable();
+CREATE TRIGGER collab_commits_immutable BEFORE UPDATE OR DELETE ON _geoledger_center.collab_commits FOR EACH ROW EXECUTE FUNCTION _geoledger_center.immutable();
+CREATE TRIGGER collab_requests_immutable BEFORE UPDATE OR DELETE ON _geoledger_center.collab_requests FOR EACH ROW EXECUTE FUNCTION _geoledger_center.immutable();

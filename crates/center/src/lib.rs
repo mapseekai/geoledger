@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod collaboration;
+#[cfg(feature = "http")]
 mod http;
+pub use collaboration::{CollaborationCommand, Host, Resolution, Scope, TableBinding};
 mod workspace;
 use workspace::*;
 mod feature;
@@ -14,10 +17,12 @@ mod codec;
 mod errors;
 mod session;
 use geoledger_core::{Cell, Record, merge::merge_record};
+#[cfg(feature = "http")]
 pub use http::{Tokens, router};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
-use session::{Client, Transaction};
+use session::Client;
+pub use session::Transaction;
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
@@ -26,6 +31,7 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
+pub const FORMAT_VERSION: i32 = 2;
 type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 fn bad() -> Error {
@@ -93,7 +99,7 @@ impl CenterApplication {
                     &[],
                 )?
                 .get(0);
-            if version != 1 {
+            if version != FORMAT_VERSION {
                 return Err(Error::new(409, "unsupported center schema format"));
             }
         } else {
@@ -110,7 +116,7 @@ impl CenterApplication {
                 &[],
             )?
             .get(0);
-        if version != 1 {
+        if version != FORMAT_VERSION {
             return Err(Error::new(409, "center schema format mismatch"));
         }
         Ok(())
@@ -148,7 +154,7 @@ impl CenterApplication {
                 &[],
             )?
             .get(0);
-        if format != 1 {
+        if format != FORMAT_VERSION {
             return Err(Error::new(409, "unsupported center schema format"));
         }
         let result = match command {

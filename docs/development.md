@@ -67,7 +67,7 @@ cargo test --locked --workspace --exclude geoledger-thrift-gen --no-default-feat
 独立包 [geoledger-center](../crates/center/Cargo.toml) 为 `0.2.0-alpha.1`，入口 `gl-center`，
 [CenterApplication](../crates/center/src/lib.rs) 处理全部中心操作，HTTP 层只负责认证、限流、大小限制和阻塞任务调度。
 中心版按数据库会话、数值编解码、查询、发布和错误处理拆分模块；复用 core 的 `merge_record`。中心属性使用带 JSON Pointer 转义的 `/properties/` 字段，几何使用 `/geometry`，
-JSON 值编码为文本单元，几何编码为保留坐标顺序与 Z 的 XDR EWKB。这是中心格式 1 的内部映射，本地 core 编解码保持原样。
+JSON 值编码为文本单元，几何编码为保留坐标顺序与 Z 的 XDR EWKB。中心 schema 当前为格式 2，本地 core 编解码保持原样。
 
 [结构初始化](../crates/center/src/schema.sql) 建立项目范围复合外键、成员、工作区、增量、当前要素、时态历史、提交、幂等记录和审计表。
 历史值与提交由数据库触发器保护；历史区间在后续提交中仅关闭一次。发布在同一连接的单一事务中锁项目行及工作区行，
@@ -84,6 +84,7 @@ cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo test --workspace --offline
 # 由测试操作者配置专用 GL_TEST_DATABASE_URL，数据库名必须为 geoledger_test。
 cargo test -p geoledger-center --test postgis --offline -- --ignored --test-threads=1
+cargo test -p geoledger-center --test collaboration --offline -- --ignored --test-threads=1
 ```
 
 [中心集成测试](../crates/center/tests/postgis.rs) 在写入前核验数据库名，使用随机项目和身份，可共享中心 schema。
@@ -100,3 +101,11 @@ Windows 本地 CLI 构建链及 Volo 特性边界保持原样。浏览器测试�
 并记录可执行文件 SHA256，保证安装包说明对应实际构建。
 
 中心服务使用最多 16 个数据库会话，复用连接及预处理语句。完整操作截止时间覆盖连接建立、SQL 和提交；到期关闭对应连接并回收执行槽位。冲突按批计算、按页保留预览，候选结果存入事务临时表，再以集合式 SQL 发布。
+
+嵌入式业务表协作入口为 [collaborate](../crates/center/src/collaboration.rs)。`default-features = false` 去掉 HTTP、控制台和二进制依赖；默认 `http` feature 保留 `gl-center`。宿主实现 `Host::authorize` 与 `Host::published`，两者使用导出的截止时间感知 `Transaction`。必须在有界阻塞工作线程调用同步库；事务控制、提交与连接归还由应用层负责。
+
+托管表首次登记持有 `SHARE ROW EXCLUSIVE` 表锁，用单个 `INSERT SELECT` 建立初始历史。每个 Dataset 有独立 epoch 和 revision。`collab_rows.value` 保存 PostgreSQL 文本输入/输出值及原生 SRID EWKB，浏览器 GeoJSON 独立保存；只改属性不会转换原有几何或未改动数值。字段合并继续调用 core `merge_record`；冲突的字段选择直接选取服务器原生值，bigint/numeric 传给浏览器时使用字符串。删除后恢复通过原生历史基线及 patch 保留原主键，schema 冲突后的 rebase 把需要恢复的历史字段值作为草稿持久化。发布串行锁定 Dataset 与草稿，验证被修改正式行仍匹配 HEAD，再一起提交业务表、历史、宿主标记及请求结果。字段结构变化以集合 SQL 为所有现存行记入新 schema 的权威值；普通行编辑只访问草稿涉及的行，按主键类型转换参数以使用索引。
+
+快照与增量从不可变历史分页，游标绑定 epoch、区间或草稿版本。增量先限定修订区间；草稿扫描按记录数与原生字节前缀分批，响应按展开后的 JSON 预算切页，允许一条大要素独占一页。容量仍受单次操作截止时间及单条最大要素约束；不是任意规模的内存或延迟保证。schema 提交会产生全表历史变化。
+
+[托管表回归](../crates/center/tests/collaboration.rs) 在专用 PostGIS `geoledger_test` 验证不同字段自动合并、同字段/几何/删除冲突、过期选择、幂等 rebase、schema 删除冲突、固定分页、生成 ID、空说明、宿主失败回滚、原生几何/精确 numeric，以及 1201 条草稿变化和 25,815 字节几何。一次本机 debug 测量的发布加增量读取为 15.5 秒，增量 JSON 总计 205,942 字节；并发编译时同项曾达 132 秒，因此这些数字仅描述该小型夹具，不作为服务容量指标。测试在退出前删除随机业务表，不可变测试历史随整个专用数据库清理。`scripts/check.sh` 已包含此回归；真实浏览器和 MapSeek 授权仍需由宿主仓库验收。

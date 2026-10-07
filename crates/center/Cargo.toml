@@ -8,6 +8,11 @@ license.workspace = true
 [[bin]]
 name = "gl-center"
 path = "src/main.rs"
+required-features = ["http"]
+
+[features]
+default = ["http"]
+http = ["dep:axum", "dep:subtle", "dep:getrandom"]
 
 [dependencies]
 geoledger-core.workspace = true
@@ -18,9 +23,9 @@ tokio.workspace = true
 tokio-postgres = "0.7"
 postgres-native-tls = "0.5"
 native-tls = "0.2"
-axum = "0.8"
-subtle = "2"
-getrandom = "0.4"
+axum = { version = "0.8", optional = true }
+subtle = { version = "2", optional = true }
+getrandom = { version = "0.4", optional = true }
 
 [dev-dependencies]
 postgres = "0.19"

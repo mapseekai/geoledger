@@ -1,4 +1,5 @@
 //! Disposable loopback protocol stubs; never reads a DSN or credentials.
+#![cfg(feature = "http")]
 use axum::{
     body::Body,
     http::{Request, StatusCode},

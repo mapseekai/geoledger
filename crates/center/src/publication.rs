@@ -34,7 +34,7 @@ pub(super) fn merge_plan(
         if rows.is_empty() {
             break;
         }
-        t.geometry_cache.clear();
+        t.geometry_cache().clear();
         let mut staged = Vec::new();
         for row in rows {
             for (hex, geo) in [(3, 10), (7, 11), (9, 12)] {
@@ -42,7 +42,7 @@ pub(super) fn merge_plan(
                     row.get::<_, Option<String>>(hex),
                     row.get::<_, Option<String>>(geo),
                 ) {
-                    t.geometry_cache
+                    t.geometry_cache()
                         .insert(hex, serde_json::from_str(&geo).map_err(Error::stored_json)?);
                 }
             }
@@ -121,7 +121,7 @@ pub(super) fn merge_plan(
             t.execute("INSERT INTO center_merge SELECT dataset,feature_id,before_value,NULLIF(after_value,'null'::jsonb) FROM jsonb_to_recordset($1::text::jsonb) AS x(dataset text,feature_id text,before_value jsonb,after_value jsonb)",&[&encoded])?;
         }
     }
-    t.geometry_cache.clear();
+    t.geometry_cache().clear();
     Ok(plan)
 }
 pub(super) fn conflicts(head: i64, version: i64, plan: MergePlan) -> Error {

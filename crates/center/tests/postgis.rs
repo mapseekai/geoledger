@@ -643,6 +643,7 @@ fn publish_transaction_rollback_and_immutable_history() -> TestResult {
 }
 #[test]
 #[ignore = "requires isolated GL_TEST_DATABASE_URL database geoledger_test with PostGIS"]
+#[cfg(feature = "http")]
 fn http_identity_is_selected_only_by_server_token_mapping() -> TestResult {
     use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;

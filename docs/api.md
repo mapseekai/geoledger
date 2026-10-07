@@ -153,3 +153,32 @@ Remove-Variable entry,headers
 中心数值协议按 i64/u64 范围精确保存整数，也识别表示整数的指数和小数写法；非整数采用有限 binary64，并在写入前校验范围。任意精度十进制值可使用字符串属性。浏览器测试台原样发送请求文本并显示响应文本，保留大整数字面量。
 
 `GL_CENTER_OPERATION_TIMEOUT_MS` 配置中心操作的总截止时间，默认 30000 毫秒，范围 1–300000 毫秒；超时后的发布使用原 `request_id` 和相同请求体重试确认结果。Thrift 入口按严格 Framed Binary 校验帧、字段长度、UTF-8 和嵌套深度，单个入站帧上限为 4 MiB + 64 KiB；每个监听器最多接纳 8 个连接，帧读取截止时间为 10 秒、响应写入为 30 秒。客户端空闲后可重新建立连接。
+
+## 嵌入式 Dataset 协作
+
+业务表接入调用 `CenterApplication::collaborate(&Scope, CollaborationCommand, &impl Host)`，成功返回原始 JSON，失败返回携带 `status` 与 `body` 的 `Error`。`Scope` 的 subject、tenant、project、dataset 来自宿主验证后的身份上下文；请求正文只有操作参数。宿主在每次事务中授权并返回可信 `TableBinding {schema, table, id_column, geometry_column, srid}`，发布回调在同一事务更新宿主版本/缓存标记。
+
+命令为平面 JSON，以 `op` 标记。revision/base_revision/head/from/to 是十进制字符串；epoch、workspace、request_id 是 UUID；version 是整数。快照、变化、冲突和历史传 `after?`、`limit?`；默认 200 条、最多 1000 条，使用响应 `next_after` 继续，不能跨 Dataset 或区间复用。
+
+| op | 必需输入 | 主要结果 |
+|---|---|---|
+| register / head | 无 | epoch、revision、schema、id_column、geometry_column、srid |
+| snapshot | epoch、revision | features、schema、done |
+| changes | epoch、from、to | changes、schema、done |
+| open_draft | epoch、base_revision、request_id | workspace、version、base_revision |
+| save_delta | epoch、workspace、expected_version、request_id、operations | workspace、version、ids |
+| draft_changes | epoch、workspace | base_revision、version、changes、schema、ids、done |
+| preview | epoch、workspace | head、version、conflicts、total |
+| resolve | epoch、workspace、expected_version、expected_head、resolutions | workspace、version |
+| rebase | epoch、workspace、expected_version、expected_head | workspace、version、base_revision |
+| publish | epoch、workspace、expected_version、request_id | revision、ids、changes、status |
+| commit_result | epoch、request_id | 原发布结果，或 status: unknown |
+| history / commit | epoch / epoch、revision | commits / changes、done |
+
+`publish.message` 可省略，默认空字符串，最大 4096 字节。`resolve`、`rebase` 也接受 `request_id`，客户端应始终提供以恢复响应丢失。相同请求 ID 和内容返回保存的原结果；更改内容返回 409。`commit_result` 的 unknown 不证明上次事务失败，应继续保留原发布请求。无变化返回 `status: unchanged`，不创建提交。
+
+`schema` 为 `{name,type,nullable,editable}[]`。`operations` 使用 `method: post` 加稳定 `client_id` 和完整 Feature，`method: patch` 加 id 与仅改动的 `body.properties`/可选 geometry，或 `method: delete` 加 id。恢复远程删除的原有行使用 `method: restore` 加原 id 与真正改变的属性/几何 patch；服务器要求基础版本中已删除该行，并从历史读取最近一次原生值，保留原主键。字段操作为 `{method:"patch",schema:true,body:{add:[{name,type}],drop:[name]}}`。缺少属性表示不修改，显式 null 表示空值；字段删除只能通过 schema 操作。新建时省略的属性沿用数据库默认值；`draft_changes` 对新增要素保留属性缺失，不把未提供的属性补成 null，便于 rebase 后重建上传内容。每批 1–1000 操作、序列化后最多 16 MiB；一个草稿可累积多批。单个展开后的 Feature 最多 4 MiB（预留三个冲突版本的响应空间），单个完整响应最多 16 MiB，超出返回 413。
+
+`changes` 为 `{id,feature}`，null 是删除；草稿新增还带 `client_id`，恢复的历史行带 `restore: Feature` 基线供客户端计算 patch，`ids` 映射稳定 client_id 到预分配的永久 ID。Feature 几何为 EPSG:4326，正式表和历史保留原始 SRID。PostgreSQL bigint/numeric 属性输出为 JSON 字符串，避免浏览器 rebase 后丢失精度；普通整数和浮点属性仍为 JSON 数字。行冲突为 `{id,fields,base,local,remote}`，fields 使用 `/properties/<JSON Pointer 转义字段>`、`/geometry` 或 `*`；过期选择为 `stale_resolution`。schema 冲突使用 id `$schema`，三个版本是 schema 数组。字段选择使用 `{id,choice:"fields",fields:{"/properties/name":"local","/geometry":"remote"}}`，服务端选取原生值并合并其余不冲突字段。整行选择为 `{id,choice:"local"|"remote"}`；属性冲突也会保留其余自动合并字段。显式手工替换可以使用 `{id,choice:"custom",feature}`，必须给完整 Feature 或 null；schema 仅支持 local/remote。HEAD 再次变化或后续保存会使先前选择重新等待确认。
+
+未登记的 `head` 返回 409 / `not_registered`；旧 epoch 返回 409 / `epoch_mismatch`。其他错误沿用中心结构，冲突详情在顶层。已确定回滚的 PostgreSQL 数据类型/约束错误（SQLSTATE 22/23）返回 422，可修改草稿后重新提交；连接中断、期限和其他不确定错误仍需保留原发布请求确认结果。冲突页是按 ID 排序的连续前缀，达到字节或条数预算后不会越过未返回项；schema 冲突也按相同顺序分页。运行前提与表能力限制见[日常操作](user-guide.md#托管业务表)。
