@@ -3,10 +3,19 @@ import { call, type Audit, type Project } from "@/lib/browser-api";
 import { pretty } from "@/lib/geojson";
 import { CircleCheck, Lock, ScrollText } from "lucide-react";
 import { useState } from "react";
-import { Empty, ErrorBox, Loading, Modal, usePage } from "./common";
+import { Empty, ErrorBox, Loading, Modal, Notice, usePage } from "./common";
 import { Panel, PanelTitle, time, useAction } from "./resource-shared";
 import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 import {
   Table,
   TableBody,
@@ -40,13 +49,12 @@ export function Access({ project }: { project: Project }) {
           }}
         >
           {!owner && (
-            <div className="notice is-muted">
-              <Lock aria-hidden="true" />
-              <span>只有项目所有者可以管理成员权限。</span>
-            </div>
+            <Notice tone="muted" icon={<Lock aria-hidden="true" />}>
+              只有项目所有者可以管理成员权限。
+            </Notice>
           )}
           <div className="field">
-            <label htmlFor="subject">成员身份</label>
+            <Label htmlFor="subject">成员身份</Label>
             <Input
               id="subject"
               name="subject"
@@ -56,19 +64,27 @@ export function Access({ project }: { project: Project }) {
             />
           </div>
           <div className="field">
-            <label htmlFor="member-role">项目角色</label>
-            <select id="member-role" name="role">
-              <option value="viewer">只读 · 浏览与查询</option>
-              <option value="editor">编辑者 · 编辑与发布</option>
-              <option value="owner">所有者 · 管理项目与权限</option>
-            </select>
+            <Label htmlFor="member-role">项目角色</Label>
+            <Select name="role" defaultValue="viewer">
+              <SelectTrigger id="member-role" className="role-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper" className="menu">
+                <SelectItem value="viewer">只读 · 浏览与查询</SelectItem>
+                <SelectItem value="editor">编辑者 · 编辑与发布</SelectItem>
+                <SelectItem value="owner">所有者 · 管理项目与权限</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <ErrorBox message={task.error} />
           {success && (
-            <div role="status" className="notice is-success">
-              <CircleCheck aria-hidden="true" />
-              <span>{success}</span>
-            </div>
+            <Notice
+              role="status"
+              tone="success"
+              icon={<CircleCheck aria-hidden="true" />}
+            >
+              {success}
+            </Notice>
           )}
           <div className="form-actions is-start">
             <Button disabled={!owner || task.busy}>
@@ -113,7 +129,9 @@ export function AuditPanel({ project }: { project: Project }) {
                 <TableRow key={e.id}>
                   <TableCell className="mono muted">#{e.id}</TableCell>
                   <TableCell>
-                    <span className="code-tag">{e.action}</span>
+                    <Badge variant="secondary" className="code-tag">
+                      {e.action}
+                    </Badge>
                   </TableCell>
                   <TableCell>
                     <span className="subject">

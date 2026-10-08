@@ -1,8 +1,10 @@
 "use client";
 import { useState, type ReactNode } from "react";
 import { ErrorBox, Modal } from "./common";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Label } from "./ui/label";
 const labels: Record<string, string> = {
   owner: "所有者",
   editor: "编辑者",
@@ -82,10 +84,13 @@ const tones: Record<string, string> = {
 /** Colored pill for roles and workspace states; text comes from `role()`. */
 export function StatusBadge({ value }: { value: string }) {
   return (
-    <span className={`status-badge ${tones[value] ?? "tone-neutral"}`}>
+    <Badge
+      variant="outline"
+      className={`status-badge ${tones[value] ?? "tone-neutral"}`}
+    >
       <span className="status-badge-dot" aria-hidden="true" />
       {role(value)}
-    </span>
+    </Badge>
   );
 }
 export function NameDialog({
@@ -107,7 +112,7 @@ export function NameDialog({
           void task.run(() => submit(name));
         }}
       >
-        <label htmlFor="name">名称</label>
+        <Label htmlFor="name">名称</Label>
         <Input id="name" name="name" autoFocus required maxLength={256} />
         <ErrorBox message={task.error} />
         <div className="form-actions">

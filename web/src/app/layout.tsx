@@ -3,6 +3,7 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/newsreader";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
+import { TooltipProvider } from "@/components/ui/tooltip";
 export const metadata: Metadata = {
   title: "GeoLedger Console",
   description: "空间数据版本控制管理控制台",
@@ -14,7 +15,9 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
+      </body>
     </html>
   );
 }

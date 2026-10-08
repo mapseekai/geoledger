@@ -7,7 +7,25 @@ import {
   RefreshCw,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import { Alert, AlertDescription } from "./ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -17,6 +35,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Skeleton } from "./ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 export function Empty({
   title = "这里还没有内容",
   icon: Icon = Inbox,
@@ -54,11 +73,106 @@ export function Loading({ rows = 5 }: { rows?: number }) {
 }
 export function ErrorBox({ message }: { message: string }) {
   return message ? (
-    <div role="alert" className="alert">
+    <Alert variant="destructive" className="alert">
       <CircleAlert aria-hidden="true" />
-      <span>{message}</span>
-    </div>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
   ) : null;
+}
+/** Non-error feedback; uses the Alert surface without the alert role. */
+export function Notice({
+  tone,
+  icon,
+  role,
+  action,
+  children,
+}: {
+  tone?: "success" | "warning" | "muted";
+  icon?: ReactNode;
+  role?: "status";
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Alert
+      role={role ?? "note"}
+      className={`notice${tone ? ` is-${tone}` : ""}`}
+    >
+      {icon}
+      <AlertDescription>{children}</AlertDescription>
+      {action}
+    </Alert>
+  );
+}
+/** Tooltip for icon buttons; the trigger keeps its own accessible name. */
+export function Tip({
+  label,
+  side,
+  container,
+  children,
+}: {
+  label: ReactNode;
+  side?: ComponentProps<typeof TooltipContent>["side"];
+  container?: HTMLElement | null;
+  children: ReactElement;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side} container={container ?? undefined}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+/** Destructive confirmation; stays open while the action runs. */
+export function Confirm({
+  title,
+  description,
+  action,
+  busy,
+  error,
+  confirm,
+  close,
+}: {
+  title: string;
+  description: string;
+  action: string;
+  busy: boolean;
+  error: string;
+  confirm: () => void;
+  close: () => void;
+}) {
+  return (
+    <AlertDialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) close();
+      }}
+    >
+      <AlertDialogContent className="dialog-wide">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <ErrorBox message={error} />
+        <AlertDialogFooter className="form-actions">
+          <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={busy}
+            onClick={(event) => {
+              // Keep the dialog open until the request finishes or fails.
+              event.preventDefault();
+              confirm();
+            }}
+          >
+            {action}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 }
 export function Modal({
   title,
@@ -90,6 +204,18 @@ export function Modal({
       </DialogContent>
     </Dialog>
   );
+}
+/** Tracks a CSS media query; false during server rendering. */
+export function useMedia(query: string) {
+  const [matches, setMatches] = useState(false);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener("change", update);
+    return () => list.removeEventListener("change", update);
+  }, [query]);
+  return matches;
 }
 export function usePage<T>(
   load: (after: string) => Promise<{
@@ -151,16 +277,17 @@ export function usePage<T>(
         第 {cursors.length} 页 · 本页 {rows.length} 项
       </span>
       <div className="pagination-actions">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={reset}
-          disabled={busy}
-          aria-label="刷新列表"
-          title="刷新列表"
-        >
-          <RefreshCw className={busy ? "spin" : undefined} />
-        </Button>
+        <Tip label="刷新列表">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={reset}
+            disabled={busy}
+            aria-label="刷新列表"
+          >
+            <RefreshCw className={busy ? "spin" : undefined} />
+          </Button>
+        </Tip>
         <Button
           variant="outline"
           size="sm"

@@ -34,9 +34,10 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
   Crosshair,
   Database,
-  Ellipsis,
+  GitBranch,
   MapPinned,
   PanelLeft,
   PanelRight,
@@ -57,18 +58,46 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ErrorBox, Modal } from "./common";
+import { Confirm, ErrorBox, Modal, Notice, Tip, useMedia } from "./common";
 import { MapView, kindColors, type MapHandle } from "./map-view";
 import { short, useAction } from "./resource-shared";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "./ui/command";
 import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "./ui/resizable";
+import { ScrollArea, ScrollBar } from "./ui/scroll-area";
+import { Separator } from "./ui/separator";
+import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./ui/table";
 import { Textarea } from "./ui/textarea";
+import { Toggle } from "./ui/toggle";
 
 /** Features fetched per load; further batches load on demand. */
 const BATCH = 1000;
@@ -89,8 +118,7 @@ export function FeatureExplorer({
 }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]),
     [workspace, setWorkspace] = useState(""),
-    [refresh, setRefresh] = useState(0),
-    [lookup, setLookup] = useState(false);
+    [refresh, setRefresh] = useState(0);
   const [workspaceError, setWorkspaceError] = useState("");
   const task = useAction();
   useEffect(() => {
@@ -114,15 +142,16 @@ export function FeatureExplorer({
   const source = (
     <>
       <div className="gis-title">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={back}
-          aria-label="返回数据集"
-          title="返回数据集"
-        >
-          <ArrowLeft />
-        </Button>
+        <Tip label="返回数据集">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={back}
+            aria-label="返回数据集"
+          >
+            <ArrowLeft />
+          </Button>
+        </Tip>
         <span className="row-icon is-data" aria-hidden="true">
           <Database size={15} />
         </span>
@@ -133,61 +162,52 @@ export function FeatureExplorer({
           </span>
         </div>
       </div>
+      <Separator orientation="vertical" className="gis-sep" />
       <div className="gis-source">
-        <select
-          id="workspace-select"
-          aria-label="数据来源"
+        <SourcePicker
           value={workspace}
-          onChange={(e) => setWorkspace(e.target.value)}
-        >
-          <option value="">已发布的数据</option>
-          {workspaces
-            .filter((w) => w.status === "open" || w.id === workspace)
-            .map((w) => (
-              <option key={w.id} value={w.id}>
-                工作区 {short(w.id)} · v{w.version}
-              </option>
-            ))}
-        </select>
-        <Button
-          variant="outline"
-          size="sm"
-          aria-label="新建工作区"
-          title="新建工作区"
-          disabled={!writable || task.busy}
-          onClick={() =>
+          workspaces={workspaces.filter(
+            (w) => w.status === "open" || w.id === workspace,
+          )}
+          disabled={task.busy}
+          choose={setWorkspace}
+          lookup={(id) =>
             void task.run(async () => {
               const w = await call<Workspace>({
-                action: "createWorkspace",
+                action: "workspace",
                 project: project.id,
+                workspace: id,
               });
-              setWorkspaces((rows) => [w, ...rows]);
+              setWorkspaces((rows) => [
+                w,
+                ...rows.filter((x) => x.id !== w.id),
+              ]);
               setWorkspace(w.id);
-              setRefresh((n) => n + 1);
             })
           }
-        >
-          <Plus />
-          <span className="btn-label">新建工作区</span>
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="更多来源"
-              title="更多来源"
-            >
-              <Ellipsis />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="menu">
-            <DropdownMenuItem onSelect={() => setLookup(true)}>
-              <Search />
-              使用指定工作区
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        />
+        <Tip label="新建工作区">
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="新建工作区"
+            disabled={!writable || task.busy}
+            onClick={() =>
+              void task.run(async () => {
+                const w = await call<Workspace>({
+                  action: "createWorkspace",
+                  project: project.id,
+                });
+                setWorkspaces((rows) => [w, ...rows]);
+                setWorkspace(w.id);
+                setRefresh((n) => n + 1);
+              })
+            }
+          >
+            <Plus />
+            <span className="btn-label">新建工作区</span>
+          </Button>
+        </Tip>
       </div>
     </>
   );
@@ -202,45 +222,123 @@ export function FeatureExplorer({
         source={source}
         alert={<ErrorBox message={task.error || workspaceError} />}
       />
-      {lookup && (
-        <Modal title="使用指定工作区" close={() => setLookup(false)}>
-          <form
-            className="lookup"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const id = String(
-                new FormData(e.currentTarget).get("workspace"),
-              ).trim();
-              void task.run(async () => {
-                const w = await call<Workspace>({
-                  action: "workspace",
-                  project: project.id,
-                  workspace: id,
-                });
-                setWorkspaces((rows) => [
-                  w,
-                  ...rows.filter((x) => x.id !== w.id),
-                ]);
-                setWorkspace(w.id);
-                setLookup(false);
-              });
-            }}
-          >
-            <Input
-              name="workspace"
-              aria-label="指定工作区标识"
-              required
-              autoFocus
-              placeholder="工作区标识"
-            />
-            <Button variant="outline" disabled={task.busy}>
-              使用工作区
-            </Button>
-          </form>
-          <ErrorBox message={task.error} />
-        </Modal>
-      )}
     </section>
+  );
+}
+
+/**
+ * Data source combobox: the published view, open workspaces, or any workspace
+ * looked up by its full identifier (for workspaces beyond the first page).
+ */
+function SourcePicker({
+  value,
+  workspaces,
+  disabled,
+  choose,
+  lookup,
+}: {
+  value: string;
+  workspaces: Workspace[];
+  disabled: boolean;
+  choose: (id: string) => void;
+  lookup: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false),
+    [search, setSearch] = useState("");
+  const current = workspaces.find((w) => w.id === value);
+  const typed = search.trim();
+  const known = !typed || workspaces.some((w) => w.id === typed);
+  const toggle = (next: boolean) => {
+    setOpen(next);
+    if (!next) setSearch("");
+  };
+  const pick = (id: string) => {
+    toggle(false);
+    if (id !== value) choose(id);
+  };
+  return (
+    <Popover open={open} onOpenChange={toggle}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          role="combobox"
+          aria-expanded={open}
+          aria-label="数据来源"
+          data-value={value}
+          disabled={disabled}
+          className="source-trigger"
+        >
+          {value ? <GitBranch /> : <Database />}
+          <span className="source-label">
+            {value
+              ? `工作区 ${short(value)}${current ? ` · v${current.version}` : ""}`
+              : "已发布的数据"}
+          </span>
+          <ChevronsUpDown className="source-chevron" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="source-menu">
+        <Command>
+          <CommandInput
+            aria-label="工作区标识"
+            placeholder="搜索或输入工作区标识"
+            value={search}
+            onValueChange={setSearch}
+          />
+          <CommandList>
+            <CommandEmpty>没有匹配的来源</CommandEmpty>
+            <CommandGroup>
+              <CommandItem
+                value="已发布的数据 published"
+                onSelect={() => pick("")}
+              >
+                <Database />
+                <span className="source-item-label">已发布的数据</span>
+                <Check className={value ? "invisible" : undefined} />
+              </CommandItem>
+            </CommandGroup>
+            {workspaces.length > 0 && (
+              <CommandGroup heading="工作区">
+                {workspaces.map((w) => (
+                  <CommandItem
+                    key={w.id}
+                    value={`${w.id} v${w.version}`}
+                    onSelect={() => pick(w.id)}
+                  >
+                    <GitBranch />
+                    <span className="source-item-label">
+                      <span className="mono">{short(w.id)}</span>
+                      <small>v{w.version}</small>
+                    </span>
+                    <Check
+                      className={w.id === value ? undefined : "invisible"}
+                    />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+            {!known && (
+              <CommandGroup forceMount>
+                <CommandItem
+                  forceMount
+                  value={`lookup ${typed}`}
+                  onSelect={() => {
+                    toggle(false);
+                    lookup(typed);
+                  }}
+                >
+                  <Search />
+                  <span className="source-item-label">
+                    使用工作区 <span className="mono">{typed}</span>
+                  </span>
+                </CommandItem>
+              </CommandGroup>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -343,18 +441,6 @@ function useLayer(project: string, dataset: string, workspaceId: string) {
   return { ...state, load };
 }
 
-function useNarrow() {
-  const [narrow, setNarrow] = useState(false);
-  useEffect(() => {
-    const query = window.matchMedia("(max-width: 1024px)");
-    const update = () => setNarrow(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-  return narrow;
-}
-
 function leaveFullscreen() {
   if (document.fullscreenElement) void document.exitFullscreen();
 }
@@ -390,13 +476,15 @@ export function FeatureWorkspace({
     [remove, setRemove] = useState<Feature>(),
     [publish, setPublish] = useState(false);
   const [pending, setPending] = useState<Publication>();
-  const narrow = useNarrow();
+  // Wide screens dock both panels; narrow screens show one of them as a sheet.
+  const narrow = useMedia("(max-width: 1024px)");
+  const phone = useMedia("(max-width: 640px)");
   const [left, setLeft] = useState(true),
     [right, setRight] = useState(true),
+    [drawer, setDrawer] = useState<"left" | "right">(),
     [table, setTable] = useState(false),
-    [tableHeight, setTableHeight] = useState(240),
     [fullscreen, setFullscreen] = useState(false);
-  const body = useRef<HTMLDivElement>(null);
+  const [body, setBody] = useState<HTMLDivElement | null>(null);
   const mapRef = useRef<MapHandle>(null);
   const task = useAction();
 
@@ -409,15 +497,14 @@ export function FeatureWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refresh]);
   useEffect(() => {
-    setLeft(!narrow);
-    setRight(!narrow);
+    setDrawer(undefined);
   }, [narrow]);
   useEffect(() => {
     const update = () =>
-      setFullscreen(document.fullscreenElement === body.current);
+      setFullscreen(!!body && document.fullscreenElement === body);
     document.addEventListener("fullscreenchange", update);
     return () => document.removeEventListener("fullscreenchange", update);
-  }, []);
+  }, [body]);
 
   const layer = useMemo(
     () => buildLayer(layerState.features),
@@ -461,10 +548,7 @@ export function FeatureWorkspace({
       const at = pageContaining(filtered, (row) => row.id === item.id, PAGE);
       if (at !== undefined) setPage(at);
     }
-    if (narrow) {
-      setLeft(false);
-      setRight(true);
-    }
+    if (narrow) setDrawer("right");
   };
   const describe = (index: number) => {
     const item = layer.items[index];
@@ -476,51 +560,89 @@ export function FeatureWorkspace({
   });
   const toggleFullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
-    else void body.current?.requestFullscreen?.();
+    else void body?.requestFullscreen?.();
   };
-  const startResize = (event: React.PointerEvent) => {
-    const startY = event.clientY;
-    const startHeight = tableHeight;
-    const max = (body.current?.clientHeight ?? 600) - 160;
-    const move = (e: PointerEvent) =>
-      setTableHeight(
-        Math.round(
-          Math.min(max, Math.max(120, startHeight + startY - e.clientY)),
-        ),
-      );
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+  const showLeft = narrow ? drawer === "left" : left;
+  const showRight = narrow ? drawer === "right" : right;
+  const closeDrawer = narrow ? () => setDrawer(undefined) : undefined;
 
+  const leftPanel = (
+    <LayerPanel
+      name={dataset.name}
+      layer={layer}
+      visible={visible}
+      setVisible={setVisible}
+      query={query}
+      setQuery={(q) => {
+        setQuery(q);
+        setPage(0);
+      }}
+      rows={paged.rows}
+      total={filtered.length}
+      page={paged.page}
+      pages={paged.pages}
+      setPage={setPage}
+      selectedId={selectedId}
+      hovered={hovered}
+      setHovered={setHovered}
+      select={(item) => select(item, "list")}
+      busy={busy}
+      more={!!layerState.next}
+      loadMore={() => void load(true)}
+      reload={reload}
+      close={closeDrawer}
+    />
+  );
+  const rightPanel = selected ? (
+    <Inspector
+      item={selected}
+      canEdit={canEdit}
+      zoom={() => selected.bounds && mapRef.current?.fit(selected.bounds)}
+      edit={() => {
+        leaveFullscreen();
+        setEdit(raw(selected));
+      }}
+      remove={() => {
+        leaveFullscreen();
+        setRemove(raw(selected));
+      }}
+      close={() => setSelectedId(undefined)}
+    />
+  ) : (
+    <LayerSummary
+      name={dataset.name}
+      layer={layer}
+      source={workspaceId ? `工作区 v${version ?? "…"}` : `r${revision ?? "…"}`}
+      close={closeDrawer}
+    />
+  );
   return (
     <>
       <header className="gis-toolbar">
         {source}
-        <span
+        <Badge
+          variant="outline"
           className="revision-tag"
           title={workspaceId ? "工作区版本" : "发布版本"}
         >
           {workspaceId ? `v${version ?? "…"}` : `r${revision ?? "…"}`}
-        </span>
+        </Badge>
         <div className="gis-actions">
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label="添加要素"
-            title="添加要素"
-            disabled={!canEdit}
-            onClick={() => {
-              leaveFullscreen();
-              setEdit("new");
-            }}
-          >
-            <Plus />
-            <span className="btn-label">添加要素</span>
-          </Button>
+          <Tip label="添加要素">
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="添加要素"
+              disabled={!canEdit}
+              onClick={() => {
+                leaveFullscreen();
+                setEdit("new");
+              }}
+            >
+              <Plus />
+              <span className="btn-label">添加要素</span>
+            </Button>
+          </Tip>
           {workspaceId && (
             <Button
               size="sm"
@@ -541,195 +663,171 @@ export function FeatureWorkspace({
           )}
         </div>
         <span className="gis-break" aria-hidden="true" />
+        <Separator orientation="vertical" className="gis-sep is-toggles" />
         <div className="gis-toggles" role="group" aria-label="面板">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-pressed={left}
-            aria-label="图层与要素"
-            title="图层与要素"
-            onClick={() => {
-              setLeft((v) => !v);
-              if (narrow) setRight(false);
-            }}
-          >
-            <PanelLeft />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-pressed={table}
-            aria-label="属性表"
-            title="属性表"
-            onClick={() => setTable((v) => !v)}
-          >
-            <Table2 />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-pressed={right}
-            aria-label="要素信息"
-            title="要素信息"
-            onClick={() => {
-              setRight((v) => !v);
-              if (narrow) setLeft(false);
-            }}
-          >
-            <PanelRight />
-          </Button>
+          <Tip label="图层与要素">
+            <Toggle
+              size="sm"
+              pressed={showLeft}
+              aria-label="图层与要素"
+              onPressedChange={(on) =>
+                narrow ? setDrawer(on ? "left" : undefined) : setLeft(on)
+              }
+            >
+              <PanelLeft />
+            </Toggle>
+          </Tip>
+          <Tip label="属性表">
+            <Toggle
+              size="sm"
+              pressed={table}
+              aria-label="属性表"
+              onPressedChange={setTable}
+            >
+              <Table2 />
+            </Toggle>
+          </Tip>
+          <Tip label="要素信息">
+            <Toggle
+              size="sm"
+              pressed={showRight}
+              aria-label="要素信息"
+              onPressedChange={(on) =>
+                narrow ? setDrawer(on ? "right" : undefined) : setRight(on)
+              }
+            >
+              <PanelRight />
+            </Toggle>
+          </Tip>
         </div>
       </header>
       <div className="gis-alerts">
         {alert}
         <ErrorBox message={layerState.error || task.error} />
         {pending && (
-          <div className="notice is-warning">
-            <TriangleAlert aria-hidden="true" />
-            <span>
-              有一笔待确认的发布请求。请到对应工作区重试原请求，再继续编辑。
-            </span>
-          </div>
+          <Notice tone="warning" icon={<TriangleAlert aria-hidden="true" />}>
+            有一笔待确认的发布请求。请到对应工作区重试原请求，再继续编辑。
+          </Notice>
         )}
       </div>
-      <div
-        ref={body}
-        className={`gis-body${left ? " has-left" : ""}${right ? " has-right" : ""}`}
-      >
-        <aside
-          className="gis-panel gis-left"
-          aria-label="图层与要素"
-          hidden={!left}
-        >
-          <LayerPanel
-            name={dataset.name}
-            layer={layer}
-            visible={visible}
-            setVisible={setVisible}
-            query={query}
-            setQuery={(q) => {
-              setQuery(q);
-              setPage(0);
-            }}
-            rows={paged.rows}
-            total={filtered.length}
-            page={paged.page}
-            pages={paged.pages}
-            setPage={setPage}
-            selectedId={selectedId}
-            hovered={hovered}
-            setHovered={setHovered}
-            select={(item) => select(item, "list")}
-            busy={busy}
-            more={!!layerState.next}
-            loadMore={() => void load(true)}
-            reload={reload}
-            close={narrow ? () => setLeft(false) : undefined}
-          />
-        </aside>
-        <div className="gis-center">
-          <MapView
-            ref={mapRef}
-            collection={collection}
-            bounds={layer.bounds}
-            fitKey={layer.bounds ? "data" : ""}
-            selected={selected?.bounds ? selected.index : undefined}
-            hovered={hovered}
-            visible={visible}
-            onSelect={(index) =>
-              select(
-                index === undefined ? undefined : layer.items[index],
-                "map",
-              )
-            }
-            onHover={setHovered}
-            describe={describe}
-            fullscreen={fullscreen}
-            toggleFullscreen={toggleFullscreen}
+      <div ref={setBody} className="gis-body">
+        {!narrow && (
+          <aside
+            className="gis-panel gis-left"
+            aria-label="图层与要素"
+            hidden={!left}
           >
-            {busy && (
-              <div className="map-progress" role="status">
-                <RefreshCw className="spin" aria-hidden="true" />
-                正在加载 {layerState.loaded} 项
-              </div>
-            )}
-            {!busy && !layerState.error && !layer.items.length && (
-              <div className="map-empty">
-                <MapPinned aria-hidden="true" />
-                <strong>暂无要素</strong>
-              </div>
-            )}
-          </MapView>
-          {table && (
-            <section
-              className="gis-table"
-              style={{ height: tableHeight }}
-              aria-label="属性表"
-            >
-              <div
-                className="gis-resize"
-                role="separator"
-                aria-orientation="horizontal"
-                aria-label="调整属性表高度"
-                onPointerDown={startResize}
-              />
-              <AttributeTable
-                columns={layer.columns}
-                rows={paged.rows}
-                selectedId={selectedId}
+            {leftPanel}
+          </aside>
+        )}
+        <div className="gis-center">
+          <ResizablePanelGroup orientation="vertical" className="gis-split">
+            <ResizablePanel id="map" minSize={160} className="gis-map-panel">
+              <MapView
+                ref={mapRef}
+                collection={collection}
+                bounds={layer.bounds}
+                fitKey={layer.bounds ? "data" : ""}
+                selected={selected?.bounds ? selected.index : undefined}
                 hovered={hovered}
-                setHovered={setHovered}
-                select={(item) => select(item, "list")}
-                summary={`${filtered.length} 项 · 第 ${paged.page + 1}/${paged.pages} 页`}
-                close={() => setTable(false)}
-              />
-            </section>
-          )}
+                visible={visible}
+                onSelect={(index) =>
+                  select(
+                    index === undefined ? undefined : layer.items[index],
+                    "map",
+                  )
+                }
+                onHover={setHovered}
+                describe={describe}
+                fullscreen={fullscreen}
+                toggleFullscreen={toggleFullscreen}
+              >
+                {busy && (
+                  <div className="map-progress" role="status">
+                    <RefreshCw className="spin" aria-hidden="true" />
+                    正在加载 {layerState.loaded} 项
+                  </div>
+                )}
+                {!busy && !layerState.error && !layer.items.length && (
+                  <div className="map-empty">
+                    <MapPinned aria-hidden="true" />
+                    <strong>暂无要素</strong>
+                  </div>
+                )}
+              </MapView>
+            </ResizablePanel>
+            {table && (
+              <>
+                <ResizableHandle
+                  className="gis-split-handle"
+                  aria-label="调整属性表高度"
+                />
+                <ResizablePanel
+                  id="table"
+                  defaultSize={240}
+                  minSize={120}
+                  maxSize="70%"
+                  className="gis-table-panel"
+                >
+                  <section className="gis-table" aria-label="属性表">
+                    <AttributeTable
+                      columns={layer.columns}
+                      rows={paged.rows}
+                      selectedId={selectedId}
+                      hovered={hovered}
+                      setHovered={setHovered}
+                      select={(item) => select(item, "list")}
+                      summary={`${filtered.length} 项 · 第 ${paged.page + 1}/${paged.pages} 页`}
+                      close={() => setTable(false)}
+                    />
+                  </section>
+                </ResizablePanel>
+              </>
+            )}
+          </ResizablePanelGroup>
         </div>
-        <aside
-          className="gis-panel gis-right"
-          aria-label="要素信息"
-          hidden={!right}
-        >
-          {selected ? (
-            <Inspector
-              item={selected}
-              canEdit={canEdit}
-              zoom={() =>
-                selected.bounds && mapRef.current?.fit(selected.bounds)
-              }
-              edit={() => {
-                leaveFullscreen();
-                setEdit(raw(selected));
-              }}
-              remove={() => {
-                leaveFullscreen();
-                setRemove(raw(selected));
-              }}
-              close={() => setSelectedId(undefined)}
-            />
-          ) : (
-            <LayerSummary
-              name={dataset.name}
-              layer={layer}
-              source={
-                workspaceId
-                  ? `工作区 v${version ?? "…"}`
-                  : `r${revision ?? "…"}`
-              }
-              close={narrow ? () => setRight(false) : undefined}
-            />
-          )}
-        </aside>
-        {narrow && (left || right) && (
-          <button
-            className="gis-backdrop"
-            aria-label="关闭面板"
-            onClick={() => {
-              setLeft(false);
-              setRight(false);
-            }}
-          />
+        {!narrow && (
+          <aside
+            className="gis-panel gis-right"
+            aria-label="要素信息"
+            hidden={!right}
+          >
+            {rightPanel}
+          </aside>
+        )}
+        {narrow && (
+          <>
+            <Sheet
+              open={drawer === "left"}
+              onOpenChange={(open) => !open && setDrawer(undefined)}
+            >
+              <SheetContent
+                side="left"
+                container={body}
+                showCloseButton={false}
+                aria-describedby={undefined}
+                className="gis-panel gis-left"
+              >
+                <SheetTitle className="sr-only">图层与要素</SheetTitle>
+                {leftPanel}
+              </SheetContent>
+            </Sheet>
+            <Sheet
+              open={drawer === "right"}
+              onOpenChange={(open) => !open && setDrawer(undefined)}
+            >
+              <SheetContent
+                side={phone ? "bottom" : "right"}
+                container={body}
+                showCloseButton={false}
+                aria-describedby={undefined}
+                className="gis-panel gis-right"
+              >
+                <SheetTitle className="sr-only">要素信息</SheetTitle>
+                {rightPanel}
+              </SheetContent>
+            </Sheet>
+          </>
         )}
       </div>
       {edit && (
@@ -751,48 +849,34 @@ export function FeatureWorkspace({
         />
       )}
       {remove && (
-        <Modal
+        <Confirm
           title="删除要素"
           description={`将在当前工作区中删除 ${remove.id}。发布前不会改变正式版本。`}
-          close={task.busy ? () => {} : () => setRemove(undefined)}
-        >
-          <ErrorBox message={task.error} />
-          <div className="form-actions">
-            <Button
-              variant="outline"
-              onClick={() => setRemove(undefined)}
-              disabled={task.busy}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={task.busy}
-              onClick={() =>
-                void task.run(async () => {
-                  await call({
-                    action: "save",
-                    project: project.id,
-                    workspace: workspaceId,
-                    version,
-                    edits: [
-                      {
-                        dataset: dataset.id,
-                        featureId: remove.id,
-                        feature: null,
-                      },
-                    ],
-                  });
-                  setRemove(undefined);
-                  setSelectedId(undefined);
-                  reload();
-                })
-              }
-            >
-              确认删除
-            </Button>
-          </div>
-        </Modal>
+          action="确认删除"
+          busy={task.busy}
+          error={task.error}
+          close={() => setRemove(undefined)}
+          confirm={() =>
+            void task.run(async () => {
+              await call({
+                action: "save",
+                project: project.id,
+                workspace: workspaceId,
+                version,
+                edits: [
+                  {
+                    dataset: dataset.id,
+                    featureId: remove.id,
+                    feature: null,
+                  },
+                ],
+              });
+              setRemove(undefined);
+              setSelectedId(undefined);
+              reload();
+            })
+          }
+        />
       )}
       {publish && (
         <PublishDialog
@@ -912,50 +996,46 @@ function LayerPanel({
         )}
       </div>
       <div className="layer-tree">
-        <label className="layer-row">
-          <input
-            type="checkbox"
+        <Label className="layer-row">
+          <Checkbox
             checked={all}
             disabled={!present.length}
-            onChange={(e) =>
-              setVisible({
-                point: e.target.checked,
-                line: e.target.checked,
-                polygon: e.target.checked,
-              })
-            }
+            onCheckedChange={(checked) => {
+              const on = checked === true;
+              setVisible({ point: on, line: on, polygon: on });
+            }}
           />
           <Database size={14} aria-hidden="true" />
           <span className="layer-name">{name}</span>
           <span className="layer-count">{layer.items.length}</span>
-        </label>
+        </Label>
         {present.map((kind) => (
-          <label className="layer-row is-child" key={kind}>
-            <input
-              type="checkbox"
+          <Label className="layer-row is-child" key={kind}>
+            <Checkbox
               checked={visible[kind]}
-              onChange={(e) =>
-                setVisible({ ...visible, [kind]: e.target.checked })
+              onCheckedChange={(checked) =>
+                setVisible({ ...visible, [kind]: checked === true })
               }
             />
             <Swatch kind={kind} />
             <span className="layer-name">{kindLabels[kind]}</span>
             <span className="layer-count">{layer.counts[kind] || ""}</span>
-          </label>
+          </Label>
         ))}
       </div>
       <div className="gis-panel-head is-sub">
         <strong>要素</strong>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={reload}
-          disabled={busy}
-          aria-label="刷新"
-          title="刷新"
-        >
-          <RefreshCw className={busy ? "spin" : undefined} />
-        </Button>
+        <Tip label="刷新">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={reload}
+            disabled={busy}
+            aria-label="刷新"
+          >
+            <RefreshCw className={busy ? "spin" : undefined} />
+          </Button>
+        </Tip>
       </div>
       <div className="search gis-search">
         <Search size={15} aria-hidden="true" />
@@ -967,39 +1047,41 @@ function LayerPanel({
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <ul className="feature-list" ref={list} aria-label="要素列表">
-        {rows.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              data-id={item.id}
-              className={`feature-row${item.id === selectedId ? " is-selected" : ""}${item.index === hovered ? " is-hovered" : ""}`}
-              aria-current={item.id === selectedId ? "true" : undefined}
-              onClick={() => select(item)}
-              onMouseEnter={() =>
-                setHovered(item.bounds ? item.index : undefined)
-              }
-              onMouseLeave={() => setHovered(undefined)}
-            >
-              <KindIcon item={item} />
-              <span className="feature-row-text">
-                <span className="mono">{item.id}</span>
-                {item.label && <small>{item.label}</small>}
-              </span>
-              {(item.kind === "none" || item.kind === "invalid") && (
-                <small className="feature-row-flag">
-                  {kindLabels[item.kind]}
-                </small>
-              )}
-            </button>
-          </li>
-        ))}
-        {!busy && !rows.length && (
-          <li className="feature-list-empty">
-            {query.trim() ? "没有匹配的要素" : "暂无要素"}
-          </li>
-        )}
-      </ul>
+      <ScrollArea className="feature-scroll">
+        <ul className="feature-list" ref={list} aria-label="要素列表">
+          {rows.map((item) => (
+            <li key={item.id}>
+              <Button
+                variant="ghost"
+                data-id={item.id}
+                className={`feature-row${item.id === selectedId ? " is-selected" : ""}${item.index === hovered ? " is-hovered" : ""}`}
+                aria-current={item.id === selectedId ? "true" : undefined}
+                onClick={() => select(item)}
+                onMouseEnter={() =>
+                  setHovered(item.bounds ? item.index : undefined)
+                }
+                onMouseLeave={() => setHovered(undefined)}
+              >
+                <KindIcon item={item} />
+                <span className="feature-row-text">
+                  <span className="mono">{item.id}</span>
+                  {item.label && <small>{item.label}</small>}
+                </span>
+                {(item.kind === "none" || item.kind === "invalid") && (
+                  <small className="feature-row-flag">
+                    {kindLabels[item.kind]}
+                  </small>
+                )}
+              </Button>
+            </li>
+          ))}
+          {!busy && !rows.length && (
+            <li className="feature-list-empty">
+              {query.trim() ? "没有匹配的要素" : "暂无要素"}
+            </li>
+          )}
+        </ul>
+      </ScrollArea>
       <div className="gis-panel-foot">
         <span>
           {query.trim()
@@ -1099,65 +1181,80 @@ function Inspector({
           删除
         </Button>
       </div>
-      <div className="inspector-body">
-        <section>
-          <h3>
-            属性 <span>{item.properties.length}</span>
-          </h3>
-          {item.properties.length ? (
-            <dl className="attr-list">
-              {item.properties.map((p) => (
-                <div key={p.key}>
-                  <dt title={p.key}>{p.key}</dt>
-                  <dd
-                    className={p.kind === "string" ? undefined : `is-${p.kind}`}
-                  >
-                    {p.value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          ) : (
-            <p className="muted">无属性</p>
-          )}
-        </section>
-        <section>
-          <h3>几何</h3>
-          <dl className="attr-list">
-            <div>
-              <dt>类型</dt>
-              <dd>{item.type}</dd>
-            </div>
-            {item.error ? (
-              <div>
-                <dt>状态</dt>
-                <dd className="is-error">{item.error}</dd>
-              </div>
+      <ScrollArea className="inspector-scroll">
+        <div className="inspector-body">
+          <section>
+            <h3>
+              属性 <span>{item.properties.length}</span>
+            </h3>
+            {item.properties.length ? (
+              <dl className="attr-list">
+                {item.properties.map((p) => (
+                  <div key={p.key}>
+                    <dt title={p.key}>{p.key}</dt>
+                    <dd
+                      className={
+                        p.kind === "string" ? undefined : `is-${p.kind}`
+                      }
+                    >
+                      {p.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
             ) : (
-              item.bounds && (
-                <>
-                  <div>
-                    <dt>部件</dt>
-                    <dd className="is-number">{item.parts}</dd>
-                  </div>
-                  <div>
-                    <dt>顶点</dt>
-                    <dd className="is-number">{item.vertices}</dd>
-                  </div>
-                  <div>
-                    <dt>范围</dt>
-                    <dd className="is-number">{formatBounds(item.bounds)}</dd>
-                  </div>
-                </>
-              )
+              <p className="muted">无属性</p>
             )}
-          </dl>
-        </section>
-        <details className="inspector-raw">
-          <summary>GeoJSON</summary>
-          <pre className="json-view">{pretty(item.raw)}</pre>
-        </details>
-      </div>
+          </section>
+          <section>
+            <h3>几何</h3>
+            <dl className="attr-list">
+              <div>
+                <dt>类型</dt>
+                <dd>{item.type}</dd>
+              </div>
+              {item.error ? (
+                <div>
+                  <dt>状态</dt>
+                  <dd className="is-error">{item.error}</dd>
+                </div>
+              ) : (
+                item.bounds && (
+                  <>
+                    <div>
+                      <dt>部件</dt>
+                      <dd className="is-number">{item.parts}</dd>
+                    </div>
+                    <div>
+                      <dt>顶点</dt>
+                      <dd className="is-number">{item.vertices}</dd>
+                    </div>
+                    <div>
+                      <dt>范围</dt>
+                      <dd className="is-number">{formatBounds(item.bounds)}</dd>
+                    </div>
+                  </>
+                )
+              )}
+            </dl>
+          </section>
+          <Collapsible className="inspector-raw">
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="inspector-raw-trigger"
+              >
+                <ChevronRight />
+                GeoJSON
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <pre className="json-view">{pretty(item.raw)}</pre>
+            </CollapsibleContent>
+          </Collapsible>
+        </div>
+      </ScrollArea>
     </>
   );
 }
@@ -1191,42 +1288,44 @@ function LayerSummary({
           </Button>
         )}
       </div>
-      <div className="inspector-body">
-        <dl className="attr-list">
-          <div>
-            <dt>图层</dt>
-            <dd>{name}</dd>
-          </div>
-          <div>
-            <dt>来源</dt>
-            <dd className="is-number">{source}</dd>
-          </div>
-          <div>
-            <dt>要素</dt>
-            <dd className="is-number">{layer.items.length}</dd>
-          </div>
-          {kinds.map((k) => (
-            <div key={k}>
-              <dt>{kindLabels[k]}</dt>
-              <dd className="is-number">{layer.counts[k]}</dd>
-            </div>
-          ))}
-          <div>
-            <dt>坐标系</dt>
-            <dd>WGS 84 (EPSG:4326)</dd>
-          </div>
-          {layer.bounds && (
+      <ScrollArea className="inspector-scroll">
+        <div className="inspector-body">
+          <dl className="attr-list">
             <div>
-              <dt>范围</dt>
-              <dd className="is-number">{formatBounds(layer.bounds)}</dd>
+              <dt>图层</dt>
+              <dd>{name}</dd>
             </div>
-          )}
-        </dl>
-        <div className="inspector-hint">
-          <MapPinned aria-hidden="true" />
-          未选择要素
+            <div>
+              <dt>来源</dt>
+              <dd className="is-number">{source}</dd>
+            </div>
+            <div>
+              <dt>要素</dt>
+              <dd className="is-number">{layer.items.length}</dd>
+            </div>
+            {kinds.map((k) => (
+              <div key={k}>
+                <dt>{kindLabels[k]}</dt>
+                <dd className="is-number">{layer.counts[k]}</dd>
+              </div>
+            ))}
+            <div>
+              <dt>坐标系</dt>
+              <dd>WGS 84 (EPSG:4326)</dd>
+            </div>
+            {layer.bounds && (
+              <div>
+                <dt>范围</dt>
+                <dd className="is-number">{formatBounds(layer.bounds)}</dd>
+              </div>
+            )}
+          </dl>
+          <div className="inspector-hint">
+            <MapPinned aria-hidden="true" />
+            未选择要素
+          </div>
         </div>
-      </div>
+      </ScrollArea>
     </>
   );
 }
@@ -1271,24 +1370,24 @@ function AttributeTable({
           <X />
         </Button>
       </div>
-      <div className="gis-table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>要素标识</th>
-              <th>几何</th>
+      <ScrollArea className="gis-table-scroll">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>要素标识</TableHead>
+              <TableHead>几何</TableHead>
               {columns.map((c) => (
-                <th key={c} title={c}>
+                <TableHead key={c} title={c}>
                   {c}
-                </th>
+                </TableHead>
               ))}
-            </tr>
-          </thead>
-          <tbody ref={body}>
+            </TableRow>
+          </TableHeader>
+          <TableBody ref={body}>
             {rows.map((item) => {
               const values = new Map(item.properties.map((p) => [p.key, p]));
               return (
-                <tr
+                <TableRow
                   key={item.id}
                   data-id={item.id}
                   className={`${item.id === selectedId ? "is-selected" : ""}${item.index === hovered ? " is-hovered" : ""}`}
@@ -1299,12 +1398,12 @@ function AttributeTable({
                   }
                   onMouseLeave={() => setHovered(undefined)}
                 >
-                  <td className="mono">{item.id}</td>
-                  <td>{kindLabels[item.kind]}</td>
+                  <TableCell className="mono">{item.id}</TableCell>
+                  <TableCell>{kindLabels[item.kind]}</TableCell>
                   {columns.map((c) => {
                     const v = values.get(c);
                     return (
-                      <td
+                      <TableCell
                         key={c}
                         className={
                           v && v.kind !== "string" ? "mono" : undefined
@@ -1312,15 +1411,16 @@ function AttributeTable({
                         title={v?.value}
                       >
                         {v?.value ?? ""}
-                      </td>
+                      </TableCell>
                     );
                   })}
-                </tr>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+        <ScrollBar orientation="horizontal" />
+      </ScrollArea>
     </>
   );
 }
@@ -1351,7 +1451,7 @@ export function FeatureEditor({
           );
         }}
       >
-        <label htmlFor="feature-id">要素标识</label>
+        <Label htmlFor="feature-id">要素标识</Label>
         <Input
           id="feature-id"
           name="id"
@@ -1360,7 +1460,7 @@ export function FeatureEditor({
           defaultValue={feature === "new" ? "" : feature.id}
           readOnly={feature !== "new"}
         />
-        <label htmlFor="geojson">GeoJSON</label>
+        <Label htmlFor="geojson">GeoJSON</Label>
         <Textarea
           className="code-editor"
           id="geojson"
@@ -1456,7 +1556,7 @@ export function PublishDialog({
             });
           }}
         >
-          <label htmlFor="publish-message">版本说明</label>
+          <Label htmlFor="publish-message">版本说明</Label>
           <Textarea
             id="publish-message"
             required
@@ -1467,11 +1567,11 @@ export function PublishDialog({
             placeholder="例如：更新道路边界与分类"
           />
           {pending && (
-            <div className="notice">
+            <Notice>
               {matches
                 ? "保留了原始发布请求，重试会使用相同内容和请求标识。"
                 : `请先到工作区 ${pending.workspace} 确认上一笔发布。`}
-            </div>
+            </Notice>
           )}
           <ErrorBox message={task.error} />
           <div className="form-actions">

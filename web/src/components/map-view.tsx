@@ -24,7 +24,16 @@ import {
   type Bounds,
   type DrawKind,
 } from "@/lib/map";
+import { Tip } from "./common";
 import { useRasterBasemap } from "./map-config";
+import { Button } from "./ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
 export type MapHandle = {
   fit: (bounds: Bounds, maxZoom?: number) => void;
@@ -175,7 +184,8 @@ export function MapView({
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState<number>();
   const [basemap, setBasemap] = useState<BasemapId>("light");
-  const [menu, setMenu] = useState(false);
+  // Popups render inside the map so they stay visible in fullscreen.
+  const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [tileError, setTileError] = useState(false);
   const fitted = useRef("");
   const state = useRef<{ selected?: number; hover?: number }>({});
@@ -393,7 +403,6 @@ export function MapView({
 
   const choose = (id: BasemapId) => {
     setBasemap(id);
-    setMenu(false);
     window.sessionStorage.setItem("gl.basemap", id);
   };
   const options: [BasemapId, string][] = [
@@ -402,7 +411,7 @@ export function MapView({
     ...(raster ? ([["raster", "在线地图"]] as [BasemapId, string][]) : []),
   ];
   return (
-    <div className={`map-view is-${basemap}`}>
+    <div ref={setRoot} className={`map-view is-${basemap}`}>
       <div
         ref={container}
         className="map-canvas"
@@ -418,77 +427,88 @@ export function MapView({
       )}
       <div className="map-controls" role="toolbar" aria-label="地图工具">
         <div className="map-control-group">
-          <button
-            type="button"
-            title="放大"
-            aria-label="放大"
-            disabled={!map}
-            onClick={() => map?.zoomIn()}
-          >
-            <Plus />
-          </button>
-          <button
-            type="button"
-            title="缩小"
-            aria-label="缩小"
-            disabled={!map}
-            onClick={() => map?.zoomOut()}
-          >
-            <Minus />
-          </button>
+          <Tip label="放大" side="left" container={root}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="放大"
+              disabled={!map}
+              onClick={() => map?.zoomIn()}
+            >
+              <Plus />
+            </Button>
+          </Tip>
+          <Tip label="缩小" side="left" container={root}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="缩小"
+              disabled={!map}
+              onClick={() => map?.zoomOut()}
+            >
+              <Minus />
+            </Button>
+          </Tip>
         </div>
         <div className="map-control-group">
-          <button
-            type="button"
-            title="缩放至图层"
-            aria-label="缩放至图层"
-            disabled={!map || !bounds}
-            onClick={() => bounds && fit(bounds)}
-          >
-            <Scan />
-          </button>
-          <button
-            type="button"
-            title={fullscreen ? "退出全屏" : "全屏"}
-            aria-label={fullscreen ? "退出全屏" : "全屏"}
-            onClick={toggleFullscreen}
-          >
-            {fullscreen ? <Shrink /> : <Expand />}
-          </button>
-        </div>
-        <div className="map-control-group map-basemap">
-          <button
-            type="button"
-            title="底图"
-            aria-label="底图"
-            aria-expanded={menu}
-            onClick={() => setMenu((v) => !v)}
-          >
-            <Layers />
-          </button>
-          {menu && (
-            <div
-              className="map-basemap-menu"
-              role="radiogroup"
-              aria-label="底图"
+          <Tip label="缩放至图层" side="left" container={root}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="缩放至图层"
+              disabled={!map || !bounds}
+              onClick={() => bounds && fit(bounds)}
             >
-              {options.map(([id, label]) => (
-                <button
-                  type="button"
-                  key={id}
-                  role="radio"
-                  aria-checked={basemap === id}
-                  onClick={() => choose(id)}
-                >
-                  <span
-                    className={`basemap-swatch is-${id}`}
-                    aria-hidden="true"
-                  />
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+              <Scan />
+            </Button>
+          </Tip>
+          <Tip
+            label={fullscreen ? "退出全屏" : "全屏"}
+            side="left"
+            container={root}
+          >
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={fullscreen ? "退出全屏" : "全屏"}
+              onClick={toggleFullscreen}
+            >
+              {fullscreen ? <Shrink /> : <Expand />}
+            </Button>
+          </Tip>
+        </div>
+        <div className="map-control-group">
+          <DropdownMenu>
+            <Tip label="底图" side="left" container={root}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="底图">
+                  <Layers />
+                </Button>
+              </DropdownMenuTrigger>
+            </Tip>
+            <DropdownMenuContent
+              side="left"
+              align="start"
+              sideOffset={8}
+              container={root}
+              className="menu basemap-menu"
+            >
+              <DropdownMenuRadioGroup
+                value={basemap}
+                onValueChange={(id) => choose(id as BasemapId)}
+              >
+                {options.map(([id, label]) => (
+                  <DropdownMenuRadioItem key={id} value={id}>
+                    <span
+                      className={`basemap-swatch is-${id}`}
+                      aria-hidden="true"
+                    />
+                    {label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
       <div className="map-status">
