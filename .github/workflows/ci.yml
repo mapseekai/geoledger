@@ -40,7 +40,7 @@ jobs:
       - name: Toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev nginx-light
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
           rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy
           rustup default 1.92.0
           python3 -m pip install grpcio-tools==1.78.0
@@ -60,15 +60,15 @@ jobs:
           for backend in sqlite postgis; do
             export GL_DATA_DIR="$RUNNER_TEMP/geoledger-$backend"
             export GL_ENDPOINT=http://127.0.0.1:7882
-            export GL_TOKEN_FILE="$GL_DATA_DIR/admin-credentials.json"
+            export GL_TOKEN_FILE="$GL_DATA_DIR/tokens.json"
             mkdir -p "$GL_DATA_DIR"
-            target/debug/geoledger-server tokens --out "$GL_DATA_DIR/tokens.json" --client-out "$GL_TOKEN_FILE" admin
+            target/debug/geoledger-server tokens --out "$GL_TOKEN_FILE" admin
             if [[ "$backend" == postgis ]]; then
               export GL_DATABASE_URL="$GL_TEST_DATABASE_URL"
             else
               unset GL_DATABASE_URL
             fi
-            target/debug/geoledger-server --storage "$backend" --token-file "$GL_DATA_DIR/tokens.json" > "$RUNNER_TEMP/server-$backend.log" 2>&1 &
+            target/debug/geoledger-server --storage "$backend" > "$RUNNER_TEMP/server-$backend.log" 2>&1 &
             service_pid=$!
             trap 'kill "$service_pid" 2>/dev/null || true' EXIT
             for attempt in $(seq 1 100); do
@@ -80,8 +80,6 @@ jobs:
             wait "$service_pid"
             trap - EXIT
           done
-      - name: Reference TLS gateway
-        run: ./scripts/test-gateway.sh
   web:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -123,7 +121,7 @@ jobs:
             if curl --fail --silent http://127.0.0.1:3000/login >/dev/null && curl --fail --silent http://127.0.0.1:7895/ready >/dev/null; then break; fi
             sleep .2
           done
-          python3 scripts/test-console.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/admin-credentials.json"
+          python3 scripts/test-console.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/tokens.json"
   msrv:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
