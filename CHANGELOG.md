@@ -41,6 +41,9 @@
 
 ### Changed
 
+- 控制台 BFF 按凭证复用 gRPC 客户端（LRU 256、空闲 5 分钟），不再每个请求重新握手；注销与认证失败时关闭对应连接。
+- 错误文案与内部暂存表去掉旧名称 “Center”（错误码不变）。
+- 运维文档补充数据增长监控、保留与冷归档建议。
 - `.env.example` 按实际参数重写，`scripts/check-env.py` 校验一致性。
 - 运维子命令的日志写到 stderr，`export --output -` 可直接用于管道。
 - CI 改用官方 `postgis/postgis` 镜像。

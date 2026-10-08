@@ -40,6 +40,8 @@ docker compose logs geoledger
 docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 ```
 
+服务端镜像基于固定 digest 的 `debian:bookworm-slim`，以 UID 10001 运行，内置 `probe` 健康检查，实测约 106 MB（多阶段构建，运行层只含 `geoledger-server`、`gl`、CA 证书与 libssl）。
+
 控制台组合部署按 [Web 容器运行](../web/README.md#容器运行) 先设置会话密钥，再启用 console profile。`docker compose down` 停止组合服务，命名卷按数据保留策略管理。
 
 ### Compose 生产参考
@@ -204,6 +206,34 @@ RTO 主要是文件复制时间加一次启动，通常为分钟级。容器部�
 **恢复演练。** [scripts/backup-drill.sh](../scripts/backup-drill.sh) 在一次性服务上完成：写入数据 → 服务运行中备份与导出 → 恢复到新目录并启动 → 校验 HEAD、审计和精确数字 → 用导出校验恢复结果 → 导入新库并校验；设置 `GL_DRILL_DATABASE_URL`（空 PostgreSQL 库）时同时导入 PostgreSQL。该脚本是 `scripts/check.sh` 的一部分，生产环境按季度在独立主机上用真实备份重复同样步骤并记录耗时，作为 RTO 的实测依据。
 
 凭证、JWKS 与 TLS 私钥独立加密备份；数据库与凭证文件的访问权限都应纳入恢复流程。
+
+### 数据增长与保留
+
+历史与审计按设计只追加（见 [存储保证](storage.md#必须实现的保证) 第 3、5 条），保留策略在部署前确定：
+
+| 表 | 增长来源 |
+|---|---|
+| `gl_history` | 每次发布为每个变更要素追加一个版本，删除保留为墓碑 |
+| `gl_commits`、`gl_commit_changes` | 每次发布一条提交及其变更清单 |
+| `gl_audit_events` | 发布、成员、项目生命周期等审计事件 |
+| `gl_idempotency` | 每次发布一条幂等收据，支撑原请求重试 |
+| `gl_workspace_changes` | 未发布的草稿 |
+
+**监控。** PostgreSQL 按表观察体积，结合 `pg_stat_user_tables.n_live_tup` 记录行数趋势：
+
+```sql
+SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS size
+FROM pg_catalog.pg_statio_user_tables
+WHERE relname LIKE 'gl\_%' ORDER BY pg_total_relation_size(relid) DESC;
+```
+
+SQLite 观察数据库文件与 WAL 文件大小。两种后端都为数据卷配置磁盘使用率告警（建议 70% 预警、85% 告急），并把增长速率纳入 [容量规划](#容量规划)。
+
+**保留与归档建议。**
+
+1. 结束的项目先 `archive_project`（只读），确认无需再编辑后 `delete_project`（从列表隐藏，历史与审计保留以备审查）。
+2. 按月或按季度执行 `geoledger-server export`，连同 SHA-256 写入启用对象锁（WORM）的冷存储，保留期按行业法规设定；归档文件可随时 `verify` 并 `import` 到独立实例查阅。
+3. 要素属性中避免直接存放个人信息，改存外部系统的引用 ID，个人数据的更正与删除在外部系统完成。按法规物理清除某个项目全部历史的离线工具列入后续版本计划；在此之前，需要按法规物理删除的数据不写入 GeoLedger；冷存储中的归档按保留期到期删除。
 
 ## 独立 Web 管理服务
 
