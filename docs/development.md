@@ -91,6 +91,10 @@ SDK 示例与测试会写入新的测试项目，请使用专用测试服务。C
 | [存储契约](../crates/engine/tests/storage.rs) | 后端事务接口与不可变记录约束 |
 | [真实服务](../crates/server/tests/service.rs) | HTTP/gRPC、身份校验、并发发布与重启 |
 | [冲突分页](../crates/server/tests/rpc_errors.rs) | HTTP/2 错误摘要与完整冲突分页查询 |
+| [多实例并发](../crates/engine/tests/multi_instance.rs) | 多个实例（各自连接池）共享 SQLite/PostGIS：无交集的发布全部落地且修订号唯一，原请求跨实例重试幂等，重叠编辑恰有一个胜出 |
+| [导出与备份](../crates/engine/tests/portable.rs) | 导出导入往返、损坏文件拒绝、SQLite 在线备份、SQLite ⇄ PostGIS 互通 |
+| [失败路径](../crates/server/tests/limits.rs) | 外部锁超过请求期限、执行槽耗尽（429 / RESOURCE_EXHAUSTED）、请求体停滞（408）、畸形凭证（401），失败后恢复 |
+| [运维接口](../crates/server/tests/operations.rs)、[传输安全](../crates/server/tests/security.rs) | request ID 与指标、限流、排空与停机；TLS/mTLS、令牌轮换、JWKS 刷新 |
 | [Rust SDK](../sdk/rust/tests/client.rs) | 发布结果确认与原请求恢复 |
 | [Go SDK](../sdk/go/client_test.go)、[Python SDK](../sdk/python/tests/test_client.py)、[TS SDK](../sdk/ts/test/client.test.cjs) | JSON 精度、显式编辑、工作区版本与发布重试 |
 | [四语言联调](../scripts/test-sdks.sh) | SDK 连接实际服务完成创建、编辑、发布与读取 |
@@ -105,6 +109,28 @@ GL_CONFORMANCE_BACKEND=postgis cargo test --locked -p geoledger-engine --test ca
 ```
 
 SQLite 用例使用临时目录并自动清理；PostGIS 用例使用 `GL_TEST_DATABASE_URL` 指定的隔离 `geoledger_test` 数据库。准备数 GB 可用空间。用例通过 SQL 播种建立数据集，操作耗时从播种完成后开始测量；公共接口导入、复杂几何和长期运行按目标业务模型单独验收。
+
+## 模糊测试与负载
+
+[编解码与几何](../crates/engine/src/fuzzing.rs) 的性质检查（解析→编码→再解析一致、几何规范化稳定、边界与相交计算不报错）在 `cargo test` 中以确定性变异样本运行；[cargo-fuzz 目标](../fuzz/Cargo.toml) 用 nightly 工具链做覆盖率引导的长时间运行：
+
+```sh
+cargo install cargo-fuzz
+cd fuzz
+cargo +nightly fuzz run codec -- -max_total_time=300
+cargo +nightly fuzz run geometry -- -max_total_time=300
+```
+
+发现的崩溃样本写入 `fuzz/artifacts/`，修复后把最小化样本加入对应的单元测试。
+
+[负载脚本](../scripts/load-test.sh) 启动临时服务，用 [k6](https://grafana.com/docs/k6/latest/) 运行 [HTTP 负载模型](../scripts/load/http.js)：每次迭代创建工作区、保存一批点要素、发布并做范围查询。脚本在 p95 延迟、失败率或繁忙率超过阈值，服务端出现内部错误，或已发布版本数与 k6 统计的成功发布数不一致时失败：
+
+```sh
+GL_LOAD_VUS=20 GL_LOAD_DURATION=60s ./scripts/load-test.sh
+GL_DATABASE_URL='postgresql://...' GL_DATABASE_ALLOW_PLAINTEXT=true ./scripts/load-test.sh
+```
+
+阈值可用 `GL_LOAD_P95_READ_MS`、`GL_LOAD_P95_WRITE_MS` 调整；`GL_LOAD_SUMMARY` 保存 k6 汇总 JSON 供趋势对比。CI 补丁中的 nightly 工作流每天运行容量测试、两种后端的负载脚本和两个 fuzz 目标。
 
 ## 控制台浏览器验证
 
