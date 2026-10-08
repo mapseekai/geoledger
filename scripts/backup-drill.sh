@@ -5,8 +5,13 @@
 # Set GL_DRILL_DATABASE_URL to an empty PostgreSQL database to also import there.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-server=${GL_SERVER_BIN:-target/debug/geoledger-server}
-[[ -x $server ]] || cargo build --locked -p geoledger-server
+# Always test the current sources unless a prebuilt binary is supplied.
+if [[ -n ${GL_SERVER_BIN:-} ]]; then
+  server=$GL_SERVER_BIN
+else
+  cargo build --locked --quiet -p geoledger-server
+  server=target/debug/geoledger-server
+fi
 work=$(mktemp -d)
 pid=
 cleanup() {
