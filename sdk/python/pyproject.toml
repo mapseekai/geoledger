@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "geoledger-client"
+version = "0.3.0a1"
+description = "GeoLedger business client"
+requires-python = ">=3.10"
+dependencies = ["grpcio>=1.78,<2", "protobuf>=6.33.5,<7"]
+license = "MIT"
+[tool.setuptools.packages.find]
+include = ["geoledger*"]
+[tool.setuptools.package-data]
+geoledger = ["py.typed", "_internal/v1/*.pyi"]

@@ -1,370 +1,97 @@
-use clap::{Parser, Subcommand, ValueEnum};
-use geoledger::{Application, Command, Resolution};
-use geoledger_core::{Error, Result};
-use geoledger_postgis::PostgisProvider;
-use geoledger_server::ServerConfig;
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
-
+use clap::{Parser, Subcommand};
+use std::{io::Read, path::PathBuf};
 #[derive(Parser)]
-#[command(
-    name = "gl",
-    version,
-    about = "GeoLedger: PostGIS spatial data version control"
-)]
-struct Cli {
-    #[arg(long, global = true, default_value = ".")]
-    repo: PathBuf,
-    #[arg(long, global = true, env = "GL_AUTHOR", default_value = geoledger::DEFAULT_AUTHOR)]
-    author: String,
-    /// Name of an environment variable; credentials are never stored in the repository.
-    #[arg(long, global = true, default_value = "GL_DATABASE_URL")]
-    database_env: String,
-    /// Per-statement PostGIS timeout, including streaming reads during import.
-    #[arg(long, global = true, env = "GL_STATEMENT_TIMEOUT_SECS", default_value_t = 120,
-        value_parser = clap::value_parser!(u64).range(1..=2_147_483))]
-    statement_timeout_secs: u64,
+#[command(name = "gl", version, about = "Remote GeoLedger client")]
+struct Args {
+    #[arg(long, env = "GL_ENDPOINT", default_value = "http://127.0.0.1:7882")]
+    endpoint: String,
+    #[arg(long, env = "GL_TOKEN", hide_env_values = true)]
+    token: Option<String>,
+    /// Read one credential from a server token file; suitable for local administration.
+    #[arg(long, env = "GL_TOKEN_FILE")]
+    token_file: Option<PathBuf>,
+    #[arg(long, default_value = "admin")]
+    subject: String,
     #[command(subcommand)]
-    command: Action,
+    command: Command,
 }
 #[derive(Subcommand)]
-enum Action {
-    Schema {
-        dataset: String,
-        #[arg(long, default_value = "HEAD")]
-        reference: String,
+enum Command {
+    /// Show protocol version and storage backend.
+    Info,
+    /// Invoke a business operation using ordinary JSON fields. '-' reads stdin.
+    Call {
+        operation: String,
+        #[arg(long, default_value = "-")]
+        file: PathBuf,
     },
-    AddField {
-        dataset: String,
-        name: String,
-        #[arg(long = "type")]
-        data_type: String,
-        #[arg(short, long)]
-        message: Option<String>,
-    },
-    DropField {
-        dataset: String,
-        name: String,
-        #[arg(long)]
-        discard: bool,
-        #[arg(short, long)]
-        message: Option<String>,
-    },
-    RenameField {
-        dataset: String,
-        name: String,
-        new_name: String,
-        #[arg(short, long)]
-        message: Option<String>,
-    },
-    AlterFieldType {
-        dataset: String,
-        name: String,
-        #[arg(long = "type")]
-        data_type: String,
-        #[arg(short, long)]
-        message: Option<String>,
-    },
-    Init,
-    Import {
-        dataset: String,
-        #[arg(long, default_value = "public")]
-        schema: String,
-        #[arg(long)]
-        table: String,
-        #[arg(short, long)]
-        message: Option<String>,
-    },
-    Status {
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    Diff {
-        #[arg(long)]
-        from: Option<String>,
-        #[arg(long)]
-        to: Option<String>,
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    Commit {
-        #[arg(short, long)]
-        message: String,
-    },
-    Log {
-        #[arg(default_value = "HEAD")]
-        reference: String,
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    Show {
-        #[arg(default_value = "HEAD")]
-        reference: String,
-        #[arg(long)]
-        dataset: Option<String>,
-        #[arg(long)]
-        key: Option<String>,
-    },
-    Branch {
-        name: Option<String>,
-        #[arg(long, default_value = "HEAD")]
-        from: String,
-    },
-    #[command(alias = "checkout")]
-    Switch {
-        branch: String,
-    },
-    Restore {
-        #[arg(long)]
-        discard: bool,
-    },
-    Reset {
-        target: String,
-        #[arg(long)]
-        hard: bool,
-    },
-    Merge {
-        #[arg(conflicts_with_all=["continue_merge","abort"])]
-        source: Option<String>,
-        #[arg(long = "continue", conflicts_with = "abort")]
-        continue_merge: bool,
-        #[arg(long)]
-        abort: bool,
-        #[arg(short, long)]
-        message: Option<String>,
-    },
-    Revert {
-        target: String,
-        #[arg(short, long)]
-        message: Option<String>,
-    },
-    Conflicts {
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    Resolve {
-        dataset: String,
-        key: String,
-        #[arg(long, value_enum)]
-        take: Choice,
-        #[arg(long)]
-        record: Option<PathBuf>,
-    },
-    Recover,
-    Fsck,
-    Reflog {
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-    },
-    #[cfg(feature = "thrift")]
-    /// Start the Volo Thrift API.
-    ServeThrift {
-        #[arg(long, default_value = "127.0.0.1:7880")]
-        thrift: SocketAddr,
-    },
-    /// Start HTTP API and gRPC listeners. Use GL_API_TOKEN for authentication.
-    Serve {
-        #[arg(long, default_value = "127.0.0.1:7878")]
-        http: SocketAddr,
-        #[arg(long, default_value = "127.0.0.1:7879")]
-        grpc: SocketAddr,
+    /// List accessible projects.
+    Projects,
+    /// List a project's published revisions.
+    History {
+        project: String,
+        #[arg(long, default_value_t = 0)]
+        after: i64,
     },
 }
-#[derive(Clone, Copy, ValueEnum)]
-enum Choice {
-    Ours,
-    Theirs,
-    Base,
-    Delete,
-    Custom,
-}
-
 #[tokio::main]
-async fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with_writer(std::io::stderr)
-        .init();
-    match run(Cli::parse()).await {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(error) => {
+async fn main() {
+    if let Err(e) = run(Args::parse()).await {
+        if let Some(detail) = e.downcast_ref::<geoledger_client::Error>() {
             eprintln!(
                 "{}",
-                serde_json::json!({"error":{"code":error.code(),"message":error.to_string()}})
+                serde_json::to_string(detail).unwrap_or_else(|_| "client error".into())
             );
-            std::process::ExitCode::from(1)
+        } else {
+            eprintln!("gl: {e}");
         }
+        std::process::exit(1);
     }
 }
-async fn run(cli: Cli) -> Result<()> {
-    let mut app = Application::new(cli.repo);
-    if let Ok(dsn) = std::env::var(&cli.database_env) {
-        app = app.with_provider(Arc::new(PostgisProvider::new(dsn).with_statement_timeout(
-            std::time::Duration::from_secs(cli.statement_timeout_secs),
-        )?));
-    }
-    let author = cli.author;
-    let command = match cli.command {
-        Action::Schema { dataset, reference } => Command::Schema { dataset, reference },
-        Action::AddField {
-            dataset,
-            name,
-            data_type,
-            message,
-        } => Command::AlterSchema {
-            dataset,
-            change: geoledger::core::schema::SchemaEdit::Add { name, data_type },
-            author,
-            message,
-        },
-        Action::DropField {
-            dataset,
-            name,
-            discard,
-            message,
-        } => Command::AlterSchema {
-            dataset,
-            change: geoledger::core::schema::SchemaEdit::Drop { name, discard },
-            author,
-            message,
-        },
-        Action::RenameField {
-            dataset,
-            name,
-            new_name,
-            message,
-        } => Command::AlterSchema {
-            dataset,
-            change: geoledger::core::schema::SchemaEdit::Rename { name, new_name },
-            author,
-            message,
-        },
-        Action::AlterFieldType {
-            dataset,
-            name,
-            data_type,
-            message,
-        } => Command::AlterSchema {
-            dataset,
-            change: geoledger::core::schema::SchemaEdit::AlterType { name, data_type },
-            author,
-            message,
-        },
-        Action::Init => Command::Init { author },
-        Action::Import {
-            dataset,
-            schema,
-            table,
-            message,
-        } => Command::Import {
-            dataset,
-            schema,
-            table,
-            author,
-            message,
-        },
-        Action::Status { limit } => Command::Status { limit },
-        Action::Diff { from, to, limit } => Command::Diff { from, to, limit },
-        Action::Commit { message } => Command::Commit { message, author },
-        Action::Log { reference, limit } => Command::Log { reference, limit },
-        Action::Show {
-            reference,
-            dataset,
-            key,
-        } => Command::Show {
-            reference,
-            dataset,
-            key,
-        },
-        Action::Branch {
-            name: Some(name),
-            from,
-        } => Command::Branch { name, from },
-        Action::Branch { name: None, .. } => Command::Branches,
-        Action::Switch { branch } => Command::Switch { branch },
-        Action::Restore { discard } => Command::Restore { discard },
-        Action::Reset { target, hard } => Command::Reset { target, hard },
-        Action::Merge {
-            continue_merge: true,
-            ..
-        } => Command::MergeContinue,
-        Action::Merge { abort: true, .. } => Command::MergeAbort,
-        Action::Merge {
-            source: Some(source),
-            message,
-            ..
-        } => Command::Merge {
-            source,
-            author,
-            message,
-        },
-        Action::Merge { .. } => {
-            return Err(Error::Invalid(
-                "provide a source branch, --continue or --abort".into(),
-            ));
-        }
-        Action::Revert { target, message } => Command::Revert {
-            target,
-            author,
-            message,
-        },
-        Action::Conflicts { limit } => Command::Conflicts { limit },
-        Action::Resolve {
-            dataset,
-            key,
-            take,
-            record,
-        } => {
-            let choice = match take {
-                Choice::Ours => Resolution::Ours,
-                Choice::Theirs => Resolution::Theirs,
-                Choice::Base => Resolution::Base,
-                Choice::Delete => Resolution::Delete,
-                Choice::Custom => Resolution::Custom,
-            };
-            let record = record
-                .map(|p| {
-                    if std::fs::metadata(&p)?.len() > geoledger_server::MAX_REQUEST_BYTES as u64 {
-                        return Err(Error::Invalid("resolution file exceeds 4 MiB".into()));
-                    }
-                    Ok(serde_json::from_slice(&std::fs::read(p)?)?)
-                })
-                .transpose()?;
-            Command::Resolve {
-                dataset,
-                key,
-                choice,
-                record,
+async fn run(a: Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let token = match (a.token, a.token_file) {
+        (Some(t), None) => t,
+        (None, Some(p)) => {
+            let mut raw = Vec::new();
+            std::fs::File::open(p)?
+                .take(1024 * 1024 + 1)
+                .read_to_end(&mut raw)?;
+            if raw.len() > 1024 * 1024 {
+                return Err("credential file too large".into());
             }
+            let values: Vec<serde_json::Value> = serde_json::from_slice(&raw)?;
+            values
+                .iter()
+                .find(|v| v["subject"] == a.subject)
+                .and_then(|v| v["token"].as_str())
+                .ok_or("subject not found in token file")?
+                .to_owned()
         }
-        Action::Recover => Command::Recover,
-        Action::Fsck => Command::Fsck,
-        Action::Reflog { limit } => Command::Reflog { limit },
-        #[cfg(feature = "thrift")]
-        Action::ServeThrift { thrift } => {
-            return geoledger_server::thrift::serve(
-                app,
-                thrift,
-                std::env::var("GL_API_TOKEN").ok(),
-            )
-            .await;
-        }
-        Action::Serve { http, grpc } => {
-            return geoledger_server::serve(
-                app,
-                ServerConfig {
-                    http,
-                    grpc,
-                    token: std::env::var("GL_API_TOKEN").ok(),
-                },
-            )
-            .await;
+        _ => return Err("supply GL_TOKEN or --token-file, exclusively".into()),
+    };
+    let (op, input) = match a.command {
+        Command::Info => ("info".into(), serde_json::json!({})),
+        Command::Projects => ("list_projects".into(), serde_json::json!({"limit":100})),
+        Command::History { project, after } => (
+            "history".into(),
+            serde_json::json!({"project":project,"after":after,"limit":100}),
+        ),
+        Command::Call { operation, file } => {
+            let mut data = Vec::new();
+            let reader: Box<dyn Read> = if file.as_os_str() == "-" {
+                Box::new(std::io::stdin())
+            } else {
+                Box::new(std::fs::File::open(file)?)
+            };
+            reader.take(4 * 1024 * 1024 + 1).read_to_end(&mut data)?;
+            if data.len() > 4 * 1024 * 1024 {
+                return Err("request too large".into());
+            }
+            (operation, serde_json::from_slice(&data)?)
         }
     };
-    let result = tokio::task::spawn_blocking(move || app.execute(command))
-        .await
-        .map_err(|e| Error::storage_source("operation worker failed", e))??;
+    let client = geoledger_client::Client::connect(a.endpoint, &token).await?;
+    let result = client.execute(&op, input).await?;
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }

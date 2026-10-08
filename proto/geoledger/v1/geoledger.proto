@@ -1,0 +1,265 @@
+syntax = "proto3";
+package geoledger.v1;
+option go_package = "github.com/mapseekai/geoledger/sdk/go/internal/geoledgerv1";
+// GeoJSON remains UTF-8 text to preserve exact 64-bit property numbers.
+// A missing Edit.feature is an explicit deletion. No client-supplied identity.
+// Revisions are int64; TypeScript SDK represents them as decimal strings.
+service GeoLedger {
+ rpc Info(Empty) returns (InfoReply);
+ rpc CreateProject(NameRequest) returns (ProjectReply);
+ rpc ListProjects(PageRequest) returns (ProjectsReply);
+ rpc GetProject(ProjectRequest) returns (ProjectReply);
+ rpc SetMember(MemberRequest) returns (OkReply);
+ rpc CreateDataset(DatasetRequest) returns (DatasetReply);
+ rpc ListDatasets(ProjectPageRequest) returns (DatasetsReply);
+ rpc CreateWorkspace(ProjectRequest) returns (WorkspaceReply);
+ rpc ListWorkspaces(ProjectPageRequest) returns (WorkspacesReply);
+ rpc GetWorkspace(WorkspaceRequest) returns (WorkspaceReply);
+ rpc Save(SaveRequest) returns (SaveReply);
+ rpc Discard(VersionRequest) returns (DiscardReply);
+ rpc Features(FeaturesRequest) returns (FeaturesReply);
+ rpc Diff(DiffRequest) returns (DiffReply);
+ rpc Conflicts(DiffRequest) returns (ConflictsReply);
+ rpc History(HistoryRequest) returns (HistoryReply);
+ rpc Commit(CommitRequest) returns (CommitReply);
+ rpc Audit(HistoryRequest) returns (AuditReply);
+ rpc Publish(PublishRequest) returns (PublishReply);
+ rpc Resolve(ResolveRequest) returns (ResolveReply);
+ rpc Rebase(ResolveRequest) returns (RebaseReply);
+ rpc Restore(RestoreRequest) returns (WorkspaceReply);
+}
+message NameRequest {
+ string name = 1;
+}
+message ProjectRequest {
+ string project = 1;
+}
+message PageRequest {
+ string after = 1;
+ optional int64 limit = 2;
+}
+message ProjectPageRequest {
+ string project = 1;
+ string after = 2;
+ optional int64 limit = 3;
+}
+message MemberRequest {
+ string project = 1;
+ string subject = 2;
+ string role = 3;
+}
+message DatasetRequest {
+ string project = 1;
+ string name = 2;
+}
+message WorkspaceRequest {
+ string project = 1;
+ string workspace = 2;
+}
+message VersionRequest {
+ string project = 1;
+ string workspace = 2;
+ int64 expected_workspace_version = 3;
+}
+message Feature {
+ string geojson = 1;
+}
+message Edit {
+ string dataset = 1;
+ string feature_id = 2;
+ Feature feature = 3;
+}
+message SaveRequest {
+ string project = 1;
+ string workspace = 2;
+ int64 expected_workspace_version = 3;
+ repeated Edit edits = 4;
+}
+message FeaturesRequest {
+ string project = 1;
+ string dataset = 2;
+ optional string workspace = 3;
+ optional int64 revision = 4;
+ optional string feature_id = 5;
+ repeated double bbox = 6;
+ string after = 7;
+ optional int64 limit = 8;
+}
+message DiffRequest {
+ string project = 1;
+ string workspace = 2;
+ string after = 3;
+ optional int64 limit = 4;
+}
+message HistoryRequest {
+ string project = 1;
+ int64 after = 2;
+ optional int64 limit = 3;
+}
+message CommitRequest {
+ string project = 1;
+ int64 revision = 2;
+ string after = 3;
+ optional int64 limit = 4;
+}
+message PublishRequest {
+ string project = 1;
+ string workspace = 2;
+ int64 expected_workspace_version = 3;
+ string request_id = 4;
+ string message = 5;
+}
+message ResolveRequest {
+ string project = 1;
+ string workspace = 2;
+ int64 expected_workspace_version = 3;
+ int64 expected_head = 4;
+ repeated Edit resolutions = 5;
+}
+message RestoreRequest {
+ string project = 1;
+ int64 revision = 2;
+}
+message Empty {
+}
+message InfoReply {
+ string version = 1;
+ string backend = 2;
+ uint32 format_version = 3;
+ uint32 max_request_bytes = 4;
+ uint32 max_feature_bytes = 5;
+}
+message ProjectReply {
+ string project = 1;
+ string name = 2;
+ int64 head = 3;
+ string role = 4;
+}
+message ProjectsReply {
+ repeated ProjectReply projects = 1;
+}
+message OkReply {
+ bool ok = 1;
+}
+message DatasetReply {
+ string dataset = 1;
+ string name = 2;
+}
+message DatasetsReply {
+ repeated DatasetReply datasets = 1;
+}
+message WorkspaceReply {
+ string workspace = 1;
+ int64 base_revision = 2;
+ int64 version = 3;
+ string status = 4;
+}
+message WorkspacesReply {
+ repeated WorkspaceReply workspaces = 1;
+}
+message SaveReply {
+ int64 version = 1;
+ int64 changes = 2;
+}
+message DiscardReply {
+ int64 version = 1;
+ string status = 2;
+}
+message FeaturesReply {
+ repeated Feature features = 1;
+ int64 revision = 2;
+ optional int64 workspace_version = 3;
+ optional string next_after = 4;
+}
+message Change {
+ string cursor = 1;
+ string dataset = 2;
+ string feature_id = 3;
+ Feature base = 4;
+ Feature draft = 5;
+ Feature before = 6;
+ Feature after = 7;
+}
+message DiffReply {
+ int64 base_revision = 1;
+ int64 version = 2;
+ repeated Change changes = 3;
+}
+message Conflict {
+ string cursor = 1;
+ string dataset = 2;
+ string feature_id = 3;
+ repeated string fields = 4;
+ Feature base = 5;
+ Feature current = 6;
+ Feature draft = 7;
+ string reason = 8;
+ optional int64 resolved_against_revision = 9;
+}
+message ConflictsReply {
+ int64 head = 1;
+ int64 version = 2;
+ uint64 total = 3;
+ optional string next_after = 4;
+ bool truncated = 5;
+ repeated Conflict conflicts = 6;
+}
+message CommitInfo {
+ int64 revision = 1;
+ string subject = 2;
+ string message = 3;
+ string created_at = 4;
+}
+message HistoryReply {
+ repeated CommitInfo commits = 1;
+}
+message CommitReply {
+ int64 revision = 1;
+ repeated Change changes = 2;
+}
+message AuditEvent {
+ int64 id = 1;
+ string subject = 2;
+ string action = 3;
+ string detail_json = 4;
+ string created_at = 5;
+}
+message AuditReply {
+ repeated AuditEvent events = 1;
+ optional int64 next_after = 2;
+}
+message PublishReply {
+ int64 revision = 1;
+ string workspace = 2;
+ int64 version = 3;
+ string status = 4;
+ uint64 changes = 5;
+}
+message ResolveReply {
+ int64 head = 1;
+ int64 version = 2;
+ uint64 remaining_conflicts = 3;
+}
+message RebaseReply {
+ int64 base_revision = 1;
+ int64 version = 2;
+ uint64 changes = 3;
+}
+message ErrorDetail {
+ string code = 1;
+ string message = 2;
+ string request_id = 3;
+ ConflictsReply conflicts = 4;
+}
+// Wire-compatible google.rpc.Status / google.protobuf.Any envelopes. These avoid
+// a runtime dependency on Google common-proto packages in generated clients.
+// grpc-status-details-bin always contains this envelope, never a bare ErrorDetail.
+message RpcStatus {
+ int32 code = 1;
+ string message = 2;
+ repeated ErrorAny details = 3;
+}
+message ErrorAny {
+ string type_url = 1;
+ bytes value = 2;
+}

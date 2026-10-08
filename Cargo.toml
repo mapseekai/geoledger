@@ -1,19 +1,15 @@
 [workspace]
-members = ["crates/core", "crates/storage", "crates/postgis", "crates/app", "crates/server", "crates/thrift-gen", "crates/cli", "crates/center"]
+members = ["crates/core", "crates/engine", "crates/server", "crates/rpc", "sdk/rust", "crates/cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-alpha.1"
+version = "0.3.0-alpha.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
 geoledger-core = { path = "crates/core" }
-geoledger-storage = { path = "crates/storage" }
-geoledger-postgis = { path = "crates/postgis" }
-geoledger = { path = "crates/app" }
-geoledger-server = { path = "crates/server", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -27,8 +23,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
-unwrap_used = "warn"
-expect_used = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
 
 [profile.release]
 lto = "thin"

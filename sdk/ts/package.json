@@ -1,0 +1,32 @@
+{
+  "name": "@geoledger/client",
+  "version": "0.3.0-alpha.1",
+  "description": "GeoLedger business client for Node.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "node --test test/client.test.cjs"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.11.0",
+    "@grpc/grpc-js": "1.14.3",
+    "lossless-json": "4.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "ts-proto": "2.11.0",
+    "typescript": "5.9.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  }
+}

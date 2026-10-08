@@ -1,184 +1,184 @@
-# API
+# API 与 SDK
 
-[项目概览](../README.md) · [快速开始](getting-started.md) · [功能指南](user-guide.md) · [开发说明](development.md)
+[项目概览](../README.md) · [使用指南](user-guide.md) · [存储扩展](storage.md)
 
-## 统一命令
+## SDK 的公开接口
 
-Rust、HTTP、gRPC 和 Thrift 共用 Application。HTTP `POST /v1/commands`、gRPC `Execute`、Thrift `execute` 接收相同 JSON。以下每行是一个独立请求，完整字段见 [Command 定义](../crates/app/src/command.rs)：
+Go、Rust、TypeScript / Node.js、Python 提供普通业务方法和工作区对象。
+用户只需服务地址与访问令牌；无需导入生成类型、构造协议请求、设置 metadata 或解码底层错误。
+内部统一使用 tonic 服务的 gRPC 协议，浏览器控制台使用 HTTP。
 
-```json
-{"op":"init"}
-{"op":"import","dataset":"roads","schema":"geoledger_demo","table":"roads"}
-{"op":"status","limit":100}
-{"op":"commit","message":"更新道路"}
-{"op":"log","reference":"HEAD","limit":20}
-{"op":"alter_schema","dataset":"roads","change":{"action":"add","name":"note","data_type":"text"}}
-{"op":"merge","source":"draft"}
-{"op":"resolve","dataset":"roads","key":"1","choice":"theirs"}
-{"op":"fsck"}
+典型流程：创建项目 → 创建数据集 → 创建工作区 → 保存 GeoJSON → 发布。
+工作区对象维护草稿版本，发布时生成并保留请求 ID。修改失败时不自动覆盖版本；
+先查询冲突或刷新工作区，再决定是否重做修改。SDK 不自动重试写操作。
+
+默认 SDK 地址 `http://127.0.0.1:7882`，控制台 HTTP 地址使用另一个端口。
+SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒，消息上限 4 MiB。
+
+## Python
+
+```sh
+python -m pip install ./sdk/python
 ```
 
-记录以主键 `key` 和字段映射 `fields` 表达。属性使用数据库规范文本，几何使用小写 XDR EWKB；自定义冲突结果提供符合 schema 的完整记录。合并响应包含提交或冲突状态，客户端据此继续处理。
+```python
+import os
+from geoledger import Client
 
-## HTTP
-
-| 路由 | 功能 |
-|---|---|
-| `GET /health` | 服务版本与存活 |
-| `POST /v1/commands` | 执行统一命令 |
-| `GET /v1/status`、`GET /v1/log` | 查询状态与历史 |
-| `GET /v1/branches`、`POST /v1/branches` | 查询或创建分支 |
-| `GET /v1/conflicts` | 查询记录冲突 |
-| `POST /v1/commits`、`POST /v1/merges` | 提交或合并 |
-
-下面在 PowerShell 生成令牌并启动服务，监听地址由该命令创建：
-
-```powershell
-$bytes = New-Object byte[] 32
-$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-$rng.GetBytes($bytes)
-$rng.Dispose()
-$env:GL_API_TOKEN = [Convert]::ToBase64String($bytes)
-.\gl.exe --repo '.\demo-repo' serve --http 127.0.0.1:7878 --grpc 127.0.0.1:7879
+with Client("http://127.0.0.1:7882", os.environ["GL_TOKEN"]) as client:
+    project = client.create_project("城市道路")
+    dataset = client.create_dataset(project.id, "roads")
+    draft = client.create_workspace(project.id)
+    draft.save(dataset.id, {
+        "type": "Feature", "id": "road-1",
+        "properties": {"name": "滨江大道"},
+        "geometry": {"type": "Point", "coordinates": [120, 30]},
+    })
+    receipt = draft.publish("新增道路")
+    rows = client.features(project.id, dataset.id, revision=receipt["revision"])
 ```
 
-沿用快速开始的 `GL_DATABASE_URL`。服务运行时，在另一终端输入相同令牌读取状态；服务终端通过 Ctrl+C 结束：
-
-```powershell
-$token = Read-Host '输入服务端配置的 GL_API_TOKEN'
-Invoke-RestMethod -Headers @{Authorization="Bearer $token"} -Uri 'http://127.0.0.1:7878/v1/status'
-```
-
-## gRPC 与 Thrift
-
-| 接口 | 定义与调用方式 |
-|---|---|
-| gRPC | [geoledger.proto](../crates/server/proto/geoledger.proto) 定义 `geoledger.v1.GeoLedger`，通过 HTTP/2 调用，令牌放入 Authorization metadata |
-| Volo Thrift | [geoledger.thrift](../crates/thrift-gen/idl/geoledger.thrift) 定义 `GeoLedger`，采用 Framed Binary，令牌通过 authorization 参数传入 |
-
-两种接口提供执行、状态、导入、提交、历史、差异、分支、切换、合并、撤销、重置、恢复工作副本、继续、取消与恢复中断操作共 15 个方法。响应使用 `JsonReply.json`，客户端按 JSON 解码；字段演进通过 Execute / execute 调用统一命令。
-
-Unix 构建通过 `gl --repo ./demo-repo serve-thrift --thrift 127.0.0.1:7880` 启动 Thrift。客户端示例见 [gRPC](../crates/server/examples/client.rs) 和 [Thrift](../crates/server/examples/thrift_client.rs)。
+业务资源使用不可变数据类；要素、差异和审计使用普通字典。完整流程见
+[Python 示例](../sdk/python/tests/smoke.py)。
 
 ## Rust
 
-使用 `Application::new(path)` 创建入口，`with_provider` 绑定工作副本，`execute(Command)` 执行操作。返回值为 `Result<serde_json::Value, geoledger_core::Error>`。异步宿主通过 `spawn_blocking` 调用同步应用层，示例见 [library.rs](../crates/app/examples/library.rs)。
+客户端 crate 为 [geoledger-client](../sdk/rust/Cargo.toml)。
 
-## 配置与响应
+```rust,ignore
+use geoledger_client::Client;
+use serde_json::json;
 
-`GL_DATABASE_URL` 配置数据库连接；`--database-env` 可指定连接变量名称。`GL_STATEMENT_TIMEOUT_SECS` 或 `--statement-timeout-secs` 配置每条 SQL 的超时，默认 120 秒，范围 1–2147483 秒。
+let client = Client::connect(endpoint, &token).await?;
+let project = client.create_project("城市道路").await?;
+let dataset = client.create_dataset(&project.id, "roads").await?;
+let mut draft = client.create_workspace(&project.id).await?;
+draft.save(&dataset.id, json!({
+    "type":"Feature", "id":"road-1",
+    "properties":{"name":"滨江大道"}, "geometry":null
+})).await?;
+let receipt = draft.publish("新增道路").await?;
+```
 
-服务使用至少 24 字节的随机 Bearer token，授权范围为绑定仓库的读写及恢复操作。跨机器部署使用 TLS 反向代理；gRPC reflection 提供协议元数据，通过网关管理其访问范围。
+结果是 SDK 自身的业务结构，GeoJSON 使用 `serde_json::Value`。
+客户端可克隆复用连接，工作区修改使用 `&mut self`。
+完整示例见 [Rust 示例](../sdk/rust/examples/smoke.rs)。
 
-请求上限为 4 MiB，JSON 响应上限为 16 MiB。列表最多返回 1000 项，预览同时采用约 8 MiB 载荷预算，单条大记录可超过该预算。读取 `total`、`truncated` 判断返回范围；结构变化使用 `schema_changes`、`record_counts_complete` 表达，提交通过 `rescanned_records` 返回整表扫描数量。
+## Go
 
-HTTP 输入解析与应用错误统一返回 `error.code`、`error.message` 和 `error.request_id`：参数校验 400、鉴权 401、资源查找 404、状态冲突 409、仓库占用 423、能力校验 422、后端异常 500。Thrift 通过 `ApiError` 表达业务结果；客户端同时检查传输状态。连接中断后先通过 `status`、`log`、`recover` 核对结果，再决定是否重新发起写入。
+模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)。所有网络调用接受标准 `context.Context`。
 
-## 中心版
+```go
+client, err := geoledger.Dial(endpoint, token)
+if err != nil { return err }
+defer client.Close()
+project, err := client.CreateProject(ctx, "城市道路")
+if err != nil { return err }
+dataset, err := client.CreateDataset(ctx, project.ID, "roads")
+if err != nil { return err }
+draft, err := client.CreateWorkspace(ctx, project.ID)
+if err != nil { return err }
+_, err = draft.Save(ctx, dataset.ID, geoledger.Feature{
+    Type: "Feature", ID: "road-1",
+    Properties: map[string]any{"name": "滨江大道"}, Geometry: nil,
+})
+if err != nil { return err }
+receipt, err := draft.Publish(ctx, "新增道路")
+```
 
-中心 HTTP 操作均为 `POST /api/center/{operation}`，JSON 请求体，`Authorization: Bearer TOKEN`。
-所有操作进入独立的 `CenterApplication`。身份只由服务令牌映射确定；额外的作者字段会被拒绝。
-接口返回 JSON，错误统一为 `error.code`、`error.message`、`error.request_id`，冲突详情保留在响应顶层。状态使用 400（参数）、401（认证）、404（缺失或无权访问）、409（版本/合并/幂等冲突）、
-413（大小限制）、422（合并结果校验）、429（繁忙）、503（数据库操作失败，隐藏连接详情）或 504（操作截止时间）。
+也可传入普通 JSON 结构或 `json.RawMessage`。读取的 GeoJSON 使用 `json.RawMessage`，
+可解码到自己的结构；解码到通用 map 时使用 `json.Decoder.UseNumber()` 保持大整数。
+完整示例见 [Go 示例](../sdk/go/cmd/smoke/main.go)。
 
-| operation | 请求字段（? 表示可选） |
-|---|---|
-| create_project / list_projects | `name` / `after?, limit?` |
-| get_project | `project` |
-| set_member | `project, subject, role` |
-| create_dataset / list_datasets | `project, name` / `project, after?, limit?` |
-| create_workspace / list_workspaces | `project` / `project, after?, limit?` |
-| get_workspace | `project, workspace` |
-| save | `project, workspace, expected_workspace_version, edits` |
-| discard | `project, workspace, expected_workspace_version` |
-| features | `project, dataset, workspace?, revision?, feature_id?, bbox?, after?, limit?` |
-| diff / conflicts | `project, workspace, after?, limit?` |
-| history | `project, after?, limit?` |
-| commit | `project, revision, after?, limit?` |
-| publish | `project, workspace, expected_workspace_version, request_id, message` |
-| resolve / rebase | `project, workspace, expected_workspace_version, expected_head, resolutions` |
-| restore | `project, revision` |
-
-`edits` / `resolutions` 元素为 `{dataset, feature_id, feature}`，`feature` 必须显式提供，为完整 GeoJSON Feature 或删除标记 null。
-Feature 必含 `type: "Feature"`、与 `feature_id` 相等的字符串 `id`、对象 `properties`、`geometry`。
-`features` 返回 FeatureCollection；传 `feature_id` 返回单个 Feature。两者携带 `revision` 和可空的 `workspace_version`，用于下一次乐观保存。`workspace` 与 `revision` 二选一，均省略时读取已发布 HEAD。
-几何采用 EPSG:4326 的 XY / XYZ 坐标，支持 GeoJSON 几何及 null，属性保留 JSON 类型。
-`bbox` 为 `[west,south,east,north]`。每页默认 100、最大 1000；继续查询使用最后一项 ID，
-历史列表使用 revision，diff/commit 使用返回的 `cursor`，FeatureCollection 也提供 `next_after`；空页结束。
-正式数据分页续读时携带首屏返回的 `revision`，获得固定版本结果；草稿续页同时核对返回的 `workspace_version`，
-版本变化时重新读取草稿。
-请求及响应限 4 MiB，同时最多 16 个请求；响应预览还按展开后的数据结构计入内存预算。Feature 输入限 16 KiB、256 个属性，属性名/要素 ID 限 256 字节，
-项目/集合名限 256 字节，subject 限 128 字节，提交消息限 2048 字节。文本标识非空且无控制字符。
-普通查询响应超限时减小 `limit`；冲突响应提供 `total`、`truncated` 和 `next_after`，通过 `conflicts` 继续读取。
-已解决选择在正式 HEAD 变化或后续草稿保存后返回 `reason: "stale_resolution"`，保留选择内容并要求再次确认；
-即使选择删除或恢复原值，也保留该确认流程。
-`resolve` 每批最多处理 100 个冲突；`rebase` 一次处理全部剩余冲突并更新基线。两者均核对 HEAD 与工作区版本。命名与 ID 大小均按 UTF-8 字节计算。
-
-在[启动示例](getting-started.md#中心版)生成令牌文件并运行服务后，另一个终端可使用 curl 创建资源。令牌文件路径使用启动服务时的实际文件：
+## TypeScript / Node.js
 
 ```sh
-export GL_CENTER_TOKEN_FILE="$PWD/.center-tokens.json"
-TOKEN=$(python3 -c 'import json,os; print(json.load(open(os.environ["GL_CENTER_TOKEN_FILE"]))[0]["token"])')
-api() { curl --fail-with-body -sS "http://127.0.0.1:7881/api/center/$1" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data-binary "$2"; }
-field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
-PROJECT=$(api create_project '{"name":"browser-demo"}' | field project)
-DATASET=$(api create_dataset "{\"project\":\"$PROJECT\",\"name\":\"places\"}" | field dataset)
-WORKSPACE=$(api create_workspace "{\"project\":\"$PROJECT\"}" | field workspace)
-api save "{\"project\":\"$PROJECT\",\"workspace\":\"$WORKSPACE\",\"expected_workspace_version\":0,\"edits\":[{\"dataset\":\"$DATASET\",\"feature_id\":\"place-1\",\"feature\":{\"type\":\"Feature\",\"id\":\"place-1\",\"properties\":{\"name\":\"Park\",\"open\":true},\"geometry\":{\"type\":\"Point\",\"coordinates\":[116.4,39.9]}}}]}"
-REQUEST_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
-api publish "{\"project\":\"$PROJECT\",\"workspace\":\"$WORKSPACE\",\"expected_workspace_version\":1,\"request_id\":\"$REQUEST_ID\",\"message\":\"Seed places\"}"
-api features "{\"project\":\"$PROJECT\",\"dataset\":\"$DATASET\"}"
-unset TOKEN
+npm ci --prefix sdk/ts
+npm run build --prefix sdk/ts
 ```
 
-PowerShell 7 示例（同一服务，创建另一组资源）：
-
-```powershell
-$entry = @(Get-Content -Raw '.center-tokens.json' | ConvertFrom-Json)[0]
-$headers = @{Authorization="Bearer $($entry.token)"}
-function Center($op, $body) {
-  Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:7881/api/center/$op" -Headers $headers -ContentType 'application/json' -Body (ConvertTo-Json -InputObject $body -Depth 20 -Compress)
-}
-$p = (Center 'create_project' @{name='powershell-demo'}).project
-$d = (Center 'create_dataset' @{project=$p; name='places'}).dataset
-$w = (Center 'create_workspace' @{project=$p}).workspace
-$feature = @{type='Feature'; id='place-1'; properties=@{name='Park'; open=$true}; geometry=@{type='Point'; coordinates=@(116.4,39.9)}}
-Center 'save' @{project=$p; workspace=$w; expected_workspace_version=0; edits=@(@{dataset=$d; feature_id='place-1'; feature=$feature})}
-$request = @{project=$p; workspace=$w; expected_workspace_version=1; request_id=[guid]::NewGuid().ToString(); message='Seed places'}
-Center 'publish' $request
-Center 'features' @{project=$p; dataset=$d}
-Remove-Variable entry,headers
+```typescript
+import { Client } from "@geoledger/client";
+const client = new Client(endpoint, token);
+try {
+  const project = await client.createProject("城市道路");
+  const dataset = await client.createDataset(project.id, "roads");
+  const draft = await client.createWorkspace(project.id);
+  await draft.save(dataset.id, {
+    type: "Feature", id: "road-1",
+    properties: { name: "滨江大道", exact: 9007199254740993n },
+    geometry: null,
+  });
+  const receipt = await draft.publish("新增道路");
+  const rows = await client.features(project.id, dataset.id, {revision: receipt.revision});
+} finally { client.close(); }
 ```
 
-中心数值协议按 i64/u64 范围精确保存整数，也识别表示整数的指数和小数写法；非整数采用有限 binary64，并在写入前校验范围。任意精度十进制值可使用字符串属性。浏览器测试台原样发送请求文本并显示响应文本，保留大整数字面量。
+所有调用返回 Promise。版本与 64 位计数使用 `bigint`，普通 GeoJSON 属性中的安全数字保持 `number`，
+大整数读为 `bigint`。`parseJson` / `stringifyJson` 用于精确 JSON 读写，避免标准 `JSON.parse` 先舍入大整数。
+也可直接传原始 GeoJSON 文本。数值已被 JavaScript 舍入的对象会被拒绝，需改用 `bigint` 或原始文本。
+完整示例见 [TypeScript 示例](../sdk/ts/test/smoke.cjs)。此 SDK 面向 Node.js。
 
-`GL_CENTER_OPERATION_TIMEOUT_MS` 配置中心操作的总截止时间，默认 30000 毫秒，范围 1–300000 毫秒；超时后的发布使用原 `request_id` 和相同请求体重试确认结果。Thrift 入口按严格 Framed Binary 校验帧、字段长度、UTF-8 和嵌套深度，单个入站帧上限为 4 MiB + 64 KiB；每个监听器最多接纳 8 个连接，帧读取截止时间为 10 秒、响应写入为 30 秒。客户端空闲后可重新建立连接。
+## 常用操作
 
-## 嵌入式 Dataset 协作
+| 对象 | 业务方法（Python / Rust 命名；Go / TS 使用各自命名惯例） |
+|---|---|
+| Client | info、create_project、project、projects、set_member |
+| Client | create_dataset、datasets、create_workspace、workspace、workspaces |
+| Client | features、history、commit、audit、restore |
+| Workspace | save、save_batch、delete、features、diff、conflicts |
+| Workspace | publish、resolve、rebase、discard、refresh |
 
-业务表接入调用 `CenterApplication::collaborate(&Scope, CollaborationCommand, &impl Host)`，成功返回原始 JSON，失败返回携带 `status` 与 `body` 的 `Error`。`Scope` 的 subject、tenant、project、dataset 来自宿主验证后的身份上下文；请求正文只有操作参数。宿主在每次事务中授权并返回可信 `TableBinding {schema, table, id_column, geometry_column, srid}`，发布回调在同一事务更新宿主版本/缓存标记。
+`save` 直接接收带字符串 `id` 的完整 GeoJSON Feature。批量编辑使用 SDK 自身的 `Edit`，
+删除必须通过 `delete()` 或显式 `null` / `None`；省略要素字段会报参数错误。
+正式要素分页固定首次返回的 revision，后续查询带该版本及 next_after；草稿分页需核对 workspace_version。
 
-命令为平面 JSON，以 `op` 标记。revision/base_revision/head/from/to 是十进制字符串；epoch、workspace、request_id 是 UUID；version 是整数。快照、变化、冲突和历史传 `after?`、`limit?`；默认 200 条、最多 1000 条，使用响应 `next_after` 继续，不能跨 Dataset 或区间复用。
+## 错误与发布恢复
 
-| op | 必需输入 | 主要结果 |
-|---|---|---|
-| register / head | 无 | epoch、revision、schema、id_column、geometry_column、srid |
-| snapshot | epoch、revision | features、schema、done |
-| changes | epoch、from、to | changes、schema、done |
-| open_draft | epoch、base_revision、request_id | workspace、version、base_revision |
-| save_delta | epoch、workspace、expected_version、request_id、operations | workspace、version、ids |
-| draft_changes | epoch、workspace | base_revision、version、changes、schema、ids、done |
-| preview | epoch、workspace | head、version、conflicts、total |
-| resolve | epoch、workspace、expected_version、expected_head、resolutions | workspace、version |
-| rebase | epoch、workspace、expected_version、expected_head | workspace、version、base_revision |
-| publish | epoch、workspace、expected_version、request_id | revision、ids、changes、status |
-| commit_result | epoch、request_id | 原发布结果，或 status: unknown |
-| history / commit | epoch / epoch、revision | commits / changes、done |
+Python / TS 捕获 `GeoLedgerError`；Rust 使用 `Error`；Go 用 `errors.As` 获取 `*geoledger.Error`。
+它们提供业务 `code`、message、request_id / requestId、可选 conflicts，以及 `uncertain` / Uncertain。
+常见业务码包括 `invalid_argument`、`unauthenticated`、`not_found`、`conflict`、`timeout` 和 `unavailable`。
+调用方不需要导入任何底层状态码或 metadata 类型。
 
-`publish.message` 可省略，默认空字符串，最大 4096 字节。`resolve`、`rebase` 也接受 `request_id`，客户端应始终提供以恢复响应丢失。相同请求 ID 和内容返回保存的原结果；更改内容返回 409。`commit_result` 的 unknown 不证明上次事务失败，应继续保留原发布请求。无变化返回 `status: unchanged`，不创建提交。
+当 `uncertain` 为真时，写入可能已经完成。对同一工作区再次 `publish` 并使用原说明即可重试原请求；
+期间工作区对象拒绝改动要素或更换发布说明。成功后再次调用也返回原发布结果。
+发布被明确拒绝时释放待重试请求，保留草稿版本供查询、解决冲突。
 
-`schema` 为 `{name,type,nullable,editable}[]`。`operations` 使用 `method: post` 加稳定 `client_id` 和完整 Feature，`method: patch` 加 id 与仅改动的 `body.properties`/可选 geometry，或 `method: delete` 加 id。恢复远程删除的原有行使用 `method: restore` 加原 id 与真正改变的属性/几何 patch；服务器要求基础版本中已删除该行，并从历史读取最近一次原生值，保留原主键。字段操作为 `{method:"patch",schema:true,body:{add:[{name,type}],drop:[name]}}`。缺少属性表示不修改，显式 null 表示空值；字段删除只能通过 schema 操作。新建时省略的属性沿用数据库默认值；`draft_changes` 对新增要素保留属性缺失，不把未提供的属性补成 null，便于 rebase 后重建上传内容。每批 1–1000 操作、序列化后最多 16 MiB；一个草稿可累积多批。单个展开后的 Feature 最多 4 MiB（预留三个冲突版本的响应空间），单个完整响应最多 16 MiB，超出返回 413。
+工作区的 `pending_publication` / `PendingPublication()` / `pendingPublication` 暴露可持久化的业务发布意图，
+可在跨进程恢复时交给 `client.publish(intent)`。Python 使用 `dataclasses.asdict`，Rust / Go 使用 JSON 序列化，
+TS 使用 `stringifyJson`；恢复时用 `parseJson` 读取，并将 `expectedWorkspaceVersion` 转为 `BigInt`，以恢复版本字段的类型。句柄本身仅保存在客户端内存中，不构成本地仓库。
+同一工作区的多个独立句柄仍受服务端乐观版本检查约束，SDK 不会静默刷新并覆盖其他修改。
 
-`changes` 为 `{id,feature}`，null 是删除；草稿新增还带 `client_id`，恢复的历史行带 `restore: Feature` 基线供客户端计算 patch，`ids` 映射稳定 client_id 到预分配的永久 ID。Feature 几何为 EPSG:4326，正式表和历史保留原始 SRID。PostgreSQL bigint/numeric 属性输出为 JSON 字符串，避免浏览器 rebase 后丢失精度；普通整数和浮点属性仍为 JSON 数字。行冲突为 `{id,fields,base,local,remote}`，fields 使用 `/properties/<JSON Pointer 转义字段>`、`/geometry` 或 `*`；过期选择为 `stale_resolution`。schema 冲突使用 id `$schema`，三个版本是 schema 数组。字段选择使用 `{id,choice:"fields",fields:{"/properties/name":"local","/geometry":"remote"}}`，服务端选取原生值并合并其余不冲突字段。整行选择为 `{id,choice:"local"|"remote"}`；属性冲突也会保留其余自动合并字段。显式手工替换可以使用 `{id,choice:"custom",feature}`，必须给完整 Feature 或 null；schema 仅支持 local/remote。HEAD 再次变化或后续保存会使先前选择重新等待确认。
+大量冲突时错误只含 head、version、total 等摘要，完整内容通过工作区 `conflicts()` 分页查询。
 
-未登记的 `head` 返回 409 / `not_registered`；旧 epoch 返回 409 / `epoch_mismatch`。其他错误沿用中心结构，冲突详情在顶层。已确定回滚的 PostgreSQL 数据类型/约束错误（SQLSTATE 22/23）返回 422，可修改草稿后重新提交；连接中断、期限和其他不确定错误仍需保留原发布请求确认结果。冲突页是按 ID 排序的连续前缀，达到字节或条数预算后不会越过未返回项；schema 冲突也按相同顺序分页。运行前提与表能力限制见[日常操作](user-guide.md#托管业务表)。
+## 浏览器 HTTP
+
+`POST /api/v1/{operation}`，使用 snake_case 操作名，例如 `create_project`、`save`、`publish`、`features`。JSON 请求体字段对应 RPC 请求；HTTP 的 `feature` 为 GeoJSON 对象。列表响应为 JSON 数组，Features 返回 FeatureCollection 或单个 Feature。
+
+```sh
+curl --fail-with-body http://127.0.0.1:7881/api/v1/create_project \
+  -H "Authorization: Bearer $GL_TOKEN" -H 'Content-Type: application/json' \
+  --data '{"name":"roads"}'
+```
+
+`GET /` 为管理控制台；`GET /health` 为存活检查；`GET /ready` 最多 2 秒检查存储；`GET /metrics` 要求同样的 Bearer 认证。默认同源，跨域授权需由部署网关明确配置。
+
+## 服务端协议与限制
+
+[geoledger.proto](../proto/geoledger/v1/geoledger.proto) 是内部统一协议定义。
+生成代码位于 SDK 的私有 / internal 目录，公开入口仅提供业务接口。
+HTTP 与 RPC 仍调用同一个 Application；用户身份只来自服务端验证的令牌。
+SDK 是本仓库源码包，推送 GitHub 与发布到包注册表是不同操作。
+
+| 情况 | HTTP |
+|---|---|
+| 参数或几何非法 | 400 / 422 |
+| 身份验证失败 | 401 |
+| 资源不存在或无权查看 | 404 |
+| 重复名称、版本、合并或幂等冲突 | 409 |
+| 大小超限 / 执行容量耗尽 | 413 / 429 |
+| 期限耗尽 | 504 |
+| 存储不可用 | 503 |
+
+Audit 仅项目 owner 可读。每页 1–1000 条、Feature 最大 16 KiB、最多 256 个属性；EPSG:4326，XY/XYZ。
+标识拒绝控制字符，属性键和值拒绝实际 U+0000。进一步边界见 [生产运行](production.md)。

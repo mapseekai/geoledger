@@ -1,0 +1,21 @@
+[Unit]
+Description=GeoLedger spatial version service
+After=network.target
+[Service]
+Type=simple
+User=geoledger
+Group=geoledger
+StateDirectory=geoledger
+WorkingDirectory=/var/lib/geoledger
+Environment=GL_DATA_DIR=/var/lib/geoledger
+EnvironmentFile=-/etc/geoledger/environment
+ExecStart=/usr/local/bin/geoledger-server
+Restart=on-failure
+TimeoutStopSec=60
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0077
+[Install]
+WantedBy=multi-user.target

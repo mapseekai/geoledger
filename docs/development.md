@@ -1,111 +1,77 @@
-# 开发说明
+# 开发与验证
 
-[项目概览](../README.md) · [快速开始](getting-started.md) · [功能指南](user-guide.md) · [API](api.md)
+[项目概览](../README.md) · [存储接口](storage.md)
 
-## 架构
+## 代码结构
 
-| 层 | 职责 |
+| 目录 | 职责 |
 |---|---|
-| `crates/core` | 版本对象、持久化树、提交图、差异与合并算法 |
-| `crates/storage` | SQLite WAL 对象库、Zstd 压缩、文件锁、冲突索引及恢复日志 |
-| `crates/postgis` | 表检查、记录编码、字段演进、跟踪触发器及数据库事务 |
-| `crates/app` | 通过 Application / Command 编排全部版本操作 |
-| `crates/server`、`crates/thrift-gen` | HTTP / gRPC / Thrift 服务及协议绑定 |
-| `crates/cli` | 命令解析与服务启动 |
+| crates/core | 纯属性/几何三方合并 |
+| crates/engine | 共同应用层、存储接口、SQLite/PostGIS 适配器 |
+| crates/rpc / proto | 生成的 Rust RPC 类型与统一 Protobuf |
+| crates/server | 唯一服务程序、HTTP、tonic、认证、监控、内置 UI |
+| sdk/rust、sdk/go、sdk/ts、sdk/python | 四语言 gRPC 客户端 |
+| crates/cli | 基于 Rust SDK 的远程命令行 |
 
-核心算法通过 `ObjectStore`、`WorkingCopyProvider`、`WorkingCopyTransaction` 对接存储和工作副本。异步入口使用阻塞工作线程调用应用层。
-
-本地 PostGIS 连接建立（含 TLS 和启动握手）最多等待 10 秒；每次数据库调用的客户端期限为配置的 SQL 超时加 1 秒，流式查询从发起到读完共用一个期限。到期中止连接驱动并关闭 socket，后续调用拒绝复用该连接。数据库提交结果不确定时仍通过 pending 日志执行恢复。
-本地 HTTP 在读取请求体前限制最多 8 个并发请求，请求体读取及 JSON 提取的等待期限为 30 秒；执行层另保留 8 个并发许可供各传输共享。
-
-三方合并归并两个有序差异游标，按键逐条处理，遍历仅保留树路径和当前差异。PostGIS 有界读取只计算字节预算前缀内记录的大小，未消费后缀不会提前执行几何编码。批次最后一条记录仍允许越过字节预算，因此该预算不等同于进程内存上限。
-
-
-PostGIS 保存可编辑工作副本；SQLite 保存历史对象和分支。提交采用“对象与 pending 持久化 → 数据库提交 → 分支状态发布”的顺序，`recover` 通过操作标记协调恢复。数据和字段恢复持续保留跟踪触发器及表锁。
-
-本地状态与 SQLite 存储布局采用格式 5，冲突按对象引用独立索引；版本对象与 PostGIS 跟踪采用格式 3。本地目录为 `.geoledger`，数据库元数据为 `_geoledger`。开发数据通过新建仓库和从源数据导入准备。对象读取校验类型和哈希，`fsck` 按字段结构和子树身份复用校验结果。
-
-## 构建
-
-在项目根目录准备 Rust、C 编译器和 protoc；Linux 构建还使用 OpenSSL 开发包与 pkg-config。工具链与依赖要求见 [Cargo.toml](../Cargo.toml) 和 [Cargo.lock](../Cargo.lock)。
-
-macOS / Linux 构建全部入口：
-
-```bash
-cargo build --workspace --bins --examples --locked
-cargo install --path crates/cli --locked
-```
-
-Windows 在 MSVC 环境构建 CLI、HTTP 和 gRPC：
-
-```powershell
-cargo build --release --locked --target x86_64-pc-windows-msvc -p geoledger-cli --no-default-features
-```
-
-## 验证
-
-macOS / Linux 准备 Python 3 和 Node.js 22，运行 `./scripts/check.sh`，执行文档、浏览器协议回归、格式、Clippy 和工作区测试。设置 `GL_TEST_DATABASE_URL` 指向专用 `geoledger_test` 数据库后，脚本同时执行 PostGIS 集成测试；测试数据使用隔离环境。
-
-Windows 使用对应功能组合：
-
-```powershell
-python scripts/check-docs.py
-cargo fmt --all -- --check
-cargo test --locked --workspace --exclude geoledger-thrift-gen --no-default-features
-```
-
-[自动 CI](../.github/workflows/ci.yml) 在 push / pull request 时运行 Linux 默认功能与独立 PostGIS 回归、Rust 1.88 最低版本检查，以及 Windows 便携功能测试和 Clippy。
-
-## Windows 打包
-
-[Windows 工作流](../.github/workflows/windows-cli.yml) 完成原生构建、测试、PowerShell 自检和运行时依赖检查，再由 [打包脚本](../scripts/package-windows.py) 生成 ZIP 及 SHA256。安装包包含可执行文件、统一指南、配置模板与测试材料。
-
-[文档检查](../scripts/check-docs.py) 校验本地链接及章节引用。文档按“快速开始、功能指南、API、开发说明”维护，每项内容集中在对应页面；操作示例使用实际配置或由准备步骤创建的资源。
-
-## 中心版
-
-独立包 [geoledger-center](../crates/center/Cargo.toml) 为 `0.2.0-alpha.1`，入口 `gl-center`，
-[CenterApplication](../crates/center/src/lib.rs) 处理全部中心操作，HTTP 层只负责认证、限流、大小限制和阻塞任务调度。
-中心版按数据库会话、数值编解码、查询、发布和错误处理拆分模块；复用 core 的 `merge_record`。中心属性使用带 JSON Pointer 转义的 `/properties/` 字段，几何使用 `/geometry`，
-JSON 值编码为文本单元，几何编码为保留坐标顺序与 Z 的 XDR EWKB。中心 schema 当前为格式 2，本地 core 编解码保持原样。
-
-[结构初始化](../crates/center/src/schema.sql) 建立项目范围复合外键、成员、工作区、增量、当前要素、时态历史、提交、幂等记录和审计表。
-历史值与提交由数据库触发器保护；历史区间在后续提交中仅关闭一次。发布在同一连接的单一事务中锁项目行及工作区行，
-重新合并后一起更新要素、历史、提交、HEAD、审计、幂等结果和工作区状态。草稿仅锁自身工作区及成员身份。
-项目采用 `FOR NO KEY UPDATE`，与草稿写入的外键 KEY SHARE 锁兼容；成员管理与发布采用一致的锁顺序；bootstrap 的事务 advisory lock 仅用于协调结构初始化。
-服务专用写角色是运行前提，数据库所有者仍拥有管理权限。
-
-离线验证：
+构建依赖 Rust 1.88+（推荐 1.92）、C 编译器、protoc、pkg-config、OpenSSL 开发库。运行 SQLite 后端无需数据库或空间扩展安装。
 
 ```sh
-python3 scripts/check-docs.py
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --offline -- -D warnings
-cargo test --workspace --offline
-# 由测试操作者配置专用 GL_TEST_DATABASE_URL，数据库名必须为 geoledger_test。
-cargo test -p geoledger-center --test postgis --offline -- --ignored --test-threads=1
-cargo test -p geoledger-center --test collaboration --offline -- --ignored --test-threads=1
+cargo build --locked --workspace --bins --examples
+./scripts/check.sh
 ```
 
-[中心集成测试](../crates/center/tests/postgis.rs) 在写入前核验数据库名，使用随机项目和身份，可共享中心 schema。
-`migrate` 需要预装 PostGIS；测试保留随机项目的不可变历史，整个测试数据库可由测试操作者重建。
-`scripts/check.sh` 在配置测试 URL 时包含中心测试。中心 crate 直接使用现有 Axum、tokio-postgres/native-tls 和 core，
-Windows 本地 CLI 构建链及 Volo 特性边界保持原样。浏览器测试台由中心服务内嵌提供，令牌保留在内存中，接口按同源部署。
+常规检查包括文档链接、浏览器数值/重试、fmt、Clippy、Rust 单元、SQLite 一致性、事务失败与真实服务测试。DB 测试仅使用隔离的 `geoledger_test` 数据库；设置 `GL_TEST_DATABASE_URL` 后会追加 PostGIS 的相同 conformance 套件。
 
+## 生成 SDK
 
-中心版 Windows 发布由 [独立工作流](../.github/workflows/center-windows.yml) 构建 `gl-center.exe`，
-运行原生测试并检查系统依赖，再由 [中心打包脚本](../scripts/package-center.py) 生成带指南、构建信息和 SHA256 的安装包。
-两种可执行文件独立发布，共用核心字段合并算法。
+SDK 业务层手工维护，公开接口不暴露生成类型。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：protoc 3.21+、protoc-gen-go 1.36.10、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.11.0。
 
-中心二进制的 `--build-info` 提供编译时的提交、目标、配置和运行时信息；打包脚本核对干净工作区与该信息，
-并记录可执行文件 SHA256，保证安装包说明对应实际构建。
+```sh
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+python -m pip install grpcio-tools==1.78.0
+npm ci --prefix sdk/ts
+./scripts/generate-sdk.sh
+```
 
-中心服务使用最多 16 个数据库会话，复用连接及预处理语句。完整操作截止时间覆盖连接建立、SQL 和提交；到期关闭对应连接并回收执行槽位。冲突按批计算、按页保留预览，候选结果存入事务临时表，再以集合式 SQL 发布。
+生成工具需在 PATH 上。Python 脚本可用 `PYTHON` 指定含 grpcio-tools 的解释器。Go 模块要求 Go 1.23+；TypeScript 构建/运行推荐 Node.js 22；Python 客户端要求 3.10+。
 
-嵌入式业务表协作入口为 [collaborate](../crates/center/src/collaboration.rs)。`default-features = false` 去掉 HTTP、控制台和二进制依赖；默认 `http` feature 保留 `gl-center`。宿主实现 `Host::authorize` 与 `Host::published`，两者使用导出的截止时间感知 `Transaction`。必须在有界阻塞工作线程调用同步库；事务控制、提交与连接归还由应用层负责。
+## 四语言联调
 
-托管表首次登记持有 `SHARE ROW EXCLUSIVE` 表锁，用单个 `INSERT SELECT` 建立初始历史。每个 Dataset 有独立 epoch 和 revision。`collab_rows.value` 保存 PostgreSQL 文本输入/输出值及原生 SRID EWKB，浏览器 GeoJSON 独立保存；只改属性不会转换原有几何或未改动数值。字段合并继续调用 core `merge_record`；冲突的字段选择直接选取服务器原生值，bigint/numeric 传给浏览器时使用字符串。删除后恢复通过原生历史基线及 patch 保留原主键，schema 冲突后的 rebase 把需要恢复的历史字段值作为草稿持久化。发布串行锁定 Dataset 与草稿，验证被修改正式行仍匹配 HEAD，再一起提交业务表、历史、宿主标记及请求结果。字段结构变化以集合 SQL 为所有现存行记入新 schema 的权威值；普通行编辑只访问草稿涉及的行，按主键类型转换参数以使用索引。
+启动一个隔离服务，设置 `GL_ENDPOINT` 和 `GL_TOKEN_FILE`，运行 [test-sdks.sh](../scripts/test-sdks.sh)。令牌不会打印到终端，脚本通过公开业务接口创建独立项目、保存精确数字、发布、重复原请求和读回。分别对 SQLite/PostGIS 地址运行。
 
-快照与增量从不可变历史分页，游标绑定 epoch、区间或草稿版本。增量先限定修订区间；草稿扫描按记录数与原生字节前缀分批，响应按展开后的 JSON 预算切页，允许一条大要素独占一页。容量仍受单次操作截止时间及单条最大要素约束；不是任意规模的内存或延迟保证。schema 提交会产生全表历史变化。
+```sh
+export GL_ENDPOINT=http://127.0.0.1:7882
+export GL_TOKEN_FILE="$PWD/geoledger-data/tokens.json"
+./scripts/test-sdks.sh
+```
 
-[托管表回归](../crates/center/tests/collaboration.rs) 在专用 PostGIS `geoledger_test` 验证不同字段自动合并、同字段/几何/删除冲突、过期选择、幂等 rebase、schema 删除冲突、固定分页、生成 ID、空说明、宿主失败回滚、原生几何/精确 numeric，以及 1201 条草稿变化和 25,815 字节几何。一次本机 debug 测量的发布加增量读取为 15.5 秒，增量 JSON 总计 205,942 字节；并发编译时同项曾达 132 秒，因此这些数字仅描述该小型夹具，不作为服务容量指标。测试在退出前删除随机业务表，不可变测试历史随整个专用数据库清理。`scripts/check.sh` 已包含此回归；真实浏览器和 MapSeek 授权仍需由宿主仓库验收。
+SDK 示例与测试会写入新的测试项目，请使用专用测试服务。CLI 完全通过 Rust SDK 访问 gRPC；安装 CLI 不需要数据库驱动。
+
+## 测试原则
+
+新后端接入必须保持 [存储语义](storage.md)，运行同样的 conformance 测试；禁止通过删除场景规避后端差异。单独测试存储期限、提交失败、持久化重启和发布幂等。
+
+容量测试需要显式启用并记录环境、数据规模、几何类型、索引、请求模型和耗时分位数。SQL 直接播种与经公共接口导入属于不同验证范围；不要将正确性回归时间或某次小样本测量当作生产 SLA。
+
+## 控制台浏览器验证
+
+[控制台说明](console.md) 包含登录、资源管理和失败恢复流程。
+常规检查中的 Node 测试覆盖精确数值、原请求重试和会话结束后的迟到响应。
+真实浏览器验证使用 [test-console.py](../scripts/test-console.py)，需要 Python Playwright 和 Chromium：
+
+```sh
+python3 -m pip install playwright
+python3 -m playwright install chromium
+# 在另一终端启动隔离服务：
+# target/debug/geoledger-server --data-dir target/console-test --http 127.0.0.1:7895 --grpc 127.0.0.1:7896
+python3 scripts/test-console.py \
+  --url http://127.0.0.1:7895 \
+  --token-file target/console-test/tokens.json \
+  --screenshots artifacts
+```
+
+也可用 `--chromium /usr/bin/chromium` 指定已安装的浏览器。
+脚本会创建测试项目和数据，验证无效令牌、完整编辑发布流程、大整数、
+丢失发布响应后的幂等重试、分页、权限设置、会话清理与移动端布局。
+截图不包含令牌明文。只在隔离测试服务上运行；此项因依赖浏览器，不纳入默认 `check.sh`。

@@ -1,8 +1,15 @@
 /target/
 .env
-/demo-repo/
-/.geoledger/
 *.log
 /.reference/
 
-.center-tokens*.json
+*tokens*.json
+
+/geoledger-data/
+node_modules/
+sdk/ts/dist/
+__pycache__/
+*.egg-info/
+.venv/
+/artifacts/
+sdk/python/build/

@@ -1,0 +1,18 @@
+[package]
+name = "geoledger-rpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+prost = "0.14"
+tonic = { version = "0.14", features = ["tls-native-roots"] }
+tonic-prost = "0.14"
+serde.workspace = true
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[lints]
+workspace = true

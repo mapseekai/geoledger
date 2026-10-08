@@ -1,24 +1,26 @@
 # Development contract
 
-The repository root is the single Cargo workspace. Implementation crates live
-under crates/. Run workspace commands from this directory.
+The repository root is the Cargo workspace. This is a service-only product:
+geoledger-server owns storage, gl is a remote gRPC client, and Go/Rust/Node.js/Python
+SDKs share proto/geoledger/v1/geoledger.proto. Browser management uses HTTP.
 
-Run ./scripts/check.sh with Python 3 and Node.js 22 available. It checks docs,
-browser protocol regressions, rustfmt, locked workspace Clippy and Rust tests.
-Opt-in PostGIS tests use GL_TEST_DATABASE_URL and a database named geoledger_test.
-Keep fixtures within dedicated disposable test environments.
+Core stays independent of databases and transports. Every transport calls engine
+Application. Application depends on StorageBackend/RepositoryTransaction semantic
+operations; backend SQL belongs in engine session adapters, never in business handlers.
+New backends must pass the same conformance suite. Preserve atomic publication,
+historical visibility, optimistic draft versions, authorization, original-request
+idempotency, audit writes, and rollback on dropped or failed transactions.
 
-Core stays independent of databases and transports. Every transport calls Application.
-Keep working-copy triggers enabled during checkout and restoration. Preserve table locks,
-journal/marker ordering, schema validation, clean-copy checks and conflicting-head protection.
+SQLite is the default server backend with WAL and durable transactions. PostGIS is
+selected explicitly. Never fall back to SQLite when an explicit PostGIS configuration
+fails. Clients never open a database or local repository.
 
-Keep immutable object/schema/PostGIS tracking FORMAT_VERSION distinct from mutable local
-STATE_VERSION and SQLite storage layout. Development targets current formats only: do not
-add legacy readers, command aliases or automatic upgrades. Give structural/encoding changes
-explicit versions, then initialize fresh repositories and import source tables into dedicated
-current-format working copies. Preserve current-format recovery and transaction rollback.
+Run ./scripts/check.sh with Python 3 and Node.js 22 available. SDK regeneration uses
+protoc, the pinned Go plugins, grpcio-tools and ts-proto; see docs/development.md.
+Opt-in PostGIS tests use GL_TEST_DATABASE_URL and require database geoledger_test.
+Keep fixtures in disposable test environments. Capacity tests are explicit opt-in.
 
-Document implemented behavior, operating prerequisites and measured validation scope.
-Keep README as the overview, with guides for getting started, daily operations, API,
-and development. Keep each topic in one place. Use repository-relative links to tracked
-files; identify generated paths and service addresses through their setup commands.
+Target the current storage and protocol only: no legacy readers, command aliases,
+or automatic upgrades. Structural storage changes require a new format version
+and a fresh database. Document measured validation separately from deployment claims.
+Do not commit credentials, database files, generated build caches or test logs.

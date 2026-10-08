@@ -1,0 +1,12 @@
+services:
+  geoledger:
+    build: .
+    ports:
+      - "127.0.0.1:7881:7881"
+      - "127.0.0.1:7882:7882"
+    volumes:
+      - geoledger-data:/data
+    restart: unless-stopped
+    stop_grace_period: 60s
+volumes:
+  geoledger-data:

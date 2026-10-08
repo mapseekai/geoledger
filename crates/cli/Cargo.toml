@@ -4,27 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-
 [[bin]]
 name = "gl"
 path = "src/main.rs"
-
-[features]
-default = ["thrift"]
-thrift = ["geoledger-server/thrift"]
-
 [dependencies]
-geoledger.workspace = true
-geoledger-core.workspace = true
-geoledger-postgis.workspace = true
-geoledger-server.workspace = true
+geoledger-client = { path = "../../sdk/rust" }
 serde_json.workspace = true
 tokio.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[dev-dependencies]
-tempfile.workspace = true
-
 [lints]
 workspace = true

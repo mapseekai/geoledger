@@ -4,43 +4,31 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-build = "build.rs"
 
-[features]
-default = ["thrift"]
-thrift = ["dep:volo", "dep:volo-thrift", "dep:pilota", "dep:geoledger-thrift-gen"]
-
-[[example]]
-name = "thrift_client"
-required-features = ["thrift"]
+[[bin]]
+name = "geoledger-server"
+path = "src/main.rs"
 
 [dependencies]
-geoledger.workspace = true
-geoledger-core.workspace = true
+geoledger-engine = { path = "../engine" }
+geoledger-rpc = { path = "../rpc" }
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 tokio.workspace = true
 axum = "0.8"
 tonic = "0.14"
-tonic-prost = "0.14"
 prost = "0.14"
-tonic-reflection = "0.14"
 tokio-stream = { version = "0.1", features = ["net"] }
 subtle = "2"
+getrandom = "0.4"
+jsonwebtoken = "9.3"
 tracing = "0.1"
-volo = { version = "0.12.4", optional = true }
-volo-thrift = { version = "0.12.6", optional = true }
-pilota = { version = "0.13", optional = true }
-geoledger-thrift-gen = { path = "../thrift-gen", optional = true }
-
-[build-dependencies]
-tonic-prost-build = "0.14"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
-geoledger-postgis.workspace = true
-postgres = "0.19"
-uuid.workspace = true
+geoledger-client = { path = "../../sdk/rust" }
 tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

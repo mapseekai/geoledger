@@ -5,7 +5,7 @@ import { webcrypto } from 'node:crypto';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const html = await readFile(new URL('../crates/center/web/index.html', import.meta.url), 'utf8');
+const html = await readFile(new URL('../crates/server/web/index.html', import.meta.url), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 assert.ok(script, 'console contains its embedded script');
 
@@ -33,13 +33,14 @@ function consoleFixture(reply = '{"ok":true}', status = 200) {
     localStorage: forbiddenStorage, sessionStorage: forbiddenStorage,
     fetch: async (path, options) => {
       calls.push({ path, options });
-      return { ok: status >= 200 && status < 300, status, text: async () => reply };
+      return { ok: status >= 200 && status < 300, status, text: async () => typeof reply === 'function' ? reply() : reply };
     },
   });
   vm.runInContext(script, context, { timeout: 1000 });
   element('token').value = 'test-only-' + 'x'.repeat(64);
   return {
     element, calls,
+    expire() { vm.runInContext('sessionEpoch++', context); },
     async send(operation, raw) {
       element('operation').value = operation;
       element('request').value = raw;
@@ -89,4 +90,17 @@ test('structured errors remain visible and credentials stay out of storage', asy
   assert.match(c.element('response').textContent, /request_id/);
   assert.equal(c.calls[0].options.credentials, 'omit');
   assert.equal(c.calls[0].options.cache, 'no-store');
+});
+
+
+test('a response from an ended session cannot restore protected content', async () => {
+  let complete;
+  const reply = new Promise(resolve => { complete = resolve; });
+  const c = consoleFixture(() => reply);
+  const pending = c.send('features', '{"project":"p","dataset":"d"}');
+  c.expire();
+  complete('{"properties":{"private":"old session"}}');
+  await pending;
+  assert.equal(c.element('response').textContent, '');
+  assert.equal(c.element('send').disabled, false);
 });
