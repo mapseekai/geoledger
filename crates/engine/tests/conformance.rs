@@ -193,7 +193,7 @@ impl Fixture {
         let p = app.execute(
             &alice,
             "create_project",
-            json!({"name":"center integration"}),
+            json!({"name":"integration project"}),
         )?["project"]
             .as_str()
             .unwrap()
@@ -907,14 +907,14 @@ fn membership_removal_archive_and_delete() -> TestResult {
         status(f.call(
             &f.bob,
             "delete_project",
-            json!({"confirm_name":"center integration"})
+            json!({"confirm_name":"integration project"})
         )),
         404
     );
     f.call(
         &f.alice,
         "delete_project",
-        json!({"confirm_name":"center integration"}),
+        json!({"confirm_name":"integration project"}),
     )?;
     for subject in [&f.alice, &f.bob] {
         assert_eq!(status(f.call(subject, "get_project", json!({}))), 404);

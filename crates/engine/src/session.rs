@@ -808,7 +808,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.query("SELECT id,subject,action,detail,created_at FROM gl_audit_events WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3", &[&project, &after, &limit])
     }
     fn begin_merge(&mut self) -> Result<()> {
-        self.batch_execute("DROP TABLE IF EXISTS center_merge; CREATE TEMP TABLE center_merge(dataset text, feature_id text, before_value text, after_value text)")
+        self.batch_execute("DROP TABLE IF EXISTS gl_merge_stage; CREATE TEMP TABLE gl_merge_stage(dataset text, feature_id text, before_value text, after_value text)")
     }
     fn merge_page(
         &mut self,
@@ -829,7 +829,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         after: &Option<String>,
     ) -> Result<()> {
         self.execute(
-            "INSERT INTO center_merge VALUES($1,$2,$3,$4)",
+            "INSERT INTO gl_merge_stage VALUES($1,$2,$3,$4)",
             &[&dataset, &key, &before, &after],
         )
     }
@@ -852,13 +852,13 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,$2,$3,$4,$5)", &[&project, &revision, &workspace, &subject, &message])
     }
     fn append_changes(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,NULLIF(before_value,'null'),after_value FROM center_merge", &[&project, &revision])
+        self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,NULLIF(before_value,'null'),after_value FROM gl_merge_stage", &[&project, &revision])
     }
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.execute("UPDATE gl_history AS h SET valid_to=$2 FROM center_merge m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL", &[&project, &revision])
+        self.execute("UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL", &[&project, &revision])
     }
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM center_merge", &[&project, &revision])
+        self.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM gl_merge_stage", &[&project, &revision])
     }
     fn advance_head(&mut self, project: &str, revision: i64) -> Result<()> {
         self.execute(
@@ -891,7 +891,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn stage_resolution(&mut self, dataset: &str, key: &str, after: &Option<String>) -> Result<()> {
         self.execute(
-            "INSERT INTO center_merge(dataset,feature_id,after_value) VALUES($1,$2,$3)",
+            "INSERT INTO gl_merge_stage(dataset,feature_id,after_value) VALUES($1,$2,$3)",
             &[&dataset, &key, &after],
         )
     }
@@ -902,7 +902,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         )
     }
     fn replace_deltas_with_merge(&mut self, project: &str, workspace: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom) SELECT $1,$2,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM center_merge", &[&project, &workspace])
+        self.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom) SELECT $1,$2,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM gl_merge_stage", &[&project, &workspace])
     }
     fn advance_base(&mut self, project: &str, workspace: &str, revision: i64) -> Result<()> {
         self.execute(

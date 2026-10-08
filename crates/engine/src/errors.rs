@@ -13,7 +13,7 @@ impl Error {
         Self::new(400, "invalid JSON request").caused_by(source)
     }
     pub(crate) fn stored_json(source: serde_json::Error) -> Self {
-        Self::new(500, "invalid stored Center value").caused_by(source)
+        Self::new(500, "invalid stored GeoLedger value").caused_by(source)
     }
     pub fn new(status: u16, message: &str) -> Self {
         let code = match status {
