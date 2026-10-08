@@ -195,15 +195,19 @@ enum Command {
 }
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "geoledger_server=info,geoledger_engine=info".into()),
-        )
-        .init();
+    let args = Args::parse();
+    let logs = tracing_subscriber::fmt().json().with_env_filter(
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "geoledger_server=info,geoledger_engine=info".into()),
+    );
+    // Operator commands keep stdout for their own output (e.g. `export --output -`).
+    if args.command.is_some() {
+        logs.with_writer(std::io::stderr).init();
+    } else {
+        logs.init();
+    }
     // Exit explicitly: a forced shutdown must not wait for abandoned blocking work.
-    let code = match run(Args::parse()).await {
+    let code = match run(args).await {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("geoledger-server: {e}");

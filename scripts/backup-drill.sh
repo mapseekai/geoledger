@@ -90,6 +90,10 @@ run --data-dir "$work/restored" verify --input "$work/export.jsonl" >/dev/null
 echo "== import the export into a new database"
 run --data-dir "$work/imported" import --input "$work/export.jsonl" >/dev/null
 run --data-dir "$work/imported" verify --input "$work/export.jsonl" >/dev/null
+# Streaming through stdout/stdin (logs go to stderr) yields an identical copy.
+run --data-dir "$work/imported" export --output - 2>/dev/null >"$work/stream.jsonl"
+run --data-dir "$work/streamed" import --input - <"$work/stream.jsonl" >/dev/null
+run --data-dir "$work/streamed" verify --input "$work/export.jsonl" >/dev/null
 if [[ -n ${GL_DRILL_DATABASE_URL:-} ]]; then
   echo "== import into PostgreSQL"
   GL_DATABASE_URL=$GL_DRILL_DATABASE_URL run --storage postgis --data-dir "$work/pg" import --input "$work/export.jsonl" >/dev/null
