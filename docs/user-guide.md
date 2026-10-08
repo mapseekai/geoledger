@@ -50,7 +50,7 @@ SDK 工作区对象会在首次发布前生成 UUID `request_id` 并保留完整
 
 ## 成员协作
 
-项目创建者为 owner，可按身份 subject 为成员配置 viewer、editor 或 owner。viewer 浏览共享数据和历史；editor 编辑并发布自己的工作区；owner 同时管理权限并查询项目审计。登录凭证由管理员或身份提供方配置，项目成员关系管理资源访问权限。
+项目创建者为 owner，可按身份 subject 为成员配置 viewer、editor 或 owner。viewer 浏览共享数据和历史；editor 编辑并发布自己的工作区；owner 同时管理权限并查询项目审计，可移除成员、归档（只读）或删除项目。登录凭证由管理员或身份提供方配置，项目成员关系管理资源访问权限。
 
 ## CLI 与管理界面
 

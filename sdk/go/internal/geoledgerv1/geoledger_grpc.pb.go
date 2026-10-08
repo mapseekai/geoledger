@@ -41,6 +41,10 @@ const (
 	GeoLedger_Resolve_FullMethodName         = "/geoledger.v1.GeoLedger/Resolve"
 	GeoLedger_Rebase_FullMethodName          = "/geoledger.v1.GeoLedger/Rebase"
 	GeoLedger_Restore_FullMethodName         = "/geoledger.v1.GeoLedger/Restore"
+	GeoLedger_ListMembers_FullMethodName     = "/geoledger.v1.GeoLedger/ListMembers"
+	GeoLedger_RemoveMember_FullMethodName    = "/geoledger.v1.GeoLedger/RemoveMember"
+	GeoLedger_ArchiveProject_FullMethodName  = "/geoledger.v1.GeoLedger/ArchiveProject"
+	GeoLedger_DeleteProject_FullMethodName   = "/geoledger.v1.GeoLedger/DeleteProject"
 )
 
 // GeoLedgerClient is the client API for GeoLedger service.
@@ -73,6 +77,10 @@ type GeoLedgerClient interface {
 	Resolve(ctx context.Context, in *ResolveRequest, opts ...grpc.CallOption) (*ResolveReply, error)
 	Rebase(ctx context.Context, in *ResolveRequest, opts ...grpc.CallOption) (*RebaseReply, error)
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*WorkspaceReply, error)
+	ListMembers(ctx context.Context, in *ProjectPageRequest, opts ...grpc.CallOption) (*MembersReply, error)
+	RemoveMember(ctx context.Context, in *MemberRefRequest, opts ...grpc.CallOption) (*OkReply, error)
+	ArchiveProject(ctx context.Context, in *ArchiveProjectRequest, opts ...grpc.CallOption) (*ProjectReply, error)
+	DeleteProject(ctx context.Context, in *DeleteProjectRequest, opts ...grpc.CallOption) (*OkReply, error)
 }
 
 type geoLedgerClient struct {
@@ -303,6 +311,46 @@ func (c *geoLedgerClient) Restore(ctx context.Context, in *RestoreRequest, opts 
 	return out, nil
 }
 
+func (c *geoLedgerClient) ListMembers(ctx context.Context, in *ProjectPageRequest, opts ...grpc.CallOption) (*MembersReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MembersReply)
+	err := c.cc.Invoke(ctx, GeoLedger_ListMembers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *geoLedgerClient) RemoveMember(ctx context.Context, in *MemberRefRequest, opts ...grpc.CallOption) (*OkReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OkReply)
+	err := c.cc.Invoke(ctx, GeoLedger_RemoveMember_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *geoLedgerClient) ArchiveProject(ctx context.Context, in *ArchiveProjectRequest, opts ...grpc.CallOption) (*ProjectReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProjectReply)
+	err := c.cc.Invoke(ctx, GeoLedger_ArchiveProject_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *geoLedgerClient) DeleteProject(ctx context.Context, in *DeleteProjectRequest, opts ...grpc.CallOption) (*OkReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OkReply)
+	err := c.cc.Invoke(ctx, GeoLedger_DeleteProject_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GeoLedgerServer is the server API for GeoLedger service.
 // All implementations must embed UnimplementedGeoLedgerServer
 // for forward compatibility.
@@ -333,6 +381,10 @@ type GeoLedgerServer interface {
 	Resolve(context.Context, *ResolveRequest) (*ResolveReply, error)
 	Rebase(context.Context, *ResolveRequest) (*RebaseReply, error)
 	Restore(context.Context, *RestoreRequest) (*WorkspaceReply, error)
+	ListMembers(context.Context, *ProjectPageRequest) (*MembersReply, error)
+	RemoveMember(context.Context, *MemberRefRequest) (*OkReply, error)
+	ArchiveProject(context.Context, *ArchiveProjectRequest) (*ProjectReply, error)
+	DeleteProject(context.Context, *DeleteProjectRequest) (*OkReply, error)
 	mustEmbedUnimplementedGeoLedgerServer()
 }
 
@@ -408,6 +460,18 @@ func (UnimplementedGeoLedgerServer) Rebase(context.Context, *ResolveRequest) (*R
 }
 func (UnimplementedGeoLedgerServer) Restore(context.Context, *RestoreRequest) (*WorkspaceReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Restore not implemented")
+}
+func (UnimplementedGeoLedgerServer) ListMembers(context.Context, *ProjectPageRequest) (*MembersReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListMembers not implemented")
+}
+func (UnimplementedGeoLedgerServer) RemoveMember(context.Context, *MemberRefRequest) (*OkReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveMember not implemented")
+}
+func (UnimplementedGeoLedgerServer) ArchiveProject(context.Context, *ArchiveProjectRequest) (*ProjectReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ArchiveProject not implemented")
+}
+func (UnimplementedGeoLedgerServer) DeleteProject(context.Context, *DeleteProjectRequest) (*OkReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteProject not implemented")
 }
 func (UnimplementedGeoLedgerServer) mustEmbedUnimplementedGeoLedgerServer() {}
 func (UnimplementedGeoLedgerServer) testEmbeddedByValue()                   {}
@@ -826,6 +890,78 @@ func _GeoLedger_Restore_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GeoLedger_ListMembers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProjectPageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).ListMembers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_ListMembers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).ListMembers(ctx, req.(*ProjectPageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GeoLedger_RemoveMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MemberRefRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).RemoveMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_RemoveMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).RemoveMember(ctx, req.(*MemberRefRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GeoLedger_ArchiveProject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ArchiveProjectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).ArchiveProject(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_ArchiveProject_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).ArchiveProject(ctx, req.(*ArchiveProjectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GeoLedger_DeleteProject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteProjectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).DeleteProject(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_DeleteProject_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).DeleteProject(ctx, req.(*DeleteProjectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GeoLedger_ServiceDesc is the grpc.ServiceDesc for GeoLedger service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -920,6 +1056,22 @@ var GeoLedger_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Restore",
 			Handler:    _GeoLedger_Restore_Handler,
+		},
+		{
+			MethodName: "ListMembers",
+			Handler:    _GeoLedger_ListMembers_Handler,
+		},
+		{
+			MethodName: "RemoveMember",
+			Handler:    _GeoLedger_RemoveMember_Handler,
+		},
+		{
+			MethodName: "ArchiveProject",
+			Handler:    _GeoLedger_ArchiveProject_Handler,
+		},
+		{
+			MethodName: "DeleteProject",
+			Handler:    _GeoLedger_DeleteProject_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

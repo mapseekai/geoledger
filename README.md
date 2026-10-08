@@ -44,7 +44,7 @@ curl --fail http://127.0.0.1:7881/ready
 ./target/debug/gl --token-file ./geoledger-data/admin-credentials.json info
 ```
 
-就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 5 等服务信息。首次启动会创建数据目录、数据库和私有管理员令牌文件。
+就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 6 等服务信息。首次启动会创建数据目录、数据库和私有管理员令牌文件。
 
 ### Web 开发服务
 

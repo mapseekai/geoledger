@@ -345,7 +345,26 @@ impl Client {
         self.transaction = true;
         Ok(SqlTransaction(self))
     }
-    pub fn migrate(mut self) -> Result<()> {
+    /// Create a fresh database (base format 5 plus every migration) or verify
+    /// that an existing one is at the current format. Never upgrades data.
+    pub fn migrate(self) -> Result<()> {
+        self.prepare(false).map(drop)
+    }
+    /// Explicit, operator-triggered upgrade of an existing database. Returns
+    /// (current version, target version); `dry_run` only reports.
+    pub fn upgrade(self, dry_run: bool) -> Result<(i32, i32)> {
+        let Some((from, mut t)) = self.prepare(true)? else {
+            return Err(Error::new(500, "unexpected fresh database"));
+        };
+        if !dry_run && from < FORMAT_VERSION {
+            t.apply_migrations(from)?;
+            t.commit()?;
+        }
+        Ok((from, FORMAT_VERSION))
+    }
+    /// Returns the open transaction and the stored version for an existing
+    /// database, or None after creating a fresh one.
+    fn prepare(mut self, upgrade: bool) -> Result<Option<(i32, SqlTransaction)>> {
         let sqlite = matches!(self.backend, Backend::Sqlite(_));
         if sqlite {
             self.batch_execute("PRAGMA journal_mode=WAL;")?;
@@ -364,26 +383,75 @@ impl Client {
             t.query_one("SELECT to_regclass('public.gl_format') IS NOT NULL", &[])?
                 .get::<_, bool>(0usize)?
         };
-        if exists {
-            if t.query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
-                .get::<_, i32>(0usize)?
-                != FORMAT_VERSION
-            {
+        if !exists {
+            if upgrade {
                 return Err(Error::new(
-                    409,
-                    "unsupported storage format; initialize a fresh database",
+                    404,
+                    "no GeoLedger database to upgrade; start the server to initialize one",
                 ));
             }
-        } else {
             t.batch_execute(if sqlite {
                 include_str!("sqlite.sql")
             } else {
                 include_str!("postgis.sql")
             })?;
+            // Fresh databases run the same migrations as upgrades, so every
+            // initialization exercises the upgrade path.
+            t.apply_migrations(5)?;
+            t.commit()?;
+            return Ok(None);
         }
-        t.commit()
+        let version = t
+            .query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
+            .get::<_, i32>(0usize)?;
+        if version > FORMAT_VERSION {
+            return Err(Error::new(
+                409,
+                "storage format is newer than this server; upgrade the server",
+            ));
+        }
+        if version < FORMAT_VERSION && !upgrade {
+            return Err(Error::new(
+                409,
+                "storage format predates this server; back up, then run `geoledger-server migrate`",
+            ));
+        }
+        if version < 5 {
+            return Err(Error::new(
+                409,
+                "storage format predates the oldest upgradable format (5); export and import into a fresh database",
+            ));
+        }
+        Ok(Some((version, t)))
     }
 }
+impl SqlTransaction {
+    fn apply_migrations(&mut self, from: i32) -> Result<()> {
+        let sqlite = matches!(self.0.backend, Backend::Sqlite(_));
+        for (version, sqlite_sql, postgis_sql) in MIGRATIONS {
+            if *version > from {
+                self.batch_execute(if sqlite { sqlite_sql } else { postgis_sql })?;
+            }
+        }
+        let version = self
+            .query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
+            .get::<_, i32>(0usize)?;
+        if version != FORMAT_VERSION {
+            return Err(Error::new(
+                500,
+                "migration left an unexpected format version",
+            ));
+        }
+        Ok(())
+    }
+}
+/// (target version, SQLite script, PostgreSQL script). Each script must leave
+/// gl_format.version at its target version.
+const MIGRATIONS: &[(i32, &str, &str)] = &[(
+    6,
+    include_str!("migrations/0006.sqlite.sql"),
+    include_str!("migrations/0006.postgis.sql"),
+)];
 impl Drop for Client {
     fn drop(&mut self) {
         if self.transaction {
@@ -469,8 +537,8 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>> {
         self.query_opt(
             &self.lock_sql(
-                "SELECT role FROM gl_project_members WHERE project=$1 AND subject=$2",
-                "FOR SHARE",
+                "SELECT m.role,p.state FROM gl_project_members m JOIN gl_projects p ON p.id=m.project WHERE m.project=$1 AND m.subject=$2 AND NOT m.removed AND p.state<>'deleted'",
+                "FOR SHARE OF m",
             ),
             &[&project, &subject],
         )
@@ -584,21 +652,55 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn insert_owner(&mut self, project: &str, subject: &str) -> Result<()> {
         self.execute(
-            "INSERT INTO gl_project_members VALUES($1,$2,'owner')",
+            "INSERT INTO gl_project_members(project,subject,role) VALUES($1,$2,'owner')",
             &[&project, &subject],
         )
     }
     fn list_projects(&mut self, subject: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
-        self.query("SELECT p.id,p.name,p.head FROM gl_projects p JOIN gl_project_members m ON m.project=p.id WHERE m.subject=$1 AND p.id>$2 ORDER BY p.id LIMIT $3", &[&subject, &after, &limit])
+        self.query("SELECT p.id,p.name,p.head,p.state,m.role FROM gl_projects p JOIN gl_project_members m ON m.project=p.id WHERE m.subject=$1 AND NOT m.removed AND p.state<>'deleted' AND p.id>$2 ORDER BY p.id LIMIT $3", &[&subject, &after, &limit])
     }
     fn project_info(&mut self, project: &str) -> Result<Row> {
-        self.query_one("SELECT name,head FROM gl_projects WHERE id=$1", &[&project])
+        self.query_one(
+            "SELECT name,head,state FROM gl_projects WHERE id=$1",
+            &[&project],
+        )
     }
     fn owner_summary(&mut self, project: &str, subject: &str) -> Result<Row> {
-        self.query_one("SELECT count(*) FILTER (WHERE role='owner'), coalesce(max(CASE WHEN subject=$2 AND role='owner' THEN 1 ELSE 0 END),0) FROM gl_project_members WHERE project=$1", &[&project, &subject])
+        self.query_one("SELECT count(*) FILTER (WHERE role='owner'), coalesce(max(CASE WHEN subject=$2 AND role='owner' THEN 1 ELSE 0 END),0) FROM gl_project_members WHERE project=$1 AND NOT removed", &[&project, &subject])
     }
     fn set_member(&mut self, project: &str, subject: &str, role: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_project_members VALUES($1,$2,$3) ON CONFLICT(project,subject) DO UPDATE SET role=excluded.role", &[&project, &subject, &role])
+        self.execute("INSERT INTO gl_project_members(project,subject,role) VALUES($1,$2,$3) ON CONFLICT(project,subject) DO UPDATE SET role=excluded.role,removed=false", &[&project, &subject, &role])
+    }
+    fn live_project(&mut self, project: &str, lock: bool) -> Result<Option<Row>> {
+        let sql = "SELECT name,head,state FROM gl_projects WHERE id=$1 AND state<>'deleted'";
+        if lock {
+            self.query_opt(&self.lock_sql(sql, "FOR UPDATE"), &[&project])
+        } else {
+            self.query_opt(sql, &[&project])
+        }
+    }
+    fn list_members(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
+        self.query("SELECT subject,role FROM gl_project_members WHERE project=$1 AND NOT removed AND subject>$2 ORDER BY subject LIMIT $3", &[&project, &after, &limit])
+    }
+    fn remove_member(&mut self, project: &str, subject: &str) -> Result<()> {
+        self.execute(
+            "UPDATE gl_project_members SET removed=true WHERE project=$1 AND subject=$2",
+            &[&project, &subject],
+        )
+    }
+    fn set_project_state(&mut self, project: &str, state: &str) -> Result<()> {
+        self.execute(
+            "UPDATE gl_projects SET state=$2 WHERE id=$1",
+            &[&project, &state],
+        )
+    }
+    fn owned_projects(&mut self, subject: &str) -> Result<Row> {
+        self.query_one("SELECT count(*) FROM gl_project_members m JOIN gl_projects p ON p.id=m.project WHERE m.subject=$1 AND m.role='owner' AND NOT m.removed AND p.state<>'deleted'", &[&subject])
+    }
+    fn ensure_identity(&mut self, project: &str, subject: &str) -> Result<()> {
+        // Audit rows reference a member row; administrators acting without
+        // membership get an inactive placeholder that grants nothing.
+        self.execute("INSERT INTO gl_project_members(project,subject,role,removed) VALUES($1,$2,'viewer',true) ON CONFLICT(project,subject) DO NOTHING", &[&project, &subject])
     }
     fn insert_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()> {
         self.execute(
@@ -852,6 +954,9 @@ impl StorageBackend for SqlStorage {
     }
     fn pool_stats(&self) -> Option<crate::PoolStats> {
         matches!(self.storage, Storage::Postgis(_)).then(|| self.pool.stats())
+    }
+    fn upgrade(&self, dry_run: bool, timeout: Duration) -> Result<(i32, i32)> {
+        Client::open(&self.storage, &self.pool, timeout)?.upgrade(dry_run)
     }
 }
 

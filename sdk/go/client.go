@@ -304,6 +304,35 @@ func (c *Client) SetMember(ctx context.Context, project, subject, role string) e
 	var r struct{ OK bool }
 	return call(c, ctx, c.rpc.SetMember, &pb.MemberRequest{Project: project, Subject: subject, Role: role}, &r)
 }
+
+// Members lists active members ordered by subject.
+func (c *Client) Members(ctx context.Context, project string, page Page) ([]Member, error) {
+	var r struct {
+		Members []Member `json:"members"`
+	}
+	e := call(c, ctx, c.rpc.ListMembers, &pb.ProjectPageRequest{Project: project, After: page.After, Limit: limit(page.Limit)}, &r)
+	return r.Members, e
+}
+
+// RemoveMember removes a member (owners and administrators) or leaves the
+// project when subject is the caller. The last owner cannot be removed.
+func (c *Client) RemoveMember(ctx context.Context, project, subject string) error {
+	var r struct{ OK bool }
+	return call(c, ctx, c.rpc.RemoveMember, &pb.MemberRefRequest{Project: project, Subject: subject}, &r)
+}
+
+// ArchiveProject makes a project read-only (archived=true) or active again.
+func (c *Client) ArchiveProject(ctx context.Context, project string, archived bool) (Project, error) {
+	var r Project
+	e := call(c, ctx, c.rpc.ArchiveProject, &pb.ArchiveProjectRequest{Project: project, Archived: archived}, &r)
+	return r, e
+}
+
+// DeleteProject permanently hides a project; confirmName must equal its name.
+func (c *Client) DeleteProject(ctx context.Context, project, confirmName string) error {
+	var r struct{ OK bool }
+	return call(c, ctx, c.rpc.DeleteProject, &pb.DeleteProjectRequest{Project: project, ConfirmName: confirmName}, &r)
+}
 func (c *Client) CreateDataset(ctx context.Context, project, name string) (Dataset, error) {
 	var r Dataset
 	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name}, &r)

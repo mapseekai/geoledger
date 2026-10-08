@@ -61,6 +61,13 @@ export interface Project {
   name: string;
   head: bigint;
   role: string;
+  /** `active`, `archived` (read-only) or `deleted`. */
+  state: string;
+}
+
+export interface Member {
+  subject: string;
+  role: string;
 }
 
 export interface Dataset {

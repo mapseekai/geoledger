@@ -60,6 +60,10 @@ const variants = {
     subject: text(128),
     role: z.enum(["owner", "editor", "viewer"]),
   },
+  members: { ...project, ...page },
+  removeMember: { ...project, subject: text(128) },
+  archiveProject: { ...project, archived: z.boolean() },
+  deleteProject: { ...project, confirmName: text(256) },
 };
 export const requestSchema = z.discriminatedUnion("action", [
   z.strictObject({ action: z.literal("info"), ...variants.info }),
@@ -93,4 +97,17 @@ export const requestSchema = z.discriminatedUnion("action", [
   z.strictObject({ action: z.literal("restore"), ...variants.restore }),
   z.strictObject({ action: z.literal("audit"), ...variants.audit }),
   z.strictObject({ action: z.literal("setMember"), ...variants.setMember }),
+  z.strictObject({ action: z.literal("members"), ...variants.members }),
+  z.strictObject({
+    action: z.literal("removeMember"),
+    ...variants.removeMember,
+  }),
+  z.strictObject({
+    action: z.literal("archiveProject"),
+    ...variants.archiveProject,
+  }),
+  z.strictObject({
+    action: z.literal("deleteProject"),
+    ...variants.deleteProject,
+  }),
 ]);

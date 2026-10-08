@@ -147,6 +147,26 @@ class GeoLedgerStub(object):
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.RestoreRequest.SerializeToString,
                 response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.WorkspaceReply.FromString,
                 _registered_method=True)
+        self.ListMembers = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/ListMembers',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.ProjectPageRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.MembersReply.FromString,
+                _registered_method=True)
+        self.RemoveMember = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/RemoveMember',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.MemberRefRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
+                _registered_method=True)
+        self.ArchiveProject = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/ArchiveProject',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.ArchiveProjectRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.ProjectReply.FromString,
+                _registered_method=True)
+        self.DeleteProject = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/DeleteProject',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.DeleteProjectRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
+                _registered_method=True)
 
 
 class GeoLedgerServicer(object):
@@ -287,6 +307,30 @@ class GeoLedgerServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListMembers(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RemoveMember(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ArchiveProject(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteProject(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_GeoLedgerServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -399,6 +443,26 @@ def add_GeoLedgerServicer_to_server(servicer, server):
                     servicer.Restore,
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.RestoreRequest.FromString,
                     response_serializer=geoledger_dot_v1_dot_geoledger__pb2.WorkspaceReply.SerializeToString,
+            ),
+            'ListMembers': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListMembers,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.ProjectPageRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.MembersReply.SerializeToString,
+            ),
+            'RemoveMember': grpc.unary_unary_rpc_method_handler(
+                    servicer.RemoveMember,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.MemberRefRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.SerializeToString,
+            ),
+            'ArchiveProject': grpc.unary_unary_rpc_method_handler(
+                    servicer.ArchiveProject,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.ArchiveProjectRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.ProjectReply.SerializeToString,
+            ),
+            'DeleteProject': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteProject,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.DeleteProjectRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -998,6 +1062,114 @@ class GeoLedger(object):
             '/geoledger.v1.GeoLedger/Restore',
             geoledger_dot_v1_dot_geoledger__pb2.RestoreRequest.SerializeToString,
             geoledger_dot_v1_dot_geoledger__pb2.WorkspaceReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListMembers(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/ListMembers',
+            geoledger_dot_v1_dot_geoledger__pb2.ProjectPageRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.MembersReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RemoveMember(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/RemoveMember',
+            geoledger_dot_v1_dot_geoledger__pb2.MemberRefRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ArchiveProject(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/ArchiveProject',
+            geoledger_dot_v1_dot_geoledger__pb2.ArchiveProjectRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.ProjectReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteProject(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/DeleteProject',
+            geoledger_dot_v1_dot_geoledger__pb2.DeleteProjectRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
             options,
             channel_credentials,
             insecure,

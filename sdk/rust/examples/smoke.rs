@@ -74,6 +74,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .code,
         "conflict"
     );
-    println!("Rust SDK: business API, exact numbers, automatic draft versions, publish retry OK");
+    client
+        .set_member(&project.id, "sdk-viewer", "viewer")
+        .await?;
+    let members = client.members(&project.id, Default::default()).await?;
+    assert!(members.iter().any(|m| m.subject == "sdk-viewer"));
+    client.remove_member(&project.id, "sdk-viewer").await?;
+    assert_eq!(
+        client.archive_project(&project.id, true).await?.state,
+        "archived"
+    );
+    client.delete_project(&project.id, &project.name).await?;
+    assert_eq!(
+        client
+            .project(&project.id)
+            .await
+            .err()
+            .ok_or("deleted")?
+            .code,
+        "not_found"
+    );
+    println!(
+        "Rust SDK: business API, exact numbers, automatic draft versions, publish retry, membership lifecycle OK"
+    );
     Ok(())
 }

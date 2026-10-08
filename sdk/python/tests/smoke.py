@@ -63,4 +63,10 @@ with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as cl
     restored.discard()
     assert client.workspace(project.id, restored.id).info.status == "discarded"
     client.set_member(project.id, "sdk-viewer", "viewer")
+    assert {m.subject for m in client.members(project.id)} >= {"sdk-viewer"}
+    client.remove_member(project.id, "sdk-viewer")
+    assert "sdk-viewer" not in {m.subject for m in client.members(project.id)}
+    assert client.archive_project(project.id, True).state == "archived"
+    assert client.archive_project(project.id, False).state == "active"
+    client.delete_project(project.id, project.name)
     print(f"Python SDK: {info['backend']} business API, exact numbers, versions, retry, conflict resolution, restore OK")

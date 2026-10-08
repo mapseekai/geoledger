@@ -157,6 +157,7 @@ impl Service {
             "list_datasets" => json!({"datasets":result}),
             "list_workspaces" => json!({"workspaces":result}),
             "history" => json!({"commits":result}),
+            "list_members" => json!({"members":result}),
             "features" if result["type"] == "Feature" => {
                 json!({"revision":result["revision"],"workspace_version":result["workspace_version"],"features":[result]})
             }
@@ -329,5 +330,29 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         request: tonic::Request<pb::RestoreRequest>,
     ) -> std::result::Result<tonic::Response<pb::WorkspaceReply>, tonic::Status> {
         self.call(request, "restore").await
+    }
+    async fn list_members(
+        &self,
+        request: tonic::Request<pb::ProjectPageRequest>,
+    ) -> std::result::Result<tonic::Response<pb::MembersReply>, tonic::Status> {
+        self.call(request, "list_members").await
+    }
+    async fn remove_member(
+        &self,
+        request: tonic::Request<pb::MemberRefRequest>,
+    ) -> std::result::Result<tonic::Response<pb::OkReply>, tonic::Status> {
+        self.call(request, "remove_member").await
+    }
+    async fn archive_project(
+        &self,
+        request: tonic::Request<pb::ArchiveProjectRequest>,
+    ) -> std::result::Result<tonic::Response<pb::ProjectReply>, tonic::Status> {
+        self.call(request, "archive_project").await
+    }
+    async fn delete_project(
+        &self,
+        request: tonic::Request<pb::DeleteProjectRequest>,
+    ) -> std::result::Result<tonic::Response<pb::OkReply>, tonic::Status> {
+        self.call(request, "delete_project").await
     }
 }

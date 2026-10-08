@@ -414,6 +414,26 @@ impl Client {
                     .await?
                     .into_inner(),
             )?,
+            "list_members" => serde_json::to_value(
+                rpc.list_members(serde_json::from_value::<pb::ProjectPageRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "remove_member" => serde_json::to_value(
+                rpc.remove_member(serde_json::from_value::<pb::MemberRefRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "archive_project" => serde_json::to_value(
+                rpc.archive_project(serde_json::from_value::<pb::ArchiveProjectRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "delete_project" => serde_json::to_value(
+                rpc.delete_project(serde_json::from_value::<pb::DeleteProjectRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
             _ => return Err(Error::invalid(format!("unknown operation: {operation}"))),
         })
     }
@@ -443,6 +463,46 @@ impl Client {
         self.execute(
             "set_member",
             json!({"project":project,"subject":subject,"role":role}),
+        )
+        .await?;
+        Ok(())
+    }
+    /// Active members ordered by subject.
+    pub async fn members(&self, project: &str, page: Page) -> Result<Vec<Member>, Error> {
+        decode(
+            self.execute(
+                "list_members",
+                json!({"project":project,"after":page.after,"limit":page.limit}),
+            )
+            .await?["members"]
+                .take(),
+        )
+    }
+    /// Remove a member (owners and administrators), or leave the project when
+    /// `subject` is the caller. The last owner cannot be removed.
+    pub async fn remove_member(&self, project: &str, subject: &str) -> Result<(), Error> {
+        self.execute(
+            "remove_member",
+            json!({"project":project,"subject":subject}),
+        )
+        .await?;
+        Ok(())
+    }
+    /// Archive (read-only) or reactivate a project.
+    pub async fn archive_project(&self, project: &str, archived: bool) -> Result<Project, Error> {
+        decode(
+            self.execute(
+                "archive_project",
+                json!({"project":project,"archived":archived}),
+            )
+            .await?,
+        )
+    }
+    /// Permanently hide a project. `confirm_name` must equal the project name.
+    pub async fn delete_project(&self, project: &str, confirm_name: &str) -> Result<(), Error> {
+        self.execute(
+            "delete_project",
+            json!({"project":project,"confirm_name":confirm_name}),
         )
         .await?;
         Ok(())

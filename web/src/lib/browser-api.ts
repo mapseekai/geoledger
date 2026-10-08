@@ -43,7 +43,15 @@ export async function send<T>(
     throw new ApiError("连接中断或响应超时，请检查服务状态。", 0, true);
   }
 }
-export type Project = { id: string; name: string; head: string; role: string };
+export type Project = {
+  id: string;
+  name: string;
+  head: string;
+  role: string;
+  /** active, archived (read-only) or deleted */
+  state?: string;
+};
+export type Member = { subject: string; role: string };
 export type Dataset = { id: string; name: string };
 export type Workspace = {
   id: string;

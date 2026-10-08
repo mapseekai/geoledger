@@ -14,6 +14,7 @@ export type {
   Json,
   Feature,
   Project,
+  Member,
   Dataset,
   WorkspaceInfo,
   ServerInfo,
@@ -277,6 +278,34 @@ export class Client {
   ): Promise<void> {
     await this.#call(
       (cb) => this.#rpc.setMember({ project, subject, role }, cb),
+      (r: wire.OkReply) => r.ok,
+    );
+  }
+  /** Active members ordered by subject. */
+  members(project: string, p: model.Page = {}): Promise<model.Member[]> {
+    return this.#call<wire.MembersReply, model.Member[]>(
+      (cb) => this.#rpc.listMembers({ project, ...page(p) }, cb),
+      (r) => r.members.map(convert.decodeMember),
+    );
+  }
+  /** Remove a member (owners/administrators) or leave when `subject` is the caller. */
+  async removeMember(project: string, subject: string): Promise<void> {
+    await this.#call(
+      (cb) => this.#rpc.removeMember({ project, subject }, cb),
+      (r: wire.OkReply) => r.ok,
+    );
+  }
+  /** Archive (read-only) or reactivate a project. */
+  archiveProject(project: string, archived = true): Promise<model.Project> {
+    return this.#call(
+      (cb) => this.#rpc.archiveProject({ project, archived }, cb),
+      convert.decodeProject,
+    );
+  }
+  /** Permanently hide a project; `confirmName` must equal its name. */
+  async deleteProject(project: string, confirmName: string): Promise<void> {
+    await this.#call(
+      (cb) => this.#rpc.deleteProject({ project, confirmName }, cb),
       (r: wire.OkReply) => r.ok,
     );
   }

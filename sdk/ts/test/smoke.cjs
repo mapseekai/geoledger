@@ -60,6 +60,15 @@ const client = new Client(
       (e) => e.code === "conflict",
     );
     assert.equal(parseJson("9007199254740993.0"), 9007199254740993n);
+    await client.setMember(project.id, "sdk-viewer", "viewer");
+    assert.ok(
+      (await client.members(project.id)).some((m) => m.subject === "sdk-viewer"),
+    );
+    await client.removeMember(project.id, "sdk-viewer");
+    assert.equal((await client.archiveProject(project.id, true)).state, "archived");
+    assert.equal((await client.archiveProject(project.id, false)).state, "active");
+    await client.deleteProject(project.id, project.name);
+    await assert.rejects(client.project(project.id), (e) => e.code === "not_found");
     console.log(
       "TypeScript SDK: business promises, bigint GeoJSON, automatic draft versions, publish retry OK",
     );

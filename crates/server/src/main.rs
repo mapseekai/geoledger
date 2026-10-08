@@ -97,6 +97,20 @@ struct Args {
     /// Maximum seconds to wait for in-flight requests after listeners close.
     #[arg(long, env = "GL_SHUTDOWN_TIMEOUT_SECS", default_value_t = 30)]
     shutdown_timeout_secs: u64,
+    /// Comma-separated platform administrators: manage any project and bypass creation limits.
+    #[arg(long, env = "GL_ADMIN_SUBJECTS", value_delimiter = ',')]
+    admin_subjects: Vec<String>,
+    /// Who may create projects.
+    #[arg(long, env = "GL_PROJECT_CREATION", default_value = "anyone")]
+    project_creation: ProjectCreation,
+    /// Maximum projects a non-administrator may own (0 = unlimited).
+    #[arg(long, env = "GL_MAX_PROJECTS_PER_SUBJECT", default_value_t = 0)]
+    max_projects_per_subject: u32,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum ProjectCreation {
+    Anyone,
+    Admins,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Backend {
@@ -125,6 +139,13 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Upgrade an existing database to the current storage format. Stop the
+    /// server and take a backup first. Never runs automatically.
+    Migrate {
+        /// Only report the stored and current format; exit 3 when an upgrade is pending.
+        #[arg(long)]
+        check: bool,
+    },
     /// Exit 0 when the local server reports ready (for container health checks).
     /// Uses GL_HEALTH_LISTEN when set, otherwise the HTTP listener.
     Probe {
@@ -151,6 +172,41 @@ async fn main() {
         }
     };
     std::process::exit(code);
+}
+fn application(args: &Args, storage: Storage) -> Application {
+    let admins: std::collections::BTreeSet<String> = args
+        .admin_subjects
+        .iter()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Application::with_options(
+        storage,
+        StorageOptions {
+            pool_size: args.db_pool_size.max(1),
+            statement_timeout: Duration::from_secs(args.db_statement_timeout_secs.max(1)),
+            lock_timeout: Duration::from_secs(args.db_lock_timeout_secs.max(1)),
+        },
+    )
+    .with_timeout(Duration::from_secs(600))
+    .with_policy(geoledger_server::Policy {
+        admins,
+        admin_only_project_creation: matches!(args.project_creation, ProjectCreation::Admins),
+        max_owned_projects: (args.max_projects_per_subject > 0)
+            .then_some(args.max_projects_per_subject),
+    })
+}
+async fn migrate(app: Application, check: bool) -> Result<(), BoxError> {
+    let (from, to) = tokio::task::spawn_blocking(move || app.upgrade(check)).await??;
+    if from == to {
+        println!("storage format {to} is current");
+    } else if check {
+        println!("storage format {from}; upgrade to {to} pending (run `geoledger-server migrate`)");
+        std::process::exit(3);
+    } else {
+        println!("storage upgraded from format {from} to {to}");
+    }
+    Ok(())
 }
 fn loopback(addr: SocketAddr) -> SocketAddr {
     match addr.ip() {
@@ -235,7 +291,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
         }
         Some(Command::HashTokens { input, out }) => return hash_tokens(&input, &out),
         Some(Command::Probe { ref url }) => return probe(&args, url.clone()).await,
-        None => {}
+        Some(Command::Migrate { .. }) | None => {}
     }
     let jwt = args.jwks_file.is_some() || args.jwks_url.is_some();
     if args.jwks_file.is_some() && args.jwks_url.is_some() {
@@ -282,6 +338,9 @@ async fn run(args: Args) -> Result<(), BoxError> {
             Storage::Postgis(dsn)
         }
     };
+    if let Some(Command::Migrate { check }) = args.command {
+        return migrate(application(&args, storage), check).await;
+    }
     let tls = match (&args.tls_cert, &args.tls_key) {
         (Some(cert), Some(key)) => Some(Tls::load(TlsFiles {
             cert: cert.clone(),
@@ -346,14 +405,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
         (AuthSource::TokenFile(path), initial)
     };
     let authentication = Arc::new(Authentication::new(initial));
-    let app = Application::with_options(
-        storage,
-        StorageOptions {
-            pool_size: args.db_pool_size.max(1),
-            statement_timeout: Duration::from_secs(args.db_statement_timeout_secs.max(1)),
-            lock_timeout: Duration::from_secs(args.db_lock_timeout_secs.max(1)),
-        },
-    );
+    let app = application(&args, storage);
     let bootstrap = app.clone();
     tokio::task::spawn_blocking(move || bootstrap.migrate()).await??;
     let backend = app.backend();

@@ -35,6 +35,10 @@ pub(crate) const OPERATIONS: &[&str] = &[
     "resolve",
     "rebase",
     "restore",
+    "list_members",
+    "remove_member",
+    "archive_project",
+    "delete_project",
 ];
 pub(crate) fn operation_label(op: &str) -> &'static str {
     OPERATIONS

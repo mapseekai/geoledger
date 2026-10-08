@@ -18,6 +18,15 @@ pub struct Project {
     pub name: String,
     pub head: i64,
     pub role: String,
+    /// `active`, `archived` (read-only) or `deleted`.
+    #[serde(default)]
+    pub state: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Member {
+    pub subject: String,
+    pub role: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

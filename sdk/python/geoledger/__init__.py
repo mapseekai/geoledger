@@ -14,13 +14,19 @@ import grpc as _grpc
 from ._internal.v1 import geoledger_pb2 as _pb
 from ._internal.v1.geoledger_pb2_grpc import GeoLedgerStub as _Stub
 
-__all__ = ["Client", "Workspace", "Project", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
+__all__ = ["Client", "Workspace", "Project", "Member", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
 
 @dataclass(frozen=True)
 class Project:
     id: str
     name: str
     head: int
+    role: str
+    state: str = "active"  # active, archived (read-only) or deleted
+
+@dataclass(frozen=True)
+class Member:
+    subject: str
     role: str
 
 @dataclass(frozen=True)
@@ -106,7 +112,9 @@ _REQUESTS = {"Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "P
              "CreateWorkspace": "ProjectRequest", "ListWorkspaces": "ProjectPageRequest", "GetWorkspace": "WorkspaceRequest",
              "Save": "SaveRequest", "Discard": "VersionRequest", "Features": "FeaturesRequest", "Diff": "DiffRequest",
              "Conflicts": "DiffRequest", "History": "HistoryRequest", "Commit": "CommitRequest", "Audit": "HistoryRequest",
-             "Publish": "PublishRequest", "Resolve": "ResolveRequest", "Rebase": "ResolveRequest", "Restore": "RestoreRequest"}
+             "Publish": "PublishRequest", "Resolve": "ResolveRequest", "Rebase": "ResolveRequest", "Restore": "RestoreRequest",
+             "ListMembers": "ProjectPageRequest", "RemoveMember": "MemberRefRequest",
+             "ArchiveProject": "ArchiveProjectRequest", "DeleteProject": "DeleteProjectRequest"}
 
 def _is_loopback(host: str) -> bool:
     host = host.strip("[]")
@@ -196,6 +204,22 @@ class Client:
 
     def set_member(self, project: str, subject: str, role: str) -> None:
         self._call("SetMember", project=project, subject=subject, role=role)
+
+    def members(self, project: str, *, after: str = "", limit: int = 100) -> list[Member]:
+        """Active members ordered by subject."""
+        return [Member(**r) for r in self._call("ListMembers", project=project, after=after, limit=limit)["members"]]
+
+    def remove_member(self, project: str, subject: str) -> None:
+        """Remove a member (owners/administrators) or leave when subject is the caller."""
+        self._call("RemoveMember", project=project, subject=subject)
+
+    def archive_project(self, project: str, archived: bool = True) -> Project:
+        """Archive (read-only) or reactivate a project."""
+        return Project(**self._call("ArchiveProject", project=project, archived=archived))
+
+    def delete_project(self, project: str, confirm_name: str) -> None:
+        """Permanently hide a project; confirm_name must equal its name."""
+        self._call("DeleteProject", project=project, confirm_name=confirm_name)
 
     def create_dataset(self, project: str, name: str) -> Dataset:
         return Dataset(**self._call("CreateDataset", project=project, name=name))

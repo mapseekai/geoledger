@@ -33,6 +33,8 @@ enum Command {
     },
     /// List accessible projects.
     Projects,
+    /// List a project's active members.
+    Members { project: String },
     /// List a project's published revisions.
     History {
         project: String,
@@ -78,6 +80,10 @@ async fn run(a: Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (op, input) = match a.command {
         Command::Info => ("info".into(), serde_json::json!({})),
         Command::Projects => ("list_projects".into(), serde_json::json!({"limit":100})),
+        Command::Members { project } => (
+            "list_members".into(),
+            serde_json::json!({"project":project,"limit":1000}),
+        ),
         Command::History { project, after } => (
             "history".into(),
             serde_json::json!({"project":project,"after":after,"limit":100}),

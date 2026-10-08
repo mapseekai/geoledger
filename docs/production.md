@@ -70,9 +70,12 @@ docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 | GL_TRUST_FORWARDED_FOR | 以 X-Forwarded-For 最右侧地址作为客户端 IP，仅在可信网关后开启，默认 false |
 | GL_SHUTDOWN_DRAIN_SECS | 收到停止信号后保持服务、/ready 返回 503 的秒数，默认 0 |
 | GL_SHUTDOWN_TIMEOUT_SECS | 关闭监听器后等待在途请求的上限，默认 30 |
+| GL_ADMIN_SUBJECTS / --admin-subjects | 平台管理员 subject，逗号分隔；可管理任意项目的成员、归档与删除，不获得数据读写权限 |
+| GL_PROJECT_CREATION / --project-creation | `anyone`（默认）或 `admins`：仅平台管理员可创建项目 |
+| GL_MAX_PROJECTS_PER_SUBJECT / --max-projects-per-subject | 每个身份拥有（owner 且未删除）的项目上限，默认 0 表示不限；管理员不受限 |
 | RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
-启动时校验显式配置，确保使用指定存储和身份文件。新库自动初始化，已有库必须匹配格式 5。旧版本数据应导出并导入到新库，部署前核对数据及历史保留要求。
+启动时校验显式配置，确保使用指定存储和身份文件。新库自动初始化为格式 6；已有库必须匹配当前格式，旧格式的库启动时返回 409 并提示先备份再执行 `geoledger-server migrate`。服务启动从不修改已有库的结构，升级步骤见 [格式升级](#格式升级)。
 
 根目录 [.env.example](../.env.example) 提供当前服务配置模板。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
 
@@ -124,6 +127,23 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 | `geoledger_draining`、`geoledger_build_info{version}` | 关闭状态与版本 |
 
 标签只使用固定的操作名与状态码集合，从不使用身份、项目、要素 ID 或请求 ID。建议告警：`internal_errors_total` 增速、`rate(busy_total)`、`db_pool_wait_timeouts_total` 增长、`/ready` 失败。
+
+### 格式升级
+
+存储格式变化随版本说明公布。升级由运维显式执行，服务启动从不自动迁移：
+
+1. 停止全部服务实例，按下文备份数据库（SQLite 数据目录或 PostgreSQL 一致性备份）。
+2. 使用新版本二进制和与服务相同的 `GL_*` 存储配置执行 `geoledger-server migrate --check`，输出当前格式与目标格式，不做修改；有待执行的升级时退出码为 3。
+3. 执行 `geoledger-server migrate`。迁移在单个事务内完成，失败时整体回滚，库保持原格式。
+4. 启动新版本服务，检查 `/ready`、项目列表与历史查询。
+
+格式 5 → 6 增加成员移除标记、项目状态（active/archived/deleted）和成员索引，已有项目全部为 active、成员全部保留。迁移只向前进行；回退版本时恢复第 1 步的备份。
+
+### 项目与成员治理
+
+项目 owner 可列出成员（`list_members`）、修改角色、移除成员（`remove_member`，成员也可退出项目），但项目必须保留至少一名 owner。owner 可归档项目（`archive_project`）：归档后数据只读，成员管理、恢复与删除仍可执行。删除（`delete_project`）需提交与项目名称一致的 `confirm_name`，项目从所有列表与查询中隐藏，历史与审计保留在库中以备审查。
+
+`GL_ADMIN_SUBJECTS` 指定的平台管理员可对任意项目执行上述成员与生命周期操作（审计记录其 subject），用于离职交接和孤儿项目处理，但不因此获得要素、历史或审计的读取权限。`GL_PROJECT_CREATION=admins` 与 `GL_MAX_PROJECTS_PER_SUBJECT` 限制项目创建，拒绝时返回 403。配额为软上限：PostgreSQL 多实例同时创建时可能短暂超出 1 个。
 
 ### 停止与发布确认
 

@@ -167,6 +167,30 @@ impl wire::geo_ledger_server::GeoLedger for Service {
     ) -> Result<Response<wire::WorkspaceReply>, Status> {
         Err(Status::unimplemented("unused"))
     }
+    async fn list_members(
+        &self,
+        _request: Request<wire::ProjectPageRequest>,
+    ) -> Result<Response<wire::MembersReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn remove_member(
+        &self,
+        _request: Request<wire::MemberRefRequest>,
+    ) -> Result<Response<wire::OkReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn archive_project(
+        &self,
+        _request: Request<wire::ArchiveProjectRequest>,
+    ) -> Result<Response<wire::ProjectReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn delete_project(
+        &self,
+        _request: Request<wire::DeleteProjectRequest>,
+    ) -> Result<Response<wire::OkReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
 }
 #[tokio::test]
 async fn unknown_outcome_preserves_original_publication()

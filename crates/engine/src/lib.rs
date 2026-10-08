@@ -29,7 +29,7 @@ use std::{
 use uuid::Uuid;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
-pub const FORMAT_VERSION: i32 = 5;
+pub const FORMAT_VERSION: i32 = 6;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 fn bad() -> Error {
@@ -61,6 +61,19 @@ fn id(s: &str) -> Result<()> {
 pub struct Application {
     storage: std::sync::Arc<dyn StorageBackend>,
     timeout: Duration,
+    policy: std::sync::Arc<Policy>,
+}
+/// Platform-level authorization that is not tied to project membership.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Policy {
+    /// Subjects that may administer any project (members, archive, delete)
+    /// and create projects regardless of the creation policy or quota.
+    /// Administrators gain no data access until they add themselves as members.
+    pub admins: BTreeSet<String>,
+    /// Only administrators may create projects.
+    pub admin_only_project_creation: bool,
+    /// Maximum projects (not deleted) a non-administrator may own.
+    pub max_owned_projects: Option<u32>,
 }
 #[derive(Clone)]
 pub enum Storage {
@@ -116,7 +129,19 @@ impl Application {
         Self {
             storage,
             timeout: Duration::from_secs(30),
+            policy: Default::default(),
         }
+    }
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = std::sync::Arc::new(policy);
+        self
+    }
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
+    /// Explicit upgrade of an existing database: (stored version, current version).
+    pub fn upgrade(&self, dry_run: bool) -> Result<(i32, i32)> {
+        self.storage.upgrade(dry_run, self.timeout)
     }
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
@@ -157,13 +182,19 @@ impl Application {
                 | "history"
                 | "audit"
                 | "commit"
+                | "list_members"
         );
+        let policy = self.policy.as_ref();
         let mut t = self.storage.begin(read_only, self.timeout)?;
         let result = match command {
-            Command::CreateProject(r) => create_project(&mut t, subject, r),
+            Command::CreateProject(r) => create_project(&mut t, subject, policy, r),
             Command::ListProjects(r) => list_projects(&mut t, subject, r),
-            Command::GetProject(r) => get_project(&mut t, subject, r),
-            Command::SetMember(r) => set_member(&mut t, subject, r),
+            Command::GetProject(r) => get_project(&mut t, subject, policy, r),
+            Command::SetMember(r) => set_member(&mut t, subject, policy, r),
+            Command::RemoveMember(r) => remove_member(&mut t, subject, policy, r),
+            Command::ListMembers(r) => list_members(&mut t, subject, policy, r),
+            Command::ArchiveProject(r) => archive_project(&mut t, subject, policy, r),
+            Command::DeleteProject(r) => delete_project(&mut t, subject, policy, r),
             Command::CreateDataset(r) => create_dataset(&mut t, subject, r),
             Command::ListDatasets(r) => list_datasets(&mut t, subject, r),
             Command::CreateWorkspace(r) => create_workspace(&mut t, subject, r),
@@ -253,6 +284,10 @@ enum Command {
     ListProjects(Page),
     GetProject(Project),
     SetMember(Member),
+    RemoveMember(MemberRef),
+    ListMembers(ProjectPage),
+    ArchiveProject(Archive),
+    DeleteProject(DeleteProject),
     CreateDataset(NamedProject),
     ListDatasets(ProjectPage),
     CreateWorkspace(Project),

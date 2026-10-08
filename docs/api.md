@@ -155,6 +155,7 @@ Python SDK 与 TS SDK 分别按上文安装和构建；统一安装与联调流�
 | 对象 | 业务方法（Python / Rust 命名；Go / TS 使用各自命名惯例） |
 |---|---|
 | Client | info、create_project、project、projects、set_member |
+| Client | members、remove_member、archive_project、delete_project |
 | Client | create_dataset、datasets、create_workspace、workspace、workspaces |
 | Client | features、history、commit、audit、restore |
 | Workspace | save、save_batch、delete、features、diff、conflicts |
@@ -213,11 +214,12 @@ SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布�
 |---|---|
 | 参数或几何非法 | 400 / 422 |
 | 身份验证失败 | 401 |
+| 项目创建策略或配额拒绝 | 403 |
 | 资源不存在或无权查看 | 404 |
-| 重复名称、版本、合并或幂等冲突 | 409 |
+| 重复名称、版本、合并或幂等冲突；写入已归档项目；移除最后一名 owner | 409 |
 | 大小超限 / 执行容量耗尽 | 413 / 429 |
 | 期限耗尽 | 504 |
 | 存储不可用 | 503 |
 
-Audit 仅项目 owner 可读。每页 1–1000 条、Feature 最大 16 KiB、最多 256 个属性；EPSG:4326，XY/XYZ。
+Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 最大 16 KiB、最多 256 个属性；EPSG:4326，XY/XYZ。
 标识采用有效文本字符，属性键和值使用 U+0000 以外的 JSON 文本；服务统一校验输入并返回业务错误。容量配置见 [生产运行](production.md)。

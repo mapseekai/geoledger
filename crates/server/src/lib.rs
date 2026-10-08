@@ -7,7 +7,9 @@ mod telemetry;
 pub mod tls;
 mod tokens;
 pub use auth::{Authentication, Authenticator, JwtAuthenticator, fetch_jwks};
-pub use geoledger_engine::{Application, Error, MAX_BYTES, Result, Storage, StorageOptions};
+pub use geoledger_engine::{
+    Application, Error, MAX_BYTES, Policy, Result, Storage, StorageOptions,
+};
 pub use http::{health_router, router};
 pub use limits::{Limits, Rate};
 pub use rpc::grpc;
