@@ -145,6 +145,6 @@ python3 scripts/test-console.py \
 2. 获取仓库，阅读 [AGENTS.md](../AGENTS.md)，创建针对单个问题的工作分支。
 3. 保持 core、Application、存储适配器和传输层的职责；业务操作统一经过 Application，SQL 封装在 session 适配器。
 4. 为行为修改增加对应回归，运行 `scripts/check.sh`；Web 修改完成 Web 检查及相关浏览器场景，PostGIS 修改完成隔离库回归。
-5. 提交 Pull Request，说明问题、最终行为、验证命令与范围。主 [CI](../.github/workflows/ci.yml) 覆盖 Linux、Windows、Rust 最低版本、Web 和双后端 SDK 联调。
+5. 提交 Pull Request，说明问题、最终行为、验证命令与范围。主 [CI](../.github/workflows/ci.yml) 覆盖 Linux、Windows、Rust 最低版本、Web、双后端 SDK 联调、TLS 网关、依赖审计与 proto 兼容性。
 
 协议以 `proto/geoledger/v1/geoledger.proto` 为统一来源，生成绑定按本页工具版本更新。存储结构变化使用显式格式版本和前向迁移（`geoledger-server migrate`），格式与恢复要求见 [存储接口](storage.md)。文档保持主题集中、仓库相对链接与当前行为说明；项目使用 [MIT 许可证](../LICENSE)。

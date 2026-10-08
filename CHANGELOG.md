@@ -36,7 +36,7 @@
 - 可观测性：带 request ID 的结构化访问日志、按 operation 的指标、连接池指标、gRPC 标准健康检查、`GL_HEALTH_LISTEN`、`geoledger-server probe` 与容器 HEALTHCHECK、控制台 `/api/health`。
 - 有界优雅停机：先让 `/ready` 返回 503，再在 `GL_SHUTDOWN_TIMEOUT_SECS` 内排空。
 - 部署参考：nginx/Caddy TLS 网关、`deploy/compose.production.yaml`（TLS PostGIS + 网关 + 控制台）、`scripts/make-test-certs.sh`。
-- 发布流程（多架构镜像与签名、二进制、SBOM、SDK 发布）与 CI 补丁，`SECURITY.md`、本变更记录与 API 兼容策略。
+- 发布 workflow（多架构镜像与签名、二进制、SBOM、SDK 发布）；CI 增加依赖审计与 `buf breaking` 检查，删除失效的 Windows workflow；`SECURITY.md`、本变更记录与 API 兼容策略。
 
 ### Changed
 
