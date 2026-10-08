@@ -12,6 +12,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+mod data;
 #[derive(Parser)]
 #[command(
     name = "geoledger-server",
@@ -106,6 +107,9 @@ struct Args {
     /// Maximum projects a non-administrator may own (0 = unlimited).
     #[arg(long, env = "GL_MAX_PROJECTS_PER_SUBJECT", default_value_t = 0)]
     max_projects_per_subject: u32,
+    /// Deadline for export, import, verify and backup commands.
+    #[arg(long, env = "GL_DATA_TIMEOUT_SECS", default_value_t = 3600)]
+    data_timeout_secs: u64,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum ProjectCreation {
@@ -145,6 +149,41 @@ enum Command {
         /// Only report the stored and current format; exit 3 when an upgrade is pending.
         #[arg(long)]
         check: bool,
+    },
+    /// Write a portable logical export (JSON lines with per-table digests and a
+    /// checksum) of the configured database. Safe while the server runs.
+    Export {
+        /// New file (mode 0600, never overwritten) or `-` for stdout.
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Load an export into the configured database, which must be new or empty.
+    /// All-or-nothing: a damaged file leaves the database unchanged.
+    Import {
+        /// Export file or `-` for stdin.
+        #[arg(long)]
+        input: PathBuf,
+    },
+    /// Validate an export file and compare it with the configured database
+    /// (exit 4 on mismatch).
+    Verify {
+        #[arg(long)]
+        input: PathBuf,
+        /// Only validate the file's structure, digests and checksum.
+        #[arg(long)]
+        file_only: bool,
+    },
+    /// Online consistent SQLite backup into a new file, then verify it.
+    /// PostgreSQL deployments use pg_dump/WAL archiving or `export`.
+    Backup {
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Install a verified SQLite backup as the database of --data-dir. Refuses
+    /// to replace an existing database; stop the server first.
+    Restore {
+        #[arg(long)]
+        input: PathBuf,
     },
     /// Exit 0 when the local server reports ready (for container health checks).
     /// Uses GL_HEALTH_LISTEN when set, otherwise the HTTP listener.
@@ -291,7 +330,15 @@ async fn run(args: Args) -> Result<(), BoxError> {
         }
         Some(Command::HashTokens { input, out }) => return hash_tokens(&input, &out),
         Some(Command::Probe { ref url }) => return probe(&args, url.clone()).await,
-        Some(Command::Migrate { .. }) | None => {}
+        Some(
+            Command::Migrate { .. }
+            | Command::Export { .. }
+            | Command::Import { .. }
+            | Command::Verify { .. }
+            | Command::Backup { .. }
+            | Command::Restore { .. },
+        )
+        | None => {}
     }
     let jwt = args.jwks_file.is_some() || args.jwks_url.is_some();
     if args.jwks_file.is_some() && args.jwks_url.is_some() {
@@ -338,8 +385,36 @@ async fn run(args: Args) -> Result<(), BoxError> {
             Storage::Postgis(dsn)
         }
     };
-    if let Some(Command::Migrate { check }) = args.command {
-        return migrate(application(&args, storage), check).await;
+    let data_app = || {
+        application(&args, storage.clone())
+            .with_timeout(Duration::from_secs(args.data_timeout_secs.max(1)))
+    };
+    match &args.command {
+        Some(Command::Migrate { check }) => {
+            return migrate(application(&args, storage), *check).await;
+        }
+        Some(Command::Export { output }) => {
+            return data::export(data_app(), output.clone()).await;
+        }
+        Some(Command::Import { input }) => return data::import(data_app(), input.clone()).await,
+        Some(Command::Verify { input, file_only }) => {
+            return data::verify(data_app(), input.clone(), *file_only).await;
+        }
+        Some(Command::Backup { output }) => {
+            return data::backup(data_app(), output.clone()).await;
+        }
+        Some(Command::Restore { input }) => {
+            let Storage::Sqlite(target) = &storage else {
+                return Err("restore installs SQLite backups; restore PostgreSQL with pg_restore or `import`".into());
+            };
+            return data::restore(
+                input.clone(),
+                target.clone(),
+                Duration::from_secs(args.data_timeout_secs.max(1)),
+            )
+            .await;
+        }
+        _ => {}
     }
     let tls = match (&args.tls_cert, &args.tls_key) {
         (Some(cert), Some(key)) => Some(Tls::load(TlsFiles {

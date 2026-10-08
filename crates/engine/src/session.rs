@@ -1,5 +1,6 @@
 //! Portable transaction boundary; SQL is shared, locking and spatial indexes are explicit dialect choices.
 pub(crate) mod pgtls;
+pub(crate) mod portable;
 pub(crate) mod postgres;
 use crate::repository::{RepositoryTransaction, StorageBackend};
 use crate::{Error, FORMAT_VERSION, Result, Storage};
@@ -266,7 +267,7 @@ impl Client {
                     .into_iter()
                     .map(|v| -> Box<dyn ToSql + Sync> {
                         match v {
-                            Cell::Null => Box::new(None::<String>),
+                            Cell::Null => Box::new(AnyNull),
                             Cell::Text(s) => Box::new(s),
                             Cell::Integer(v) => Box::new(v),
                             Cell::Real(v) => Box::new(v),
@@ -923,6 +924,23 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
 }
 
+/// SQL NULL accepted for any parameter type (a typed `None` only matches its own type).
+#[derive(Debug)]
+struct AnyNull;
+impl tokio_postgres::types::ToSql for AnyNull {
+    fn to_sql(
+        &self,
+        _: &tokio_postgres::types::Type,
+        _: &mut bytes::BytesMut,
+    ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    {
+        Ok(tokio_postgres::types::IsNull::Yes)
+    }
+    fn accepts(_: &tokio_postgres::types::Type) -> bool {
+        true
+    }
+    tokio_postgres::types::to_sql_checked!();
+}
 pub(crate) struct SqlStorage {
     pub(crate) storage: Storage,
     pub(crate) pool: std::sync::Arc<postgres::Pool>,
@@ -958,6 +976,103 @@ impl StorageBackend for SqlStorage {
     fn upgrade(&self, dry_run: bool, timeout: Duration) -> Result<(i32, i32)> {
         Client::open(&self.storage, &self.pool, timeout)?.upgrade(dry_run)
     }
+    fn export(
+        &self,
+        out: &mut dyn std::io::Write,
+        timeout: Duration,
+    ) -> Result<crate::DataSummary> {
+        let missing = || Error::new(404, "no GeoLedger database to export");
+        if matches!(&self.storage, Storage::Sqlite(path) if !path.is_file()) {
+            return Err(missing());
+        }
+        let mut t = Client::open(&self.storage, &self.pool, timeout)?.transaction(true)?;
+        let exists = match self.storage {
+            Storage::Sqlite(_) => t
+                .query_opt(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_format'",
+                    &[],
+                )?
+                .is_some(),
+            Storage::Postgis(_) => t
+                .query_one("SELECT to_regclass('public.gl_format') IS NOT NULL", &[])?
+                .get::<_, bool>(0usize)?,
+        };
+        if !exists {
+            return Err(missing());
+        }
+        portable::export(&mut t, self.name(), out)
+    }
+    fn import(
+        &self,
+        input: &mut dyn std::io::BufRead,
+        timeout: Duration,
+    ) -> Result<crate::DataSummary> {
+        Client::open(&self.storage, &self.pool, timeout)?.migrate()?;
+        portable::import(Client::open(&self.storage, &self.pool, timeout)?, input)
+    }
+    fn backup(&self, target: &std::path::Path, timeout: Duration) -> Result<()> {
+        let Storage::Sqlite(_) = self.storage else {
+            return Err(Error::new(
+                409,
+                "PostgreSQL backups use pg_dump or WAL archiving (see docs/production.md); `geoledger-server export` gives a portable logical copy",
+            ));
+        };
+        if target.exists() {
+            return Err(Error::new(409, "backup target already exists"));
+        }
+        let target_text = target
+            .to_str()
+            .ok_or_else(|| Error::new(400, "backup path must be valid UTF-8"))?
+            .to_owned();
+        let mut c = Client::open(&self.storage, &self.pool, timeout)?;
+        // VACUUM INTO reads one consistent snapshot while writers continue (WAL).
+        c.execute("VACUUM INTO $1", &[&target_text])?;
+        drop(c);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| Error::new(500, "cannot restrict backup permissions").caused_by(e))?;
+        }
+        verify_sqlite_file(target, timeout)
+    }
+}
+/// Check that a SQLite file is an intact GeoLedger database at the current format.
+pub(crate) fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> Result<()> {
+    if !path.is_file() {
+        return Err(Error::new(404, "database file not found"));
+    }
+    let mut c = Client::open(
+        &Storage::Sqlite(path.to_owned()),
+        &Arc::new(postgres::Pool::default()),
+        timeout,
+    )?;
+    c.batch_execute("PRAGMA query_only=ON")?;
+    let check = c
+        .query_one("PRAGMA integrity_check", &[])?
+        .get::<_, String>(0usize)?;
+    if check != "ok" {
+        return Err(Error::new(409, "SQLite integrity check failed"));
+    }
+    let exists = c
+        .query_opt(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_format'",
+            &[],
+        )?
+        .is_some();
+    if !exists {
+        return Err(Error::new(409, "not a GeoLedger database"));
+    }
+    let version = c
+        .query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
+        .get::<_, i32>(0usize)?;
+    if version != FORMAT_VERSION {
+        return Err(Error::new(
+            409,
+            &format!("database has storage format {version}; this server uses {FORMAT_VERSION}"),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

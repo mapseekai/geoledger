@@ -749,6 +749,7 @@ dependencies = [
 name = "geoledger-engine"
 version = "0.3.0-alpha.1"
 dependencies = [
+ "bytes",
  "geo",
  "geojson",
  "geoledger-core",
@@ -758,6 +759,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-postgres",

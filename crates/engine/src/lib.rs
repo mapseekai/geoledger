@@ -32,6 +32,7 @@ pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const FORMAT_VERSION: i32 = 6;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
+pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
 fn bad() -> Error {
     Error::new(400, "invalid request")
 }
@@ -142,6 +143,31 @@ impl Application {
     /// Explicit upgrade of an existing database: (stored version, current version).
     pub fn upgrade(&self, dry_run: bool) -> Result<(i32, i32)> {
         self.storage.upgrade(dry_run, self.timeout)
+    }
+    /// Stream a logical export of the whole database (consistent snapshot; the
+    /// server may keep running).
+    pub fn export_data(&self, out: &mut dyn std::io::Write) -> Result<DataSummary> {
+        self.storage.export(out, self.timeout)
+    }
+    /// Row counts and digests of the live database, comparable with an export.
+    pub fn data_summary(&self) -> Result<DataSummary> {
+        self.storage.export(&mut std::io::sink(), self.timeout)
+    }
+    /// Import an export into a new or empty database; all-or-nothing.
+    pub fn import_data(&self, input: &mut dyn std::io::BufRead) -> Result<DataSummary> {
+        self.storage.import(input, self.timeout)
+    }
+    /// Online consistent backup into a new file (SQLite).
+    pub fn backup(&self, target: &std::path::Path) -> Result<()> {
+        self.storage.backup(target, self.timeout)
+    }
+    /// Validate an export file's structure, digests and checksum without a database.
+    pub fn read_export(input: &mut dyn std::io::BufRead) -> Result<DataSummary> {
+        session::portable::read(input, |_, _, _| Ok(()))
+    }
+    /// Integrity and format check of a SQLite database file, e.g. a backup.
+    pub fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> Result<()> {
+        session::verify_sqlite_file(path, timeout)
     }
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;

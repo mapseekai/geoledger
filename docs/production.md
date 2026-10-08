@@ -73,6 +73,7 @@ docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 | GL_ADMIN_SUBJECTS / --admin-subjects | 平台管理员 subject，逗号分隔；可管理任意项目的成员、归档与删除，不获得数据读写权限 |
 | GL_PROJECT_CREATION / --project-creation | `anyone`（默认）或 `admins`：仅平台管理员可创建项目 |
 | GL_MAX_PROJECTS_PER_SUBJECT / --max-projects-per-subject | 每个身份拥有（owner 且未删除）的项目上限，默认 0 表示不限；管理员不受限 |
+| GL_DATA_TIMEOUT_SECS | backup、export、import、verify 命令的期限，默认 3600 |
 | RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
 启动时校验显式配置，确保使用指定存储和身份文件。新库自动初始化为格式 6；已有库必须匹配当前格式，旧格式的库启动时返回 409 并提示先备份再执行 `geoledger-server migrate`。服务启动从不修改已有库的结构，升级步骤见 [格式升级](#格式升级)。
@@ -149,9 +150,31 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 停止进程使用 SIGTERM / Ctrl+C：服务先把 `/ready` 与 gRPC 健康状态切换为不可用并保持 `GL_SHUTDOWN_DRAIN_SECS` 秒，然后关闭监听器，在 `GL_SHUTDOWN_TIMEOUT_SECS` 内等待在途请求完成；超时后记录警告并以非零状态退出。编排系统的终止宽限期应大于两者之和（Compose 示例为 60 秒）。发布结果未知时使用原 request_id 和原内容确认，以服务端保存的发布收据确定提交结果。
 
-SQLite 简单可靠的备份流程是停止服务后备份整个数据目录，再恢复服务；在线备份使用 SQLite backup API 或经过验证的备份工具，备份工具应保证数据库与 WAL 的一致性。恢复到独立目录后执行健康检查、历史查询和发布重试验证。
+### 备份与恢复
 
-PostGIS 使用 PostgreSQL 一致性备份，按目标 RPO 配置 WAL 归档/PITR。定期在独立数据库执行恢复演练。凭证和 JWKS 独立加密备份；数据库与凭证文件的访问权限都应纳入恢复流程。
+| 命令 | 作用 |
+|---|---|
+| `geoledger-server backup --output <文件>` | SQLite 在线一致备份（`VACUUM INTO`，服务可继续写入），完成后做完整性与格式校验并输出各表行数与摘要 |
+| `geoledger-server restore --input <文件>` | 校验 SQLite 备份后安装为 `--data-dir` 的数据库；目标库已存在时拒绝 |
+| `geoledger-server export --output <文件>` | 逻辑导出（JSON 行），覆盖全部业务表：项目、成员、数据集、工作区与草稿、提交、历史、发布收据和审计；在一致快照中读取，服务可继续运行 |
+| `geoledger-server import --input <文件>` | 导入到新库或空库；整个文件校验通过才提交，损坏或截断时库保持不变 |
+| `geoledger-server verify --input <文件>` | 校验导出文件结构、表摘要与校验和，并与当前库逐表比较；不一致时退出码为 4。`--file-only` 只校验文件 |
+
+所有命令使用与服务相同的 `GL_STORAGE`、`GL_DATA_DIR`、`GL_DATABASE_URL` 配置，期限由 `GL_DATA_TIMEOUT_SECS`（默认 3600）设置。输出文件以 0600 新建且从不覆盖已有文件；导出包含全部业务数据和发布请求内容，按凭证同等级别加密保存。导出文件的表摘要与后端无关，SQLite 与 PostgreSQL 之间可以互相导入，用于更换后端或迁移主机；摘要用于发现损坏和不完整的复制，文件真实性通过存储与传输的访问控制保证。
+
+**SQLite。** 按 RPO 定时执行 `backup`（例如每小时，配合 systemd timer 或 cron），把备份文件复制到另一台主机或对象存储，并保留多个版本。RPO 等于备份间隔；恢复步骤：
+
+1. 停止服务，将原数据目录改名保留。
+2. 使用新的空数据目录执行 `geoledger-server --data-dir <新目录> restore --input <备份文件>`，并放回 `tokens.json` 等凭证文件（凭证不在数据库备份中）。
+3. 启动服务，检查 `/ready`、项目 HEAD、审计条数和最近的发布收据。
+
+RTO 主要是文件复制时间加一次启动，通常为分钟级。容器部署在运行中的容器内执行同样的命令，例如 `docker compose exec geoledger geoledger-server backup --output /data/backup.sqlite3`，再把文件复制出数据卷。
+
+**PostgreSQL。** 使用 `pg_dump -Fc` 定时逻辑备份或 `pg_basebackup` 加 WAL 归档实现 PITR（RPO 可到秒级），恢复后检查 `/ready`、项目 HEAD 与审计条数；恢复点与某次导出一致时（例如停机窗口内先导出再备份），可用 `verify` 逐表比对。`backup`/`restore` 命令只处理 SQLite；`export`/`import` 适用于两种后端。
+
+**恢复演练。** [scripts/backup-drill.sh](../scripts/backup-drill.sh) 在一次性服务上完成：写入数据 → 服务运行中备份与导出 → 恢复到新目录并启动 → 校验 HEAD、审计和精确数字 → 用导出校验恢复结果 → 导入新库并校验；设置 `GL_DRILL_DATABASE_URL`（空 PostgreSQL 库）时同时导入 PostgreSQL。该脚本是 `scripts/check.sh` 的一部分，生产环境按季度在独立主机上用真实备份重复同样步骤并记录耗时，作为 RTO 的实测依据。
+
+凭证、JWKS 与 TLS 私钥独立加密备份；数据库与凭证文件的访问权限都应纳入恢复流程。
 
 ## 独立 Web 管理服务
 

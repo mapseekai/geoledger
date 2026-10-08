@@ -24,6 +24,32 @@ pub trait StorageBackend: Send + Sync {
             "this storage backend has no upgrade path",
         ))
     }
+    /// Write every table to `out` from one consistent snapshot (see `DataSummary`).
+    fn export(
+        &self,
+        out: &mut dyn std::io::Write,
+        timeout: Duration,
+    ) -> Result<crate::DataSummary> {
+        let _ = (out, timeout);
+        Err(crate::Error::new(409, "this storage backend has no export"))
+    }
+    /// Load a validated export into an initialized, empty database atomically.
+    fn import(
+        &self,
+        input: &mut dyn std::io::BufRead,
+        timeout: Duration,
+    ) -> Result<crate::DataSummary> {
+        let _ = (input, timeout);
+        Err(crate::Error::new(409, "this storage backend has no import"))
+    }
+    /// Online, consistent copy of the whole database into a new file.
+    fn backup(&self, target: &std::path::Path, timeout: Duration) -> Result<()> {
+        let _ = (target, timeout);
+        Err(crate::Error::new(
+            409,
+            "this storage backend has no built-in backup; use the database's own tools or export",
+        ))
+    }
 }
 #[derive(Clone)]
 pub struct FeatureQuery {
