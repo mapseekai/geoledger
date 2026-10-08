@@ -1,4 +1,4 @@
-//! Failure paths under load: a storage lock held past the request deadline,
+//! Failure paths under load (HTTP and gRPC): a storage lock held past the request deadline,
 //! saturated execution slots, stalled request bodies and malformed credentials.
 //! Every failure is bounded in time, carries a request ID and leaves the service
 //! healthy afterwards.
@@ -6,10 +6,12 @@ use axum::{
     body::{Body, Bytes},
     http::Request,
 };
+use geoledger_rpc::v1 as pb;
 use geoledger_server::{
     Application, Authentication, Authenticator, Limits, Service, Storage, Tokens,
 };
 use http_body_util::BodyExt;
+use prost::Message;
 use serde_json::Value;
 use std::time::{Duration, Instant};
 use tower::ServiceExt;
@@ -214,5 +216,149 @@ async fn malformed_credentials_are_rejected_uniformly() -> TestResult {
         metrics.contains(&format!("geoledger_auth_failures_total {rejected}")),
         "{metrics}"
     );
+    Ok(())
+}
+
+fn rpc_request<T>(body: T, auth: Option<&str>) -> Result<tonic::Request<T>, BoxError> {
+    let mut request = tonic::Request::new(body);
+    if let Some(auth) = auth {
+        request
+            .metadata_mut()
+            .insert("authorization", auth.parse()?);
+    }
+    Ok(request)
+}
+fn rpc_detail(status: &tonic::Status) -> Result<pb::ErrorDetail, BoxError> {
+    let envelope = pb::RpcStatus::decode(status.details())?;
+    let any = envelope.details.first().ok_or("error detail")?;
+    Ok(pb::ErrorDetail::decode(any.value.as_slice())?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grpc_deadline_busy_and_unauthenticated_paths() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let db = dir.path().join("rpc.sqlite3");
+    let service = service(
+        &db,
+        Limits {
+            max_concurrency: 1,
+            request_timeout: Duration::from_secs(10),
+            ..Limits::default()
+        },
+    )?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let mut servers = tokio::task::JoinSet::new();
+    servers.spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(geoledger_server::grpc(service))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+    });
+    let channel = tonic::transport::Endpoint::from_shared(endpoint)?
+        .connect()
+        .await?;
+    let mut client = pb::geo_ledger_client::GeoLedgerClient::new(channel);
+    let auth = bearer();
+
+    for bad in [
+        None,
+        Some("Basic b3BzOnNlY3JldA=="),
+        Some("Bearer not-a-known-token"),
+    ] {
+        let status = client
+            .list_projects(rpc_request(pb::PageRequest::default(), bad)?)
+            .await
+            .err()
+            .ok_or("unauthenticated call must fail")?;
+        assert_eq!(status.code(), tonic::Code::Unauthenticated, "{bad:?}");
+        let detail = rpc_detail(&status)?;
+        assert_eq!(detail.code, "unauthenticated");
+        assert!(uuid::Uuid::parse_str(&detail.request_id).is_ok());
+    }
+
+    let project = client
+        .create_project(rpc_request(
+            pb::NameRequest {
+                name: "rpc-limits".into(),
+            },
+            Some(&auth),
+        )?)
+        .await?
+        .into_inner()
+        .project;
+
+    // The client's grpc-timeout (2 s) is shorter than the server limit (10 s)
+    // and bounds how long the write waits for the external lock.
+    let blocker = rusqlite::Connection::open(&db)?;
+    blocker.execute_batch("BEGIN IMMEDIATE")?;
+    let started = Instant::now();
+    let write = {
+        let mut client = client.clone();
+        let mut request = rpc_request(
+            pb::DatasetRequest {
+                project: project.clone(),
+                name: "roads".into(),
+            },
+            Some(&auth),
+        )?;
+        request.set_timeout(Duration::from_secs(2));
+        tokio::spawn(async move { client.create_dataset(request).await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let refused = Instant::now();
+    let status = client
+        .list_projects(rpc_request(pb::PageRequest::default(), Some(&auth))?)
+        .await
+        .err()
+        .ok_or("saturated server must refuse")?;
+    assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+    assert_eq!(rpc_detail(&status)?.code, "busy");
+    assert!(refused.elapsed() < Duration::from_millis(500));
+
+    let status = write.await?.err().ok_or("blocked write must fail")?;
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(
+            status.code(),
+            tonic::Code::ResourceExhausted | tonic::Code::DeadlineExceeded | tonic::Code::Cancelled
+        ),
+        "{status:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(1800) && elapsed < Duration::from_secs(5),
+        "client deadline not honoured: {elapsed:?}"
+    );
+
+    blocker.execute_batch("ROLLBACK")?;
+    drop(blocker);
+    // The execution slot is released once the engine gives up on the lock.
+    let mut recovered = None;
+    for _ in 0..50 {
+        match client
+            .create_dataset(rpc_request(
+                pb::DatasetRequest {
+                    project: project.clone(),
+                    name: "roads".into(),
+                },
+                Some(&auth),
+            )?)
+            .await
+        {
+            Ok(reply) => {
+                recovered = Some(reply.into_inner());
+                break;
+            }
+            Err(s) if s.code() == tonic::Code::ResourceExhausted => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(s) => return Err(s.into()),
+        }
+    }
+    assert!(
+        recovered.is_some(),
+        "service did not recover after the lock was released"
+    );
+    servers.abort_all();
     Ok(())
 }
