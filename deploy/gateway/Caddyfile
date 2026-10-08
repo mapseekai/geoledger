@@ -1,0 +1,33 @@
+# Reference Caddy gateway (automatic ACME certificates). Equivalent to nginx.conf:
+# TLS for the HTTP API, gRPC (h2c upstream) and the console, HSTS on every site.
+# Caddy has no built-in rate limiting; limit /api/session at your load balancer or WAF.
+{
+	servers {
+		protocols h1 h2
+	}
+}
+(hsts) {
+	header Strict-Transport-Security "max-age=63072000; includeSubDomains"
+	request_body {
+		max_size 5MB
+	}
+}
+api.geoledger.example {
+	import hsts
+	reverse_proxy geoledger:7881 {
+		header_up X-Request-Id {http.request.uuid}
+	}
+}
+grpc.geoledger.example {
+	import hsts
+	reverse_proxy h2c://geoledger:7882 {
+		header_up X-Request-Id {http.request.uuid}
+		transport http {
+			read_timeout 60s
+		}
+	}
+}
+console.geoledger.example {
+	import hsts
+	reverse_proxy console:3000
+}

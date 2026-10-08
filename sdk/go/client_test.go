@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/mapseekai/geoledger/sdk/go/internal/geoledgerv1"
 	"google.golang.org/grpc"
@@ -212,6 +213,23 @@ func TestFirstAccessFailureAndRetryConflictReleaseIntent(t *testing.T) {
 		}
 		if w.PendingPublication() != nil {
 			t.Fatalf("%s did not release intent", code)
+		}
+	}
+}
+
+func TestPlaintextRemoteRequiresOptIn(t *testing.T) {
+	t.Setenv("GL_ALLOW_INSECURE_TRANSPORT", "")
+	if _, err := Dial("http://geoledger.example:7882", "token"); err == nil || err.(*Error).Code != "invalid_argument" {
+		t.Fatalf("expected refusal, got %v", err)
+	}
+	c, err := DialWithOptions("http://geoledger.example:7882", "token", DialOptions{Timeout: time.Second, AllowInsecure: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	for host, want := range map[string]bool{"127.0.0.1": true, "::1": true, "localhost": true, "10.1.2.3": false} {
+		if IsLoopbackHost(host) != want {
+			t.Fatalf("%s", host)
 		}
 	}
 }

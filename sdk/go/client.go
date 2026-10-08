@@ -16,7 +16,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"math"
+	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -86,17 +88,50 @@ type Client struct {
 	closed atomic.Bool
 }
 
+// DialOptions configures a client. Plaintext http:// is accepted only for loopback hosts
+// unless AllowInsecure is set (or GL_ALLOW_INSECURE_TRANSPORT=true): the bearer token would
+// otherwise cross the network unencrypted.
+type DialOptions struct {
+	Timeout       time.Duration
+	AllowInsecure bool
+}
+
+// IsLoopbackHost reports whether host is localhost or a loopback IP literal.
+func IsLoopbackHost(host string) bool {
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func insecureOptIn() bool {
+	switch os.Getenv("GL_ALLOW_INSECURE_TRANSPORT") {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
 // Dial accepts a service URL and a token. It never retries writes automatically.
 func Dial(endpoint, token string) (*Client, error) {
-	return DialWithTimeout(endpoint, token, 30*time.Second)
+	return DialWithOptions(endpoint, token, DialOptions{Timeout: 30 * time.Second})
 }
 func DialWithTimeout(endpoint, token string, timeout time.Duration) (*Client, error) {
+	return DialWithOptions(endpoint, token, DialOptions{Timeout: timeout})
+}
+func DialWithOptions(endpoint, token string, options DialOptions) (*Client, error) {
+	timeout := options.Timeout
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Hostname() == "" || u.Port() == "" || (u.Scheme != "http" && u.Scheme != "https") || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return nil, invalid("endpoint must be http(s)://host:port")
 	}
 	if token == "" || timeout <= 0 || strings.IndexFunc(token, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
 		return nil, invalid("ASCII token and positive timeout required")
+	}
+	if u.Scheme == "http" && !IsLoopbackHost(u.Hostname()) && !options.AllowInsecure && !insecureOptIn() {
+		return nil, invalid("refusing to send credentials over plaintext http to a non-loopback host; use https or set AllowInsecure / GL_ALLOW_INSECURE_TRANSPORT=true")
 	}
 	var transport credentials.TransportCredentials
 	if u.Scheme == "https" {

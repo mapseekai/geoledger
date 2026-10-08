@@ -8,17 +8,32 @@ use jsonwebtoken::{
     jwk::{AlgorithmParameters, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse},
 };
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, RwLock},
+};
 
-pub enum Authentication {
+/// A reloadable authenticator. Readers take a cheap snapshot; reloads swap atomically,
+/// so a rotated token file or JWKS takes effect without dropping in-flight requests.
+pub struct Authentication(RwLock<Arc<Authenticator>>);
+pub enum Authenticator {
     Tokens(Tokens),
     Jwt(Box<JwtAuthenticator>),
 }
 impl Authentication {
+    pub fn new(authenticator: Authenticator) -> Self {
+        Self(RwLock::new(Arc::new(authenticator)))
+    }
+    pub fn replace(&self, authenticator: Authenticator) {
+        if let Ok(mut current) = self.0.write() {
+            *current = Arc::new(authenticator);
+        }
+    }
     pub(crate) fn authenticate(&self, headers: &HeaderMap) -> Option<String> {
-        match self {
-            Self::Tokens(tokens) => tokens.authenticate(headers),
-            Self::Jwt(jwt) => {
+        let current = self.0.read().ok()?.clone();
+        match current.as_ref() {
+            Authenticator::Tokens(tokens) => tokens.authenticate(headers),
+            Authenticator::Jwt(jwt) => {
                 if headers.get_all("authorization").iter().count() != 1 {
                     return None;
                 }
@@ -32,6 +47,38 @@ impl Authentication {
             }
         }
     }
+}
+/// Fetch a JWKS document over HTTPS (plain HTTP only for loopback test issuers).
+/// The body is bounded to 1 MiB; callers keep the previous keys when this fails.
+pub async fn fetch_jwks(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| Error::new(400, "invalid JWKS URL"))?;
+    let loopback = parsed.host_str().is_some_and(|h| {
+        h == "localhost"
+            || h.trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    });
+    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback) {
+        return Err(Error::new(400, "JWKS URL must use HTTPS"));
+    }
+    let mut response = client
+        .get(parsed)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| Error::new(503, "JWKS fetch failed").caused_by(e))?;
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| Error::new(503, "JWKS fetch failed").caused_by(e))?
+    {
+        body.extend_from_slice(&chunk);
+        if body.len() > 1024 * 1024 {
+            return Err(Error::new(413, "JWKS document too large"));
+        }
+    }
+    Ok(body)
 }
 /// Validates signature, fixed issuer/audience, expiry, optional nbf and subject.
 /// No Debug implementation: authentication material is never logged.

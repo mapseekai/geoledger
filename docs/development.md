@@ -70,7 +70,7 @@ python3 -m venv .venv
 python -m pip install ./sdk/python
 npm ci --prefix sdk/ts
 export GL_ENDPOINT=http://127.0.0.1:7882
-export GL_TOKEN_FILE="$PWD/target/sdk-test/tokens.json"
+export GL_TOKEN_FILE="$PWD/target/sdk-test/admin-credentials.json"
 ./scripts/test-sdks.sh
 ```
 
@@ -120,7 +120,7 @@ python -m playwright install chromium
 # 在独立终端用 --data-dir ./target/console-test 启动后端，按 Web 文档配置并启动控制台后：
 python3 scripts/test-console.py \
   --url http://localhost:3000 \
-  --token-file target/console-test/tokens.json \
+  --token-file target/console-test/admin-credentials.json \
   --screenshots artifacts
 ```
 

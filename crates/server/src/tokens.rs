@@ -1,43 +1,128 @@
+//! Static bearer credentials. The server file stores SHA-256 digests of high-entropy
+//! tokens; legacy plaintext entries remain readable for compatibility and are flagged
+//! so operators can convert them with `geoledger-server hash-tokens`.
 use crate::{Error, Result, bad, text};
 use axum::http::HeaderMap;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use subtle::ConstantTimeEq;
 /// Operator-provided secrets are neither serializable nor Debug-printable.
-pub struct Tokens(Vec<Token>);
+pub struct Tokens {
+    entries: Vec<Token>,
+    legacy: usize,
+}
+struct Token {
+    digest: [u8; 32],
+    subject: String,
+    expires_at: Option<DateTime<Utc>>,
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Token {
-    token: String,
+struct Entry {
     subject: String,
+    /// Legacy plaintext credential (format before 0.3.0-alpha.2).
+    token: Option<String>,
+    /// Lowercase hex SHA-256 of the bearer token.
+    token_sha256: Option<String>,
+    /// RFC 3339 expiry; expired entries are rejected without a restart.
+    expires_at: Option<String>,
+    /// Revoked entries stay in the file for audit but never authenticate.
+    #[serde(default)]
+    disabled: bool,
+    /// Free-form operator label, e.g. the rotation generation.
+    #[serde(default)]
+    #[allow(dead_code)]
+    label: Option<String>,
+}
+pub fn sha256_hex(token: &str) -> String {
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+fn parse_hex(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
+        let hex = std::str::from_utf8(chunk).ok()?;
+        if hex.bytes().any(|b| b.is_ascii_uppercase()) {
+            return None;
+        }
+        out[i] = u8::from_str_radix(hex, 16).ok()?;
+    }
+    Some(out)
 }
 impl Tokens {
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > 1024 * 1024 {
             return Err(bad());
         }
-        let entries: Vec<Token> =
+        let entries: Vec<Entry> =
             serde_json::from_slice(bytes).map_err(|_| Error::new(400, "invalid token file"))?;
         if entries.is_empty() || entries.len() > 1024 {
             return Err(bad());
         }
-        let mut tokens = BTreeSet::new();
-        let mut subjects = BTreeSet::new();
-        for e in &entries {
+        let mut digests = BTreeSet::new();
+        let mut out = Vec::new();
+        let mut legacy = 0;
+        for e in entries {
             text(&e.subject, 128)?;
-            if e.token.len() < 43
-                || e.token.len() > 256
-                || !e.token.bytes().all(|b| b.is_ascii_graphic())
-                || !tokens.insert(&e.token)
-                || !subjects.insert(&e.subject)
-            {
-                return Err(Error::new(
-                    400,
-                    "tokens must be unique, 43-256 ASCII characters, with unique subjects",
-                ));
+            let digest = match (&e.token, &e.token_sha256) {
+                (Some(token), None) => {
+                    if token.len() < 43
+                        || token.len() > 256
+                        || !token.bytes().all(|b| b.is_ascii_graphic())
+                    {
+                        return Err(Error::new(
+                            400,
+                            "plaintext tokens must be 43-256 printable ASCII characters",
+                        ));
+                    }
+                    legacy += 1;
+                    Sha256::digest(token.as_bytes()).into()
+                }
+                (None, Some(hex)) => parse_hex(hex).ok_or_else(|| {
+                    Error::new(400, "token_sha256 must be 64 lowercase hex characters")
+                })?,
+                _ => {
+                    return Err(Error::new(
+                        400,
+                        "each entry requires exactly one of token_sha256 or token",
+                    ));
+                }
+            };
+            if !digests.insert(digest) {
+                return Err(Error::new(400, "tokens must be unique"));
+            }
+            let expires_at = e
+                .expires_at
+                .as_deref()
+                .map(|s| {
+                    DateTime::parse_from_rfc3339(s)
+                        .map(|t| t.with_timezone(&Utc))
+                        .map_err(|_| Error::new(400, "expires_at must be RFC 3339"))
+                })
+                .transpose()?;
+            if !e.disabled {
+                out.push(Token {
+                    digest,
+                    subject: e.subject,
+                    expires_at,
+                });
             }
         }
-        Ok(Self(entries))
+        Ok(Self {
+            entries: out,
+            legacy,
+        })
+    }
+    /// Number of plaintext (legacy) entries; reported as a startup warning.
+    pub fn legacy_entries(&self) -> usize {
+        self.legacy
     }
     pub(crate) fn authenticate(&self, headers: &HeaderMap) -> Option<String> {
         if headers.get_all("authorization").iter().count() != 1 {
@@ -48,12 +133,64 @@ impl Tokens {
             .to_str()
             .ok()?
             .strip_prefix("Bearer ")?;
+        if token.is_empty() || token.len() > 256 {
+            return None;
+        }
+        let presented: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+        let now = Utc::now();
         let mut subject = None;
-        for e in &self.0 {
-            if bool::from(e.token.as_bytes().ct_eq(token.as_bytes())) {
+        // Compare against every entry so timing does not reveal the matching position.
+        for e in &self.entries {
+            if bool::from(e.digest.ct_eq(&presented)) && e.expires_at.is_none_or(|t| t > now) {
                 subject = Some(e.subject.clone());
             }
         }
         subject
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn headers(token: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        if let Ok(v) = format!("Bearer {token}").parse() {
+            h.insert("authorization", v);
+        }
+        h
+    }
+    #[test]
+    fn hashed_legacy_expired_and_disabled_entries()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let fresh = "a".repeat(43);
+        let old = "b".repeat(43);
+        let revoked = "c".repeat(43);
+        let legacy = "d".repeat(43);
+        let file = serde_json::json!([
+            {"subject":"alice","token_sha256":sha256_hex(&fresh),"expires_at":"2999-01-01T00:00:00Z"},
+            {"subject":"alice","token_sha256":sha256_hex(&old),"expires_at":"2001-01-01T00:00:00Z"},
+            {"subject":"bob","token_sha256":sha256_hex(&revoked),"disabled":true},
+            {"subject":"carol","token":legacy},
+        ]);
+        let tokens = Tokens::from_json(&serde_json::to_vec(&file)?)?;
+        assert_eq!(tokens.legacy_entries(), 1);
+        assert_eq!(tokens.authenticate(&headers(&fresh)), Some("alice".into()));
+        assert_eq!(tokens.authenticate(&headers(&old)), None);
+        assert_eq!(tokens.authenticate(&headers(&revoked)), None);
+        assert_eq!(tokens.authenticate(&headers(&legacy)), Some("carol".into()));
+        assert_eq!(tokens.authenticate(&headers("unknown")), None);
+        for invalid in [
+            serde_json::json!([{"subject":"x","token_sha256":"ABC"}]),
+            serde_json::json!([{"subject":"x"}]),
+            serde_json::json!([{"subject":"x","token":"short"}]),
+            serde_json::json!([{"subject":"x","token_sha256":sha256_hex(&fresh),"expires_at":"tomorrow"}]),
+            serde_json::json!([{"subject":"x","token_sha256":sha256_hex(&fresh)},{"subject":"y","token":fresh}]),
+        ] {
+            assert!(
+                Tokens::from_json(&serde_json::to_vec(&invalid)?).is_err(),
+                "{invalid}"
+            );
+        }
+        Ok(())
     }
 }

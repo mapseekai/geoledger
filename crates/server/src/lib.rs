@@ -3,14 +3,15 @@ mod auth;
 mod http;
 mod rpc;
 mod telemetry;
+pub mod tls;
 mod tokens;
-pub use auth::{Authentication, JwtAuthenticator};
+pub use auth::{Authentication, Authenticator, JwtAuthenticator, fetch_jwks};
 pub use geoledger_engine::{Application, Error, MAX_BYTES, Result, Storage};
 pub use http::router;
 pub use rpc::grpc;
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
-pub use tokens::Tokens;
+pub use tokens::{Tokens, sha256_hex};
 use tokio::sync::Semaphore;
 fn bad() -> Error {
     Error::new(400, "invalid request")
@@ -31,9 +32,13 @@ pub struct Service {
 }
 impl Service {
     pub fn new(app: Application, authentication: Authentication) -> Self {
+        Self::with_authentication(app, Arc::new(authentication))
+    }
+    /// Share a reloadable authenticator with the process that rotates credentials.
+    pub fn with_authentication(app: Application, authentication: Arc<Authentication>) -> Self {
         Self {
             app,
-            authentication: Arc::new(authentication),
+            authentication,
             capacity: Arc::new(Semaphore::new(20)),
             metrics: Arc::new(telemetry::Metrics::default()),
         }

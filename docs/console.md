@@ -8,7 +8,7 @@
 
 按 [Web 本地启动](../web/README.md#本地启动) 启动业务服务和控制台。默认浏览器地址为 `http://localhost:3000`，业务服务 gRPC 地址为 `http://127.0.0.1:7882`。
 
-在登录页的“访问令牌”中填写管理员分配的静态令牌或 JWT，点击“进入控制台”。默认本地服务的凭证位于启动时生成的 `geoledger-data/tokens.json`，选择对应用户的 `token` 字段。
+在登录页的“访问令牌”中填写管理员分配的静态令牌或 JWT，点击“进入控制台”。默认本地服务的管理员凭证位于启动时生成的 `geoledger-data/admin-credentials.json`，选择对应用户的 `token` 字段。
 
 控制台接受 1–2000 个可打印且非空白的 ASCII 字符。令牌保存在加密、签名的 HttpOnly/SameSite=Strict Cookie 中，会话有效期为 8 小时，HTTPS 下启用 Secure。每次业务请求由服务端核验身份和权限。
 

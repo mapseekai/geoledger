@@ -79,13 +79,14 @@ impl Pool {
                 .map_err(|source| {
                     Error::new(503, "database runtime unavailable").caused_by(source)
                 })?;
-            let config: tokio_postgres::Config = dsn.parse().map_err(Error::database)?;
-            let tls = native_tls::TlsConnector::new()
-                .map_err(|source| Error::new(503, "TLS configuration failed").caused_by(source))?;
+            let settings = super::pgtls::PgSettings::parse(dsn)?;
+            let tls = settings.connector()?;
             let connected = runtime.block_on(async {
                 tokio::time::timeout_at(
                     deadline.into(),
-                    config.connect(postgres_native_tls::MakeTlsConnector::new(tls)),
+                    settings
+                        .config
+                        .connect(postgres_native_tls::MakeTlsConnector::new(tls)),
                 )
                 .await
                 .map_err(|_| expired())?

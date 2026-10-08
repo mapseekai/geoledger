@@ -20,6 +20,16 @@ Python 使用 RLock，TypeScript 进行同句柄并发校验。多个独立对�
 默认 SDK 地址 `http://127.0.0.1:7882`，控制台 HTTP 地址使用另一个端口。
 SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒，消息上限 4 MiB。
 
+`http://` 地址只用于回环主机（`127.0.0.1`、`::1`、`localhost`）。确需在隔离内网使用明文时，设置环境变量 `GL_ALLOW_INSECURE_TRANSPORT=true` 或使用各语言的显式选项：
+
+| 语言 | 明文选项 | 私有 CA |
+| --- | --- | --- |
+| Go | `DialWithOptions(endpoint, token, DialOptions{AllowInsecure: true})` | 系统信任库 |
+| Python | `Client(endpoint, token, allow_insecure=True)` | `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` |
+| Rust | `Client::connect_with(endpoint, token, ConnectOptions { allow_insecure: true, ..Default::default() })` | `ConnectOptions::ca_pem` |
+| TypeScript | `new Client(endpoint, token, timeoutMs, { allowInsecure: true })` | `NODE_EXTRA_CA_CERTS` 或系统信任库 |
+| CLI | `gl --allow-insecure` | `gl --ca-file ca.pem` |
+
 ## Python
 
 ```sh

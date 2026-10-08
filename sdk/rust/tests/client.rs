@@ -235,3 +235,16 @@ async fn unknown_outcome_preserves_original_publication()
     server.abort();
     Ok(())
 }
+
+#[tokio::test]
+async fn plaintext_to_remote_hosts_requires_explicit_opt_in() {
+    let refused = geoledger_client::Client::connect("http://geoledger.example:7882", "t")
+        .await
+        .err()
+        .map(|e| e.code);
+    assert_eq!(refused.as_deref(), Some("invalid_argument"));
+    assert!(geoledger_client::is_loopback_host("127.0.0.1"));
+    assert!(geoledger_client::is_loopback_host("[::1]"));
+    assert!(geoledger_client::is_loopback_host("LOCALHOST"));
+    assert!(!geoledger_client::is_loopback_host("10.0.0.1"));
+}

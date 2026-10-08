@@ -1,4 +1,5 @@
 //! Portable transaction boundary; SQL is shared, locking and spatial indexes are explicit dialect choices.
+pub(crate) mod pgtls;
 pub(crate) mod postgres;
 use crate::repository::{RepositoryTransaction, StorageBackend};
 use crate::{Error, FORMAT_VERSION, Result, Storage};

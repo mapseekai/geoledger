@@ -5,10 +5,7 @@ pub struct Error {
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 impl Error {
-    pub(crate) fn caused_by(
-        mut self,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
+    pub fn caused_by(mut self, source: impl std::error::Error + Send + Sync + 'static) -> Self {
         self.source = Some(Box::new(source));
         self
     }

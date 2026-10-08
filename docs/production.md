@@ -34,10 +34,10 @@ curl --fail http://127.0.0.1:7881/ready
 docker compose logs geoledger
 ```
 
-在容器内使用生成的私有管理员文件验证业务连接：
+在容器内使用首次启动生成的私有管理员凭证验证业务连接（验证后把该文件交给运维人员并从卷中删除）：
 
 ```sh
-docker compose exec geoledger gl --token-file /data/tokens.json info
+docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 ```
 
 控制台组合部署按 [Web 容器运行](../web/README.md#容器运行) 先设置会话密钥，再启用 console profile。`docker compose down` 停止组合服务，命名卷按数据保留策略管理。
@@ -48,11 +48,16 @@ docker compose exec geoledger gl --token-file /data/tokens.json info
 |---|---|
 | GL_STORAGE / --storage | sqlite；可选 postgis |
 | GL_DATA_DIR / --data-dir | ./geoledger-data |
-| GL_DATABASE_URL / --database-url | PostGIS 连接串，只在 postgis 模式使用 |
+| GL_DATABASE_URL / --database-url | PostGIS 连接串，只在 postgis 模式使用；TLS 参数见 [安全配置](security.md#postgresql-tls) |
+| GL_DATABASE_ALLOW_PLAINTEXT | 允许对非回环主机使用 sslmode=disable，默认 false |
 | GL_HTTP_LISTEN / --http | 127.0.0.1:7881 |
 | GL_GRPC_LISTEN / --grpc | 127.0.0.1:7882 |
-| GL_TOKEN_FILE / --token-file | 默认数据目录 tokens.json |
-| GL_JWKS_FILE / --jwks-file | 可选受信任 JWKS 文件 |
+| GL_TLS_CERT / GL_TLS_KEY / GL_TLS_CLIENT_CA | 服务端 TLS 与 mTLS，见 [安全配置](security.md#传输加密) |
+| GL_TOKEN_FILE / --token-file | 默认数据目录 tokens.json（SHA-256 摘要格式） |
+| GL_BOOTSTRAP_ADMIN | 无令牌文件时生成初始 admin 凭证，默认 true |
+| GL_JWKS_FILE / --jwks-file | 可选受信任 JWKS 文件，变更后自动加载 |
+| GL_JWKS_URL / --jwks-url | 可选 HTTPS JWKS 地址，按 GL_JWKS_REFRESH_SECS（默认 300）刷新 |
+| GL_RELOAD_INTERVAL_SECS | 令牌、JWKS、证书文件检查间隔，默认 10；SIGHUP 立即加载 |
 | GL_JWT_ISSUER / --jwt-issuer | 固定 HTTPS issuer |
 | GL_JWT_AUDIENCE / --jwt-audience | 固定 audience |
 | RUST_LOG | geoledger_server=info，结构化 JSON 日志 |
@@ -63,11 +68,11 @@ docker compose exec geoledger gl --token-file /data/tokens.json info
 
 ## 身份与网络
 
-初次默认启动生成 admin 凭证；多人使用独立凭证与项目成员关系。静态凭证文件或 JWT 二选一。JWT 接受受信任 JWKS 中的 RS256 密钥，校验签名、issuer、audience、exp、可选 nbf 和 subject。文件由运维分发，密钥轮换后重启服务；在线 JWKS 自动刷新与集中即时撤销需由身份网关提供。
+初次默认启动生成摘要格式的 `tokens.json` 与一次性的 `admin-credentials.json`；多人使用独立凭证与项目成员关系。静态凭证文件或 JWT 二选一。令牌支持过期时间、吊销与热加载，JWKS 支持文件热加载与 HTTPS 定时刷新，详见 [安全配置](security.md)。
 
-公网访问通过 TLS 网关：HTTP 转发到 HTTP 监听器；gRPC 网关保持 HTTP/2 并转发到 gRPC 监听器。SDK 的 https 地址启用服务器证书验证，http 地址显式使用明文。凭证通过秘密管理注入；浏览器使用加密 HttpOnly 会话 Cookie，代理通过过滤认证头和请求体日志保护凭证。
+公网访问使用服务端 TLS（`GL_TLS_CERT`/`GL_TLS_KEY`，可选 mTLS）或 TLS 网关：HTTP 转发到 HTTP 监听器；gRPC 网关保持 HTTP/2 并转发到 gRPC 监听器，参考 [nginx.conf](../deploy/gateway/nginx.conf) 与 [Caddyfile](../deploy/gateway/Caddyfile)。SDK 的 https 地址启用服务器证书验证；http 地址只用于回环主机，其他主机需要显式开启明文。凭证通过秘密管理注入；浏览器使用加密 HttpOnly 会话 Cookie，代理通过过滤认证头和请求体日志保护凭证。
 
-PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装扩展后让服务账号创建应用表。跨主机数据库连接使用证书校验。每个实例最多 20 条活跃数据库会话，数据库和网关连接预算按实例数计算。
+PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装扩展后让服务账号创建应用表。默认 `sslmode=verify-full`，跨主机数据库连接校验证书链与主机名。每个实例最多 20 条活跃数据库会话，数据库和网关连接预算按实例数计算。
 
 ## 容量规划
 

@@ -91,7 +91,7 @@ npm --prefix web run build
 npm --prefix web start
 ```
 
-生产服务使用固定的 `GL_WEB_SESSION_SECRET`，多实例共享密钥和 origin 配置。公开入口使用 HTTPS，反向代理终结 TLS；Node 服务监听内网，代理配置请求体大小、连接数、登录速率和 Origin 转发。SDK 的 `https://` 地址启用 gRPC 服务端证书验证。
+生产服务使用固定的 `GL_WEB_SESSION_SECRET`，多实例共享密钥和 origin 配置。公开入口使用 HTTPS，反向代理终结 TLS；Node 服务监听内网，代理配置请求体大小、连接数、登录速率和 Origin 转发。SDK 的 `https://` 地址启用 gRPC 服务端证书验证，私有 CA 通过 `NODE_EXTRA_CA_CERTS` 信任；`GL_WEB_ENDPOINT` 使用非回环主机的 `http://` 地址时需要设置 `GL_ALLOW_INSECURE_TRANSPORT=true`（仅限隔离的内部网络）。会话 Cookie 只保存随机会话 ID，凭证保存在控制台服务端内存，退出登录立即失效；空闲期限由 `GL_WEB_SESSION_IDLE_MINUTES` 设置（默认 60 分钟），控制台重启后需要重新登录，多实例部署使用会话粘滞。
 
 ### 容器运行
 

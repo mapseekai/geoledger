@@ -17,6 +17,8 @@ services:
       - "127.0.0.1:3000:3000"
     environment:
       GL_WEB_ENDPOINT: http://geoledger:7882
+      # Plaintext only inside this private Compose network; see docs/security.md.
+      GL_ALLOW_INSECURE_TRANSPORT: "true"
       GL_WEB_ORIGIN: ${GL_WEB_ORIGIN:-http://localhost:3000}
       GL_WEB_SESSION_SECRET: ${GL_WEB_SESSION_SECRET:-}
     depends_on:

@@ -41,7 +41,7 @@ cargo build --locked --bins
 
 ```sh
 curl --fail http://127.0.0.1:7881/ready
-./target/debug/gl --token-file ./geoledger-data/tokens.json info
+./target/debug/gl --token-file ./geoledger-data/admin-credentials.json info
 ```
 
 就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 5 等服务信息。首次启动会创建数据目录、数据库和私有管理员令牌文件。
@@ -91,4 +91,5 @@ docker compose up --build -d
 | [API 与 SDK](docs/api.md) | 四语言接口、HTTP、错误处理与发布恢复 |
 | [存储扩展](docs/storage.md) | 分层、事务语义与新后端验收 |
 | [生产运行](docs/production.md) | 容器、systemd、TLS、身份、容量与备份 |
+| [安全配置](docs/security.md) | 传输加密、令牌轮换与吊销、JWKS、PostgreSQL TLS、控制台会话 |
 | [开发指南](docs/development.md) | 构建、生成 SDK、回归测试与贡献流程 |

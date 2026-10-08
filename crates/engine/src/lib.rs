@@ -19,6 +19,7 @@ use serde_json::{Map, Value, json};
 use session::Row;
 pub mod repository;
 use repository::{RepositoryTransaction, StorageBackend};
+pub use session::pgtls::{PgTlsSummary, SslMode, summarize as postgres_tls_summary};
 
 use std::{
     collections::{BTreeMap, BTreeSet},

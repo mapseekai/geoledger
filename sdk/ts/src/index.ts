@@ -5,6 +5,7 @@ import {
   ServiceError,
 } from "@grpc/grpc-js";
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import { stringify } from "lossless-json";
 import * as wire from "./_internal/geoledger/v1/geoledger";
 import * as model from "./models";
@@ -147,7 +148,17 @@ const page = (p: model.Page = {}) => ({
 export class Client {
   #rpc: wire.GeoLedgerClient;
   #closed = false;
-  constructor(endpoint: string, token: string, timeoutMs = 30_000) {
+  /**
+   * Plaintext `http://` is accepted only for loopback hosts unless `options.allowInsecure`
+   * (or `GL_ALLOW_INSECURE_TRANSPORT=true`) is set: the bearer token would otherwise cross
+   * the network unencrypted.
+   */
+  constructor(
+    endpoint: string,
+    token: string,
+    timeoutMs = 30_000,
+    options: ClientOptions = {},
+  ) {
     let url: URL;
     try {
       url = new URL(endpoint);
@@ -171,6 +182,15 @@ export class Client {
       timeoutMs <= 0
     )
       throw invalid("ASCII token and finite positive timeout required");
+    if (
+      url.protocol === "http:" &&
+      !isLoopbackHost(url.hostname) &&
+      !options.allowInsecure &&
+      !["1", "true", "yes"].includes(process.env.GL_ALLOW_INSECURE_TRANSPORT ?? "")
+    )
+      throw invalid(
+        "refusing to send credentials over plaintext http to a non-loopback host; use https or allowInsecure",
+      );
     const auth: Interceptor = (options, nextCall) => {
       options.deadline = Date.now() + timeoutMs;
       return new InterceptingCall(nextCall(options), {
@@ -477,12 +497,24 @@ export class Client {
     );
   }
 }
+export interface ClientOptions {
+  /** Permit plaintext http:// to a non-loopback host (trusted private networks only). */
+  allowInsecure?: boolean;
+}
+/** True for `localhost` and loopback IP literals. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (h === "localhost" || h === "::1") return true;
+  if (isIP(h) === 4) return h.startsWith("127.");
+  return false;
+}
 export function connect(
   endpoint: string,
   token: string,
   timeoutMs = 30_000,
+  options: ClientOptions = {},
 ): Client {
-  return new Client(endpoint, token, timeoutMs);
+  return new Client(endpoint, token, timeoutMs, options);
 }
 
 export class Workspace {
