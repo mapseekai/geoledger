@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 scripts/check-docs.py
+python3 scripts/check-env.py
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 # Exercise the engine without features enabled only by the Rust SDK.

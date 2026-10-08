@@ -19,3 +19,7 @@ web/*.tsbuildinfo
 web/.env*
 !web/.env.example
 web/test-results/
+
+# Local certificates for deploy/compose.production.yaml
+/deploy/tls/
+*credentials*.json

@@ -10,3 +10,5 @@ geoledger-data
 **/*.tsbuildinfo
 **/.env*
 artifacts
+**/*credentials*.json
+deploy/tls
