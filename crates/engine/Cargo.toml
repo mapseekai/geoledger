@@ -18,7 +18,7 @@ postgres-native-tls = "0.5"
 native-tls = "0.2"
 rusqlite = { version = "0.37", features = ["bundled", "functions", "hooks"] }
 geo = "0.31"
-geojson = { version = "0.24", features = ["geo-types"] }
+geojson = { version = "1.0", features = ["geo-types"] }
 
 [features]
 # Exposes `fuzzing` entry points for the cargo-fuzz targets in fuzz/.
