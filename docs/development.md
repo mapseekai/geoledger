@@ -50,7 +50,7 @@ npm ci --prefix sdk/ts
 ./scripts/generate-sdk.sh
 ```
 
-生成工具需在 PATH 上。Python 脚本可用 `PYTHON` 指定含 grpcio-tools 的解释器。Go 模块要求 Go 1.23+；TypeScript 构建/运行推荐 Node.js 22；Python 客户端要求 3.10+。
+生成工具需在 PATH 上。Python 脚本可用 `PYTHON` 指定含 grpcio-tools 的解释器。Go 模块要求 Go 1.25+；TypeScript 构建/运行推荐 Node.js 22；Python 客户端要求 3.10+。
 
 ## 四语言联调
 
@@ -62,7 +62,7 @@ npm ci --prefix sdk/ts
 ./target/debug/geoledger-server --data-dir ./target/sdk-test
 ```
 
-另一个终端准备 Python 环境、TS 依赖并运行联调（Go 1.23+ 已在 PATH）：
+另一个终端准备 Python 环境、TS 依赖并运行联调（Go 1.25+ 已在 PATH）：
 
 ```sh
 python3 -m venv .venv

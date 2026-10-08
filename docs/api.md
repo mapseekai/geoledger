@@ -82,7 +82,7 @@ let receipt = draft.publish("新增道路").await?;
 
 ## Go
 
-模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.23+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`token` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
+模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.25+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`token` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
 
 ```go
 client, err := geoledger.Dial(endpoint, token)
