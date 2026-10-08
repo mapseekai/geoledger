@@ -6,3 +6,7 @@ geoledger-data
 **/*.db
 **/*.sqlite3*
 **/*tokens*.json
+**/.next
+**/*.tsbuildinfo
+**/.env*
+artifacts

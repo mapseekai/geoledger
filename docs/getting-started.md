@@ -20,7 +20,7 @@ cargo build --release --locked --bins
 
 创建服务端目录、SQLite 数据库和初始 `admin` 令牌文件；Linux/macOS 目录权限 0700、令牌文件 0600。凭证不会打印到日志。HTTP 默认监听 `127.0.0.1:7881`，gRPC 默认监听 `127.0.0.1:7882`。
 
-打开 `http://127.0.0.1:7881`，从私有 `geoledger-data/tokens.json` 读取自己的 token，输入管理界面后连接服务。依次创建项目、数据集和工作区，然后在高级操作中编辑 GeoJSON、保存和发布。令牌只保存在当前页面内存。
+浏览器管理使用独立的 [Next.js 控制台](../web/README.md)。按其说明构建 TS SDK、安装 Web 依赖、配置会话密钥并启动 Web。默认访问 `http://localhost:3000`，输入私有 `geoledger-data/tokens.json` 中自己的 token。令牌存入加密的 HttpOnly 会话 Cookie。
 
 CLI 连接同一个服务：
 

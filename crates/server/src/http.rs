@@ -10,8 +10,7 @@ use axum::{
 use serde_json::json;
 pub fn router(service: Service) -> Router {
     Router::new()
-        .route("/", get(console))
-        .route("/logo.png", get(logo))
+        .route("/", get(discovery))
         .route(
             "/health",
             get(|| async { axum::Json(json!({"ok":true,"version":env!("CARGO_PKG_VERSION")})) }),
@@ -36,19 +35,13 @@ async fn headers(req: Request, next: Next) -> Response {
     );
     response
 }
-async fn console() -> Response {
-    (
- [("cache-control","no-store"),("content-security-policy","default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")],
- axum::response::Html(include_str!("../web/index.html"))).into_response()
-}
-async fn logo() -> impl IntoResponse {
-    (
-        [
-            ("content-type", "image/png"),
-            ("cache-control", "public, max-age=3600"),
-        ],
-        include_bytes!("../web/logo.png").as_slice(),
-    )
+async fn discovery() -> impl IntoResponse {
+    axum::Json(json!({
+        "service": "geoledger-server",
+        "version": env!("CARGO_PKG_VERSION"),
+        "console": "Deploy the separate GeoLedger web application",
+        "health": "/health", "ready": "/ready"
+    }))
 }
 fn error(e: Error) -> Response {
     let status = StatusCode::from_u16(e.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

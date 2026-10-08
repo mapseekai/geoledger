@@ -9,9 +9,10 @@
 | crates/core | 纯属性/几何三方合并 |
 | crates/engine | 共同应用层、存储接口、SQLite/PostGIS 适配器 |
 | crates/rpc / proto | 生成的 Rust RPC 类型与统一 Protobuf |
-| crates/server | 唯一服务程序、HTTP、tonic、认证、监控、内置 UI |
+| crates/server | 存储业务服务、HTTP、tonic、认证、监控 |
 | sdk/rust、sdk/go、sdk/ts、sdk/python | 四语言 gRPC 客户端 |
 | crates/cli | 基于 Rust SDK 的远程命令行 |
+| web | 独立 Next.js 控制台、服务端 TS SDK 与浏览器 HTTP |
 
 构建依赖 Rust 1.88+（推荐 1.92）、C 编译器、protoc、pkg-config、OpenSSL 开发库。运行 SQLite 后端无需数据库或空间扩展安装。
 
@@ -20,7 +21,7 @@ cargo build --locked --workspace --bins --examples
 ./scripts/check.sh
 ```
 
-常规检查包括文档链接、浏览器数值/重试、fmt、Clippy、Rust 单元、SQLite 一致性、事务失败与真实服务测试。DB 测试仅使用隔离的 `geoledger_test` 数据库；设置 `GL_TEST_DATABASE_URL` 后会追加 PostGIS 的相同 conformance 套件。
+常规检查包括文档链接、fmt、Clippy、Rust 单元、SQLite 一致性、事务失败与真实服务测试。DB 测试仅使用隔离的 `geoledger_test` 数据库；设置 `GL_TEST_DATABASE_URL` 后会追加 PostGIS 的相同 conformance 套件。
 
 ## 生成 SDK
 
@@ -57,21 +58,20 @@ SDK 示例与测试会写入新的测试项目，请使用专用测试服务。C
 ## 控制台浏览器验证
 
 [控制台说明](console.md) 包含登录、资源管理和失败恢复流程。
-常规检查中的 Node 测试覆盖精确数值、原请求重试和会话结束后的迟到响应。
-真实浏览器验证使用 [test-console.py](../scripts/test-console.py)，需要 Python Playwright 和 Chromium：
+Web 的安装、构建和单元检查见 [web/README.md](../web/README.md)。
+真实浏览器验证需要 Python Playwright 和 Chromium：
 
 ```sh
 python3 -m pip install playwright
 python3 -m playwright install chromium
-# 在另一终端启动隔离服务：
-# target/debug/geoledger-server --data-dir target/console-test --http 127.0.0.1:7895 --grpc 127.0.0.1:7896
+# 启动隔离的 geoledger-server 与已配置的 Web 项目后：
 python3 scripts/test-console.py \
-  --url http://127.0.0.1:7895 \
+  --url http://localhost:3000 \
   --token-file target/console-test/tokens.json \
   --screenshots artifacts
 ```
 
-也可用 `--chromium /usr/bin/chromium` 指定已安装的浏览器。
-脚本会创建测试项目和数据，验证无效令牌、完整编辑发布流程、大整数、
-丢失发布响应后的幂等重试、分页、权限设置、会话清理与移动端布局。
-截图不包含令牌明文。只在隔离测试服务上运行；此项因依赖浏览器，不纳入默认 `check.sh`。
+也可用 `--chromium /usr/bin/chromium` 指定已安装浏览器。
+测试会写入新项目，验证登录、CSRF、精确数字、断线后原请求重试、分页、
+撤销、权限、审计、退出与手机布局。只对隔离测试服务运行。
+前端检查独立于 Rust 的 `check.sh`，CI 单独安装依赖并执行 Web 检查。

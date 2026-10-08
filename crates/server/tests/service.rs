@@ -107,10 +107,11 @@ async fn default_service_rpc_http_twenty_writers_restart_and_authentication() ->
         http(server.http, "/api/v1/list_projects", None, Some("{}"))?.0,
         401
     );
-    let (status, html) = http(server.http, "/", None, None)?;
+    let (status, discovery) = http(server.http, "/", None, None)?;
     assert_eq!(status, 200);
-    assert!(html.contains("content-security-policy"));
-    assert!(html.contains("项目"));
+    assert!(discovery.contains("application/json"));
+    assert!(discovery.contains("geoledger-server"));
+    assert_eq!(http(server.http, "/logo.png", None, None)?.0, 404);
     assert_eq!(http(server.http, "/ready", None, None)?.0, 200);
     assert_eq!(
         http(

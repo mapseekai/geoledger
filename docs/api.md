@@ -161,7 +161,7 @@ curl --fail-with-body http://127.0.0.1:7881/api/v1/create_project \
   --data '{"name":"roads"}'
 ```
 
-`GET /` 为管理控制台；`GET /health` 为存活检查；`GET /ready` 最多 2 秒检查存储；`GET /metrics` 要求同样的 Bearer 认证。默认同源，跨域授权需由部署网关明确配置。
+业务服务 `GET /` 为 JSON 服务信息；管理界面由独立 Web 项目提供。`GET /health` 为存活检查；`GET /ready` 最多 2 秒检查存储；`GET /metrics` 要求同样的 Bearer 认证。默认同源，跨域授权需由部署网关明确配置。
 
 ## 服务端协议与限制
 

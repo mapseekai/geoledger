@@ -55,3 +55,11 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 SQLite 简单可靠的备份流程是停止服务后备份整个数据目录，再恢复服务；在线备份使用 SQLite backup API 或经过验证的备份工具，不能只复制活动数据库主文件而忽略 WAL。恢复到独立目录后执行健康检查、历史查询和发布重试验证。
 
 PostGIS 使用 PostgreSQL 一致性备份，按目标 RPO 配置 WAL 归档/PITR。定期在独立数据库执行恢复演练。凭证和 JWKS 独立加密备份；数据库与凭证文件的访问权限都应纳入恢复流程。
+
+## 独立 Web 管理服务
+
+管理页面独立部署为 [Next.js 控制台](../web/README.md#生产运行)，由其 Node.js
+服务端调用 TS SDK。数据库仅由 GeoLedger 服务访问。Web 的公开入口使用 HTTPS，
+固定 `GL_WEB_ORIGIN`；随机 `GL_WEB_SESSION_SECRET` 只在运行时配置，多实例共享。
+反向代理设置请求体、连接数与登录速率限制。Web 和服务端的内部连接应限制在
+可信网络，跨网络使用 gRPC TLS。`compose.yaml` 的 console profile 提供本地组合启动。

@@ -80,6 +80,48 @@ jobs:
             wait "$service_pid"
             trap - EXIT
           done
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Web dependencies and production checks
+        run: |
+          npm ci --prefix sdk/ts
+          npm --prefix sdk/ts run build
+          npm ci --prefix web
+          npm --prefix web test
+          npm --prefix web run typecheck
+          npm --prefix web run format:check
+          npm --prefix web run build
+      - name: Browser toolchain and service
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          rustup toolchain install 1.92.0 --profile minimal
+          cargo +1.92.0 build --locked -p geoledger-server
+          python3 -m pip install playwright
+          python3 -m playwright install --with-deps chromium
+      - name: Browser to Next.js to TS SDK to GeoLedger
+        env:
+          GL_WEB_ORIGIN: http://127.0.0.1:3000
+          GL_WEB_ENDPOINT: http://127.0.0.1:7896
+        run: |
+          set -euo pipefail
+          export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
+          target/debug/geoledger-server --data-dir "$RUNNER_TEMP/console-data" --http 127.0.0.1:7895 --grpc 127.0.0.1:7896 > "$RUNNER_TEMP/console-backend.log" 2>&1 &
+          backend_pid=$!
+          npm --prefix web start > "$RUNNER_TEMP/console-web.log" 2>&1 &
+          web_pid=$!
+          trap 'kill "$web_pid" "$backend_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 100); do
+            if curl --fail --silent http://127.0.0.1:3000/login >/dev/null && curl --fail --silent http://127.0.0.1:7895/ready >/dev/null; then break; fi
+            sleep .2
+          done
+          python3 scripts/test-console.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/tokens.json"
   msrv:
     runs-on: ubuntu-24.04
     timeout-minutes: 25

@@ -13,3 +13,9 @@ __pycache__/
 .venv/
 /artifacts/
 sdk/python/build/
+web/.next/
+web/out/
+web/*.tsbuildinfo
+web/.env*
+!web/.env.example
+web/test-results/
