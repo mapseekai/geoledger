@@ -23,6 +23,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Access, AuditPanel } from "./access-audit";
 import { Brand } from "./brand";
+import { MapConfigProvider } from "./map-config";
+import type { RasterBasemap } from "@/lib/basemap";
 import { Empty, ErrorBox, Loading } from "./common";
 import { HistoryPanel } from "./history";
 import { Datasets, Projects, ServiceInfo } from "./projects";
@@ -86,9 +88,11 @@ const groups = [
 export function Console({
   section,
   projectId,
+  basemap,
 }: {
   section: string;
   projectId: string;
+  basemap?: RasterBasemap;
 }) {
   const router = useRouter();
   const [info, setInfo] = useState<Info>(),
@@ -300,7 +304,9 @@ export function Console({
             <>
               <ProjectContext project={project} />
               {section === "datasets" && (
-                <Datasets project={project} writable={writable} />
+                <MapConfigProvider value={basemap}>
+                  <Datasets project={project} writable={writable} />
+                </MapConfigProvider>
               )}
               {section === "workspaces" && (
                 <Workspaces project={project} writable={writable} />

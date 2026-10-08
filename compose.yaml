@@ -19,6 +19,8 @@ services:
       GL_WEB_ENDPOINT: http://geoledger:7882
       GL_WEB_ORIGIN: ${GL_WEB_ORIGIN:-http://localhost:3000}
       GL_WEB_SESSION_SECRET: ${GL_WEB_SESSION_SECRET:-}
+      GL_WEB_BASEMAP_URL: ${GL_WEB_BASEMAP_URL:-}
+      GL_WEB_BASEMAP_ATTRIBUTION: ${GL_WEB_BASEMAP_ATTRIBUTION:-}
     depends_on:
       - geoledger
     restart: unless-stopped
