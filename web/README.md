@@ -21,7 +21,7 @@ node --version
 npm --version
 ```
 
-依赖以 `package-lock.json` 为安装依据。技术栈为 Next.js 16.4、React 19.3、TypeScript 7、Tailwind CSS 4.3，组件采用 shadcn/ui 源码与 Radix、lucide 图标。
+依赖以 `package-lock.json` 为安装依据。技术栈为 Next.js 16.4、React 19.3、TypeScript 7、Tailwind CSS 4.3，组件采用 shadcn/ui 源码与 Radix、cmdk、react-resizable-panels，图标为 lucide。
 
 ## 本地启动
 
@@ -51,6 +51,8 @@ openssl rand -base64 48
 | `GL_WEB_ENDPOINT` | `http://127.0.0.1:7882`，GeoLedger 的 gRPC 地址 |
 | `GL_WEB_ORIGIN` | `http://localhost:3000`，与浏览器访问的协议、主机和端口一致 |
 | `GL_WEB_SESSION_SECRET` | 至少 32 字符的随机密钥，保存在本地配置或秘密管理系统 |
+| `GL_WEB_BASEMAP_URL` | 可选，XYZ 栅格瓦片地址模板（HTTP(S)，含 `{z}` `{x}` `{y}`），如 `https://tile.openstreetmap.org/{z}/{x}/{y}.png`；设置后地图底图增加“在线地图”，CSP 的 `img-src` 与 `connect-src` 仅追加该来源 |
+| `GL_WEB_BASEMAP_ATTRIBUTION` | 可选，在线底图署名，如 `© OpenStreetMap contributors` |
 
 ### 开发服务器
 
@@ -112,16 +114,20 @@ Compose 启动业务服务和控制台，控制台默认使用 `http://localhost
 | `src/app/api` | 登录、退出与认证后的浏览器接口 |
 | `src/lib/operations.ts` | 已验证的请求到 TS SDK 业务方法的映射 |
 | `src/components` | 页面交互，通过 HTTP 调用业务接口 |
-| `src/components/ui` | 可维护、可定制的 shadcn/ui 源组件 |
+| `src/components/map-view.tsx` | MapLibre 地图画布、地图控件、底图切换与要素高亮 |
+| `src/lib/map.ts` | 图层模型：几何分类、范围、属性展示、搜索与分页（纯函数，有单元测试） |
+| `src/components/ui` | 可维护、可定制的 shadcn/ui 源组件（页面控件统一使用这些组件） |
 | `src/app/globals.css` | 主题、布局与响应式样式 |
 
-版本号在浏览器请求中用十进制字符串表达，服务端转换为 bigint。GeoJSON 使用原始文本和 lossless-json，保留大整数精度；要素查看弹窗通过 MapLibre GL JS 按需加载 WGS 84 几何预览，支持自动定位、缩放和拖动，使用本地纯色背景；认证会话和发布恢复行为见 [控制台教程](../docs/console.md#发布结果确认与恢复)。
+版本号在浏览器请求中用十进制字符串表达，服务端转换为 bigint。GeoJSON 使用原始文本和 lossless-json，保留大整数精度；数据集要素在 MapLibre GL JS 地图工作区中按需加载与渲染（WGS 84），默认使用本地纯色底图，可离线使用；认证会话和发布恢复行为见 [控制台教程](../docs/console.md#发布结果确认与恢复)。
 
 项目采用 [MIT 许可证](../LICENSE)，字体与组件许可见 [第三方说明](THIRD_PARTY_NOTICES.md)。
 
 ## 界面设计
 
 控制台采用管理后台布局：深色侧边导航展示项目上下文、数据管理与系统管理分组、服务状态和当前会话；顶部提供面包屑与连接状态，内容区使用统计卡片、项目上下文卡片和表格面板组织操作。
+
+数据集要素页采用 GIS 工作台布局：顶部工具栏放置数据来源、工作区与编辑操作；左侧“图层与要素”面板含图层树（按点、线、面分类显示与图例）、搜索和要素列表；中间为占满内容区的地图；右侧“要素信息”面板显示所选要素的属性、几何信息和 GeoJSON 原文，未选择时显示图层信息；底部属性表可开关，可拖动或用键盘调整高度。地图、列表和属性表的选中与悬停相互联动。地图控件包括放大、缩小、缩放至图层、全屏、底图切换（浅色、深色，及配置后的在线地图）、比例尺和光标经纬度。平板与手机上，左右面板改为抽屉（Sheet），要素信息在手机上以底部面板展示。
 
 界面以中性灰白为底色，GeoLedger 橙色为强调色，文字与实心按钮使用深橙 `#cc3a05`。表格提供清晰的行分隔、悬停反馈和操作菜单；手机布局采用抽屉导航和自适应工具栏。
 

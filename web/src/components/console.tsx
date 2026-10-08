@@ -23,11 +23,15 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Access, AuditPanel } from "./access-audit";
 import { Brand } from "./brand";
-import { Empty, ErrorBox, Loading } from "./common";
+import { MapConfigProvider } from "./map-config";
+import type { RasterBasemap } from "@/lib/basemap";
+import { Empty, ErrorBox, Loading, Tip, useMedia } from "./common";
 import { HistoryPanel } from "./history";
 import { Datasets, Projects, ServiceInfo } from "./projects";
 import { StatusBadge, role, short, useAction } from "./resource-shared";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Sheet, SheetClose, SheetContent, SheetTitle } from "./ui/sheet";
 import { Workspaces } from "./workspaces";
 type Section = {
   id: string;
@@ -86,15 +90,18 @@ const groups = [
 export function Console({
   section,
   projectId,
+  basemap,
 }: {
   section: string;
   projectId: string;
+  basemap?: RasterBasemap;
 }) {
   const router = useRouter();
   const [info, setInfo] = useState<Info>(),
     [project, setProject] = useState<Project>(),
     [error, setError] = useState("");
   const [mobile, setMobile] = useState(false);
+  const narrow = useMedia("(max-width: 1024px)");
   const logout = useAction();
   useEffect(() => {
     let active = true;
@@ -126,36 +133,35 @@ export function Console({
     : error
       ? "服务连接失败"
       : "正在连接服务";
-  return (
-    <div className="app-shell">
-      <aside
-        className={`sidebar ${mobile ? "is-open" : ""}`}
-        aria-label="侧边导航"
-      >
-        <div className="sidebar-header">
-          <Link
-            href="/projects"
-            aria-label="GeoLedger 项目"
-            className="sidebar-brand"
-          >
-            <Brand caption="管理控制台" />
-          </Link>
-          <Button
-            className="mobile-close"
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setMobile(false)}
-            aria-label="关闭导航"
-          >
-            <X />
-          </Button>
-        </div>
-        <div className="sidebar-body">
-          <div className="sidebar-label">当前项目</div>
+  const sidebar = (sheet: boolean) => (
+    <>
+      <div className="sidebar-header">
+        <Link
+          href="/projects"
+          aria-label="GeoLedger 项目"
+          className="sidebar-brand"
+        >
+          <Brand caption="管理控制台" />
+        </Link>
+        {sheet && (
+          <SheetClose asChild>
+            <Button
+              className="mobile-close"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="关闭导航"
+            >
+              <X />
+            </Button>
+          </SheetClose>
+        )}
+      </div>
+      <div className="sidebar-body">
+        <div className="sidebar-label">当前项目</div>
+        <Tip label="切换项目" side="right">
           <Link
             href="/projects"
             className="project-switch"
-            title="切换项目"
             onClick={() => setMobile(false)}
           >
             <span className="project-avatar" aria-hidden="true">
@@ -171,52 +177,53 @@ export function Console({
             </span>
             <ChevronsUpDown size={15} aria-hidden="true" />
           </Link>
-          <nav aria-label="主导航" className="sidebar-nav">
-            {groups.map((group) => (
-              <div className="nav-group" key={group.label}>
-                <div className="sidebar-label">{group.label}</div>
-                {group.ids.map((id) => {
-                  const item = sections.find((s) => s.id === id)!;
-                  const active = section === item.id;
-                  return (
-                    <Link
-                      key={item.id}
-                      className={`nav-item ${active ? "active" : ""} ${item.scoped && !projectId ? "is-idle" : ""}`}
-                      aria-current={active ? "page" : undefined}
-                      href={`/${item.id}${query}`}
-                      onClick={() => setMobile(false)}
-                    >
-                      <item.icon size={17} aria-hidden="true" />
-                      <span>{item.title}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-            ))}
-          </nav>
-        </div>
-        <div className="sidebar-footer">
-          <div className="service-card">
-            <span className={`status-dot is-${status}`} aria-hidden="true" />
-            <span className="service-card-text">
-              <strong>{statusText}</strong>
-              <small>
-                {info ? `GeoLedger v${info.version}` : "GeoLedger 服务"}
-              </small>
-            </span>
-          </div>
-          <div className="sidebar-account">
-            <span className="account-avatar" aria-hidden="true">
-              <UserRound size={16} />
-            </span>
-            <div>
-              <strong>当前会话</strong>
+        </Tip>
+        <nav aria-label="主导航" className="sidebar-nav">
+          {groups.map((group) => (
+            <div className="nav-group" key={group.label}>
+              <div className="sidebar-label">{group.label}</div>
+              {group.ids.map((id) => {
+                const item = sections.find((s) => s.id === id)!;
+                const active = section === item.id;
+                return (
+                  <Link
+                    key={item.id}
+                    className={`nav-item ${active ? "active" : ""} ${item.scoped && !projectId ? "is-idle" : ""}`}
+                    aria-current={active ? "page" : undefined}
+                    href={`/${item.id}${query}`}
+                    onClick={() => setMobile(false)}
+                  >
+                    <item.icon size={17} aria-hidden="true" />
+                    <span>{item.title}</span>
+                  </Link>
+                );
+              })}
             </div>
+          ))}
+        </nav>
+      </div>
+      <div className="sidebar-footer">
+        <div className="service-card">
+          <span className={`status-dot is-${status}`} aria-hidden="true" />
+          <span className="service-card-text">
+            <strong>{statusText}</strong>
+            <small>
+              {info ? `GeoLedger v${info.version}` : "GeoLedger 服务"}
+            </small>
+          </span>
+        </div>
+        <div className="sidebar-account">
+          <span className="account-avatar" aria-hidden="true">
+            <UserRound size={16} />
+          </span>
+          <div>
+            <strong>当前会话</strong>
+          </div>
+          <Tip label="退出登录" side="top">
             <Button
               variant="ghost"
               size="icon-sm"
               aria-label="退出登录"
-              title="退出登录"
               disabled={logout.busy}
               onClick={() =>
                 void logout.run(async () => {
@@ -229,17 +236,28 @@ export function Console({
             >
               <LogOut />
             </Button>
-          </div>
-          <ErrorBox message={logout.error} />
+          </Tip>
         </div>
+        <ErrorBox message={logout.error} />
+      </div>
+    </>
+  );
+  return (
+    <div className="app-shell">
+      <aside className="sidebar" aria-label="侧边导航">
+        {sidebar(false)}
       </aside>
-      {mobile && (
-        <button
-          className="nav-backdrop"
-          onClick={() => setMobile(false)}
-          aria-label="关闭导航"
-        />
-      )}
+      <Sheet open={narrow && mobile} onOpenChange={setMobile}>
+        <SheetContent
+          side="left"
+          className="sidebar is-sheet"
+          showCloseButton={false}
+          aria-describedby={undefined}
+        >
+          <SheetTitle className="sr-only">侧边导航</SheetTitle>
+          {sidebar(true)}
+        </SheetContent>
+      </Sheet>
       <div className="main-column">
         <header className="topbar">
           <Button
@@ -265,13 +283,13 @@ export function Console({
             <span aria-current="page">{meta.title}</span>
           </nav>
           <div className="topbar-end">
-            <span className={`status-pill is-${status}`}>
+            <Badge variant="outline" className={`status-pill is-${status}`}>
               <span className={`status-dot is-${status}`} aria-hidden="true" />
               {statusText}
-            </span>
-            <span className="version-tag">
+            </Badge>
+            <Badge variant="secondary" className="version-tag">
               {info ? `v${info.version}` : "CONSOLE"}
-            </span>
+            </Badge>
           </div>
         </header>
         <main className="main-content">
@@ -300,7 +318,9 @@ export function Console({
             <>
               <ProjectContext project={project} />
               {section === "datasets" && (
-                <Datasets project={project} writable={writable} />
+                <MapConfigProvider value={basemap}>
+                  <Datasets project={project} writable={writable} />
+                </MapConfigProvider>
               )}
               {section === "workspaces" && (
                 <Workspaces project={project} writable={writable} />

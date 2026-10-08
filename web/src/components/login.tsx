@@ -1,6 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { send } from "@/lib/browser-api";
 import {
   ArrowRight,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Brand } from "./brand";
-import { ErrorBox } from "./common";
+import { ErrorBox, Tip } from "./common";
 const highlights = [
   {
     icon: GitMerge,
@@ -84,7 +85,7 @@ export function Login({ expired }: { expired: boolean }) {
             </span>
             <h2>登录控制台</h2>
             <div className="field">
-              <label htmlFor="token">访问令牌</label>
+              <Label htmlFor="token">访问令牌</Label>
               <div className="password-field">
                 <KeyRound className="field-icon" aria-hidden="true" />
                 <Input
@@ -97,15 +98,17 @@ export function Login({ expired }: { expired: boolean }) {
                   placeholder="输入访问令牌"
                   disabled={busy}
                 />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={show ? "隐藏令牌" : "显示令牌"}
-                  onClick={() => setShow(!show)}
-                >
-                  {show ? <EyeOff /> : <Eye />}
-                </Button>
+                <Tip label={show ? "隐藏令牌" : "显示令牌"}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={show ? "隐藏令牌" : "显示令牌"}
+                    onClick={() => setShow(!show)}
+                  >
+                    {show ? <EyeOff /> : <Eye />}
+                  </Button>
+                </Tip>
               </div>
             </div>
             <ErrorBox message={error} />

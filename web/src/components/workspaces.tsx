@@ -21,7 +21,17 @@ import {
   Upload,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Empty, ErrorBox, Loading, Modal, listPage, usePage } from "./common";
+import {
+  Confirm,
+  Empty,
+  ErrorBox,
+  Loading,
+  Modal,
+  Notice,
+  Tip,
+  listPage,
+  usePage,
+} from "./common";
 import { PublishDialog } from "./features";
 import {
   Panel,
@@ -37,8 +47,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Label } from "./ui/label";
 import {
   Table,
   TableBody,
@@ -130,27 +142,29 @@ export function Workspaces({
   return (
     <>
       {pending && (
-        <div className="notice is-warning">
-          <TriangleAlert aria-hidden="true" />
-          <span className="notice-text">
-            有一笔待确认的发布：
-            <span className="mono">{short(pending.workspace)}</span>。
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              setPublish({
-                id: pending.workspace,
-                version: pending.version,
-                baseRevision: "0",
-                status: "open",
-              })
-            }
-          >
-            重试原发布
-          </Button>
-        </div>
+        <Notice
+          tone="warning"
+          icon={<TriangleAlert aria-hidden="true" />}
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setPublish({
+                  id: pending.workspace,
+                  version: pending.version,
+                  baseRevision: "0",
+                  status: "open",
+                })
+              }
+            >
+              重试原发布
+            </Button>
+          }
+        >
+          有一笔待确认的发布：
+          <span className="mono">{short(pending.workspace)}</span>。
+        </Notice>
       )}
       <Panel
         toolbar={
@@ -238,17 +252,21 @@ export function Workspaces({
                       <span className="mono" title={w.id}>
                         {short(w.id)}
                       </span>
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         className="copy-id"
                         onClick={() => setLookupId(w.id)}
                         aria-label={`选择工作区 ${w.id}`}
                       >
                         选择
-                      </button>
+                      </Button>
                     </span>
                   </TableCell>
                   <TableCell className="mono">
-                    <span className="revision-tag">r{w.baseRevision}</span>
+                    <Badge variant="outline" className="revision-tag">
+                      r{w.baseRevision}
+                    </Badge>
                     <span className="muted"> / </span>v{w.version}
                   </TableCell>
                   <TableCell>
@@ -285,16 +303,17 @@ export function Workspaces({
                             发布
                           </Button>
                           <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                aria-label={`更多操作 ${w.id}`}
-                                title="更多操作"
-                              >
-                                <Ellipsis />
-                              </Button>
-                            </DropdownMenuTrigger>
+                            <Tip label="更多操作">
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label={`更多操作 ${w.id}`}
+                                >
+                                  <Ellipsis />
+                                </Button>
+                              </DropdownMenuTrigger>
+                            </Tip>
                             <DropdownMenuContent align="end" className="menu">
                               <DropdownMenuItem
                                 onSelect={() =>
@@ -394,42 +413,28 @@ export function Workspaces({
         />
       )}
       {discard && (
-        <Modal
+        <Confirm
           title="丢弃工作区"
           description="工作区的未发布编辑将被丢弃。已发布的历史版本不会改变。"
-          close={task.busy ? () => {} : () => setDiscard(undefined)}
-        >
-          <ErrorBox message={task.error} />
-          <div className="form-actions">
-            <Button
-              variant="outline"
-              onClick={() => setDiscard(undefined)}
-              disabled={task.busy}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={task.busy}
-              onClick={() =>
-                void task.run(async () => {
-                  if (readPublication(sessionStorage.getItem("gl.publication")))
-                    throw new Error("请先确认待处理的发布请求。");
-                  await call({
-                    action: "discard",
-                    project: project.id,
-                    workspace: discard.id,
-                    version: discard.version,
-                  });
-                  setDiscard(undefined);
-                  update();
-                })
-              }
-            >
-              确认丢弃
-            </Button>
-          </div>
-        </Modal>
+          action="确认丢弃"
+          busy={task.busy}
+          error={task.error}
+          close={() => setDiscard(undefined)}
+          confirm={() =>
+            void task.run(async () => {
+              if (readPublication(sessionStorage.getItem("gl.publication")))
+                throw new Error("请先确认待处理的发布请求。");
+              await call({
+                action: "discard",
+                project: project.id,
+                workspace: discard.id,
+                version: discard.version,
+              });
+              setDiscard(undefined);
+              update();
+            })
+          }
+        />
       )}
       {resolve && (
         <Resolution
@@ -506,7 +511,7 @@ export function Resolution({
           GeoJSON 文本字符串，或使用 null
           删除。更新基准时可使用空数组自动合并无冲突变化。
         </p>
-        <label htmlFor="resolutions">解决方案</label>
+        <Label htmlFor="resolutions">解决方案</Label>
         <Textarea
           id="resolutions"
           name="resolutions"

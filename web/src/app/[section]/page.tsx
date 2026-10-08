@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { session } from "@/lib/session";
 import { Console } from "@/components/console";
+import { rasterBasemap } from "@/lib/basemap";
 export default async function Page({
   params,
   searchParams,
@@ -27,6 +28,7 @@ export default async function Page({
       key={`${section}:${(await searchParams).project ?? ""}`}
       section={section}
       projectId={(await searchParams).project ?? ""}
+      basemap={rasterBasemap(process.env)}
     />
   );
 }

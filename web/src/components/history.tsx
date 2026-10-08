@@ -14,8 +14,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { Empty, ErrorBox, Loading, Modal, usePage } from "./common";
+import { Empty, ErrorBox, Loading, Modal, Notice, usePage } from "./common";
 import { Panel, PanelTitle, time, useAction } from "./resource-shared";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import {
   Table,
@@ -76,7 +77,9 @@ export function HistoryPanel({
               {page.rows.map((c) => (
                 <TableRow key={c.revision}>
                   <TableCell>
-                    <span className="revision-tag">r{c.revision}</span>
+                    <Badge variant="outline" className="revision-tag">
+                      r{c.revision}
+                    </Badge>
                   </TableCell>
                   <TableCell className="message-cell">{c.message}</TableCell>
                   <TableCell>
@@ -149,8 +152,7 @@ export function HistoryPanel({
           close={task.busy ? () => {} : () => setRestore(undefined)}
         >
           {created ? (
-            <div className="notice is-success">
-              <CircleCheck aria-hidden="true" />
+            <Notice tone="success" icon={<CircleCheck aria-hidden="true" />}>
               <div>
                 工作区已创建：<span className="mono">{created.id}</span>
                 <p>
@@ -162,7 +164,7 @@ export function HistoryPanel({
                   </Link>
                 </p>
               </div>
-            </div>
+            </Notice>
           ) : (
             <>
               <ErrorBox message={task.error} />

@@ -28,6 +28,7 @@ import {
   StatusBadge,
   short,
 } from "./resource-shared";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
@@ -139,7 +140,9 @@ export function Projects({ info }: { info?: Info }) {
                     />
                   </TableCell>
                   <TableCell>
-                    <span className="revision-tag">r{p.head}</span>
+                    <Badge variant="outline" className="revision-tag">
+                      r{p.head}
+                    </Badge>
                   </TableCell>
                   <TableCell className="mono muted" title={p.id}>
                     {short(p.id)}
@@ -267,7 +270,8 @@ export function Datasets({
               {page.rows.map((d) => (
                 <TableRow key={d.id}>
                   <TableCell>
-                    <button
+                    <Button
+                      variant="link"
                       className="name-link"
                       onClick={() => setSelected(d)}
                     >
@@ -275,7 +279,7 @@ export function Datasets({
                         <Database size={16} />
                       </span>
                       {d.name}
-                    </button>
+                    </Button>
                   </TableCell>
                   <TableCell className="mono muted">{d.id}</TableCell>
                   <TableCell className="cell-actions">

@@ -51,11 +51,13 @@ function Button({
 
   return (
     <Comp
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+      // After the spread: Radix triggers composed with `asChild` (tooltip,
+      // popover, menu) pass their own data-slot, which would drop the button styles.
       data-slot="button"
       data-variant={variant}
       data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
-      {...props}
     />
   );
 }
