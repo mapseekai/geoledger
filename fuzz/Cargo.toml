@@ -1,0 +1,32 @@
+# cargo-fuzz targets for the untrusted-input decoders (nightly toolchain):
+#   cargo +nightly fuzz run codec -- -max_total_time=300
+# Kept out of the main workspace so stable builds never need libFuzzer.
+[package]
+name = "geoledger-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+geoledger-engine = { path = "../crates/engine", features = ["fuzzing"] }
+
+[[bin]]
+name = "codec"
+path = "fuzz_targets/codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "geometry"
+path = "fuzz_targets/geometry.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

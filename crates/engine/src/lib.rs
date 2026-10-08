@@ -12,6 +12,9 @@ mod publication;
 use publication::*;
 mod codec;
 mod errors;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzzing;
 mod session;
 use geoledger_core::{Cell, Record, merge::merge_record};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

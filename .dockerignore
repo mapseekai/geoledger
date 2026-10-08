@@ -12,3 +12,4 @@ geoledger-data
 artifacts
 **/*credentials*.json
 deploy/tls
+fuzz
