@@ -15,6 +15,7 @@ if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
   cargo test --locked -p geoledger-engine --test storage -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test upgrade -- --ignored
   cargo test --locked -p geoledger-engine --test portable -- --ignored
+  cargo test --locked -p geoledger-engine --test multi_instance -- --ignored
 else
   printf '%s\n' 'PostGIS integration tests not run: GL_TEST_DATABASE_URL is unset.'
 fi
