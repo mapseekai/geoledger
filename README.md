@@ -4,7 +4,7 @@
 
 GeoLedger 为道路、地块、监测点等空间要素提供版本控制。团队成员在独立工作区中编辑 GeoJSON，通过属性三方合并、冲突解决和原子发布形成共享版本；历史查询、提交撤销、成员权限与审计帮助追踪和管理数据变化。
 
-当前版本为 `0.3.0-alpha.1`，存储格式为 5。默认 SQLite 随服务端提供，可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
+当前版本为 `0.3.0-alpha.1`，存储格式为 6。默认 SQLite 随服务端提供，可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
 
 ## 获取代码
 
@@ -77,7 +77,7 @@ docker compose up --build -d
 
 ## 贡献
 
-通过 [GitHub Issues](https://github.com/mapseekai/geoledger/issues) 报告问题或提出需求，附上版本、操作步骤和期望结果；提交 Pull Request 时说明变更与验证范围。
+通过 [GitHub Issues](https://github.com/mapseekai/geoledger/issues) 报告问题或提出需求，附上版本、操作步骤和期望结果；提交 Pull Request 时说明变更与验证范围。安全漏洞请按 [安全策略](SECURITY.md) 私下报告，不要公开提交 issue；版本变化见 [CHANGELOG](CHANGELOG.md)。
 
 开发和 AI 编码代理遵循 [AGENTS.md](AGENTS.md)，按 [开发指南](docs/development.md#贡献流程) 完成对应检查。项目采用 [MIT 许可证](LICENSE)。
 
@@ -93,3 +93,5 @@ docker compose up --build -d
 | [生产运行](docs/production.md) | 容器、systemd、TLS、身份、容量与备份 |
 | [安全配置](docs/security.md) | 传输加密、令牌轮换与吊销、JWKS、PostgreSQL TLS、控制台会话 |
 | [开发指南](docs/development.md) | 构建、生成 SDK、回归测试与贡献流程 |
+| [安全策略](SECURITY.md) | 漏洞报告渠道、支持版本与供应链措施 |
+| [变更记录](CHANGELOG.md) | 各版本的破坏性变化、安全修复与新增功能 |
