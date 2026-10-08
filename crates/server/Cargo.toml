@@ -38,6 +38,7 @@ geoledger-client = { path = "../../sdk/rust" }
 tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+rusqlite = { version = "0.37", features = ["bundled"] }
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

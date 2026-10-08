@@ -10,7 +10,7 @@ if [[ -n ${GL_SERVER_BIN:-} ]]; then
   server=$GL_SERVER_BIN
 else
   cargo build --locked --quiet -p geoledger-server
-  server=target/debug/geoledger-server
+  server=${CARGO_TARGET_DIR:-target}/debug/geoledger-server
 fi
 work=$(mktemp -d)
 pid=
