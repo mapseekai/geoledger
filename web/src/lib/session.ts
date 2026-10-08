@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { getIronSession } from "iron-session";
 import { configuration } from "./config";
 import { SessionStore } from "./session-store";
+import { clients } from "./clients";
 
 const ABSOLUTE_SECONDS = 8 * 60 * 60;
 function idleMinutes() {
@@ -40,12 +41,14 @@ export async function session() {
     token: entry?.token,
     /** Start a new server-side session; any previous one for this cookie is revoked. */
     async login(token: string) {
+      if (entry) clients().evict(entry.token);
       store().revoke(cookie.sid);
       cookie.sid = store().create(token);
       await cookie.save();
     },
     /** Revoke the server-side session and clear the cookie. */
     destroy() {
+      if (entry) clients().evict(entry.token);
       store().revoke(cookie.sid);
       cookie.destroy();
     },
