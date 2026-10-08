@@ -130,7 +130,7 @@ GL_LOAD_VUS=20 GL_LOAD_DURATION=60s ./scripts/load-test.sh
 GL_DATABASE_URL='postgresql://...' GL_DATABASE_ALLOW_PLAINTEXT=true ./scripts/load-test.sh
 ```
 
-阈值可用 `GL_LOAD_P95_READ_MS`、`GL_LOAD_P95_WRITE_MS` 调整；`GL_LOAD_SUMMARY` 保存 k6 汇总 JSON 供趋势对比。CI 补丁中的 nightly 工作流每天运行容量测试、两种后端的负载脚本和两个 fuzz 目标。
+阈值可用 `GL_LOAD_P95_READ_MS`、`GL_LOAD_P95_WRITE_MS` 调整；`GL_LOAD_SUMMARY` 保存 k6 汇总 JSON 供趋势对比。[nightly 工作流](../.github/workflows/nightly.yml) 每天运行容量测试、两种后端的负载脚本和两个 fuzz 目标。
 
 ## 控制台浏览器验证
 

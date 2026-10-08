@@ -1,0 +1,103 @@
+name: Nightly capacity, load and fuzzing
+on:
+  schedule:
+    - cron: '17 18 * * *' # 02:17 Asia/Shanghai
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: geoledger-nightly
+  cancel-in-progress: false
+env:
+  K6_VERSION: v1.3.0
+  K6_SHA256: 84d26fc1f7bc03e02f2e016b3b1b20c032e05dfe461fca82de4e3a6ebe72ddbd
+jobs:
+  capacity-and-load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    services:
+      postgis:
+        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6 # 17-3.5 (official image)
+        env:
+          POSTGRES_USER: mapseekai
+          POSTGRES_DB: geoledger_test
+          POSTGRES_PASSWORD: geoledger-ci-disposable
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mapseekai -d geoledger_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      GL_TEST_DATABASE_URL: postgresql://mapseekai:geoledger-ci-disposable@127.0.0.1:5432/geoledger_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev postgresql-client
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup default 1.92.0
+          curl -fsSL -o "$RUNNER_TEMP/k6.tgz" "https://github.com/grafana/k6/releases/download/$K6_VERSION/k6-$K6_VERSION-linux-amd64.tar.gz"
+          echo "$K6_SHA256  $RUNNER_TEMP/k6.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/k6.tgz" -C "$RUNNER_TEMP"
+          echo "K6=$RUNNER_TEMP/k6-$K6_VERSION-linux-amd64/k6" >> "$GITHUB_ENV"
+      - name: Multi-instance and failure-path tests
+        run: |
+          cargo test --locked -p geoledger-engine --test multi_instance -- --include-ignored
+          cargo test --locked -p geoledger-server --test limits
+      - name: Capacity (SQLite)
+        run: cargo test --locked --release -p geoledger-engine --test capacity -- --ignored --nocapture
+      - name: Capacity (PostGIS)
+        env:
+          GL_CONFORMANCE_BACKEND: postgis
+        run: cargo test --locked --release -p geoledger-engine --test capacity -- --ignored --nocapture
+      - name: Load (SQLite)
+        env:
+          GL_LOAD_DURATION: 5m
+          GL_LOAD_SUMMARY: ${{ runner.temp }}/load-sqlite.json
+        run: ./scripts/load-test.sh
+      - name: Load (PostGIS)
+        env:
+          GL_LOAD_DURATION: 5m
+          GL_LOAD_SUMMARY: ${{ runner.temp }}/load-postgis.json
+          GL_DATABASE_ALLOW_PLAINTEXT: 'true'
+        run: |
+          export PGPASSWORD=geoledger-ci-disposable
+          psql -h 127.0.0.1 -U mapseekai -d geoledger_test -c 'CREATE DATABASE geoledger_load'
+          psql -h 127.0.0.1 -U mapseekai -d geoledger_load -c 'CREATE EXTENSION postgis'
+          GL_DATABASE_URL="${GL_TEST_DATABASE_URL/geoledger_test/geoledger_load}" ./scripts/load-test.sh
+      - name: Keep load summaries
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: load-summaries
+          path: ${{ runner.temp }}/load-*.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [codec, geometry]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Toolchains
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: fuzz
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=1200 -rss_limit_mb=2048
+      - name: Keep crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-${{ matrix.target }}-artifacts
+          path: fuzz/artifacts
+          retention-days: 30
