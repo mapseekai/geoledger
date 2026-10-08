@@ -1,37 +1,94 @@
 # GeoLedger
 
-GeoLedger 是空间要素的版本控制服务。安装一个 `geoledger-server`，使用 SDK、远程 `gl` CLI 或独立管理界面完成多人编辑、版本发布、历史查询和冲突解决。
+<img src="web/public/logo.svg" alt="GeoLedger" width="180">
 
-团队成员可在各自工作区编辑道路、地块等空间数据，将修改检查后发布为共享版本。属性三方合并协调并发编辑，历史快照与提交撤销帮助追踪和修正变化，成员权限与审计为协作提供访问控制和操作记录。
+GeoLedger 为道路、地块、监测点等空间要素提供版本控制。团队成员在独立工作区中编辑 GeoJSON，通过属性三方合并、冲突解决和原子发布形成共享版本；历史查询、提交撤销、成员权限与审计帮助追踪和管理数据变化。
 
-- **默认 SQLite**：要素、空间索引、工作区、历史、权限与审计均保存在服务端数据目录，开箱即可运行。
-- **可选 PostGIS**：连接独立 PostgreSQL/PostGIS 数据库，使用事务、行锁与 GiST 空间索引。
-- **统一应用层**：属性三方合并、几何整体合并、发布幂等、owner/editor/viewer 权限。
-- **四语言业务 SDK**：Go、Rust、TypeScript（Node.js）、Python 直接操作项目、数据集和工作区，内部使用 gRPC。
-- **独立 Web 控制台**：[Next.js 管理项目](web/README.md)，使用 React、TypeScript、Tailwind CSS v4 与 shadcn/ui。浏览器使用 HTTP，Web 服务端直接调用 TS SDK。
-- **可替换存储**：后端实现 [StorageBackend / RepositoryTransaction](crates/engine/src/repository.rs)，沿用统一的客户端协议与合并规则。
+当前版本为 `0.3.0-alpha.1`，存储格式为 5。默认 SQLite 随服务端提供，可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
+
+## 获取代码
+
+```sh
+git clone git@github.com:mapseekai/geoledger.git
+cd geoledger
+```
+
+SSH 克隆使用已配置到 GitHub 账号的 SSH 密钥。仓库根目录是 Cargo 工作区，Web 位于 `web/`，四语言 SDK 位于 `sdk/`。以下命令均从仓库根目录执行。
+
+## 环境准备
+
+| 用途 | 工具 |
+|---|---|
+| 构建服务端和 CLI | [Rust](https://www.rust-lang.org/tools/install) 1.88+，推荐与主 CI 和 Dockerfile 一致的 1.92；[protoc](https://github.com/protocolbuffers/protobuf/releases) 3.21+；C 编译器 |
+| Linux/macOS 数据库连接依赖 | pkg-config、OpenSSL 开发库 |
+| 仓库检查 | [Python](https://www.python.org/downloads/) 3.10+、Rust 的 rustfmt 与 Clippy |
+| Web 控制台和 TS SDK | [Node.js](https://nodejs.org/en/download) 22 与随附 npm |
+
+按操作系统安装和检查工具的步骤见 [快速开始](docs/getting-started.md#环境准备)。Go SDK、PostGIS、容器和浏览器测试工具按所选任务安装。
+
+`Cargo.lock` 与两个 `package-lock.json` 固定依赖解析结果。使用 `cargo --locked` 和 `npm ci`，让本地构建与 CI 使用一致依赖。
+
+## 快速开始
+
+### 本地开发服务
+
+```sh
+cargo build --locked --bins
+./target/debug/geoledger-server --data-dir ./geoledger-data
+```
+
+保持服务端终端运行，在第二个终端检查服务：
+
+```sh
+curl --fail http://127.0.0.1:7881/ready
+./target/debug/gl --token-file ./geoledger-data/tokens.json info
+```
+
+就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 5 等服务信息。首次启动会创建数据目录、数据库和私有管理员令牌文件。
+
+### Web 开发服务
+
+按 [Web 本地启动](web/README.md#本地启动) 安装 TS SDK 和控制台依赖、配置会话密钥，随后执行：
+
+```sh
+npm --prefix web run dev
+```
+
+访问 `http://localhost:3000`，使用管理员分配的令牌登录。控制台提供项目、数据集、工作区、版本历史、访问权限、审计日志与服务信息。第一条要素的操作流程见 [管理控制台](docs/console.md)。
+
+## 构建、测试与部署
+
+构建生产二进制并运行仓库检查：
 
 ```sh
 cargo build --release --locked --bins
-./target/release/geoledger-server
+./scripts/check.sh
 ```
 
-首次运行创建 `./geoledger-data/geoledger.sqlite3` 与私有 `tokens.json`。gRPC 地址为 `http://127.0.0.1:7882`，HTTP 监控/API 地址为 `http://127.0.0.1:7881`。管理页面按 [Web 启动说明](web/README.md) 独立运行，默认访问 `http://localhost:3000`。
+产物为 `target/release/geoledger-server` 和 `target/release/gl`，Windows 使用 `.exe`。Web 的生产构建和检查见 [Web 文档](web/README.md#构建测试与部署)，跨后端及 SDK 验证见 [开发指南](docs/development.md)。
+
+容器部署使用仓库中的 Compose 配置：
 
 ```sh
-./target/release/gl --token-file ./geoledger-data/tokens.json info
+docker compose up --build -d
 ```
+
+部署配置、持久化、TLS、身份与备份见 [生产运行](docs/production.md)。
+
+## 贡献
+
+通过 [GitHub Issues](https://github.com/mapseekai/geoledger/issues) 报告问题或提出需求，附上版本、操作步骤和期望结果；提交 Pull Request 时说明变更与验证范围。
+
+开发和 AI 编码代理遵循 [AGENTS.md](AGENTS.md)，按 [开发指南](docs/development.md#贡献流程) 完成对应检查。项目采用 [MIT 许可证](LICENSE)。
+
+## 文档导航
 
 | 文档 | 内容 |
 |---|---|
-| [快速开始](docs/getting-started.md) | 默认 SQLite、PostGIS、SDK 与 CLI |
-| [使用指南](docs/user-guide.md) | 编辑、发布、冲突、历史、撤销 |
-| [API 与 SDK](docs/api.md) | 四语言业务接口、HTTP 与错误语义 |
-| [存储扩展](docs/storage.md) | 事务接口、数据语义、新后端验收 |
-| [生产运行](docs/production.md) | 部署、TLS、身份、容量规划、备份与恢复 |
-| [开发验证](docs/development.md) | 构建、生成 SDK、跨后端回归 |
-| [Web 审查记录](docs/web-review.md) | 独立控制台、审查修正与浏览器验证 |
-| [SDK 审查记录](docs/sdk-review.md) | 公开接口调整、独立审查发现、修复与回归 |
-| [重构验证记录](docs/production-review.md) | 服务能力、验证场景与容量测量 |
-
-当前版本 `0.3.0-alpha.1`；存储格式 5，面向新建库部署。采用 [MIT 许可证](LICENSE)。
+| [快速开始](docs/getting-started.md) | 获取代码、环境准备、服务启动、CLI 和 SDK 接入 |
+| [使用指南](docs/user-guide.md) | 数据模型、协作编辑、发布、冲突、历史与撤销 |
+| [管理控制台](docs/console.md) | 页面导航和完整操作示例 |
+| [API 与 SDK](docs/api.md) | 四语言接口、HTTP、错误处理与发布恢复 |
+| [存储扩展](docs/storage.md) | 分层、事务语义与新后端验收 |
+| [生产运行](docs/production.md) | 容器、systemd、TLS、身份、容量与备份 |
+| [开发指南](docs/development.md) | 构建、生成 SDK、回归测试与贡献流程 |

@@ -1773,3 +1773,19 @@ select:focus-visible {
     scroll-behavior: auto !important;
   }
 }
+
+.geojson-preview {
+  margin-bottom: 16px;
+  min-width: 0;
+}
+.geojson-map {
+  height: 320px;
+  max-height: 45dvh;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.geojson-preview p {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}

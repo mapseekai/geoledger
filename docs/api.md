@@ -2,6 +2,8 @@
 
 [项目概览](../README.md) · [使用指南](user-guide.md) · [存储扩展](storage.md)
 
+所有示例从仓库根目录准备依赖，并连接已经运行的业务服务。地址、用户凭证和开发服务的准备方式见 [快速开始](getting-started.md)。SDK 示例中的写操作会创建数据，使用专用测试服务。
+
 ## SDK 的公开接口
 
 Go、Rust、TypeScript / Node.js、Python 提供普通业务方法和工作区对象。
@@ -11,6 +13,9 @@ Go、Rust、TypeScript / Node.js、Python 提供普通业务方法和工作区�
 典型流程：创建项目 → 创建数据集 → 创建工作区 → 保存 GeoJSON → 发布。
 工作区对象维护草稿版本，发布时生成并保留请求 ID。修改失败时保留原版本；
 先查询冲突或刷新工作区，再决定是否重做修改。写操作和重试由调用方明确发起。
+
+同一工作区对象的修改由语言自身的机制协调：Rust 使用可变借用，Go 使用互斥锁，
+Python 使用 RLock，TypeScript 进行同句柄并发校验。多个独立对象的并发编辑由服务端乐观版本检查协调。
 
 默认 SDK 地址 `http://127.0.0.1:7882`，控制台 HTTP 地址使用另一个端口。
 SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒，消息上限 4 MiB。
@@ -36,14 +41,15 @@ with Client("http://127.0.0.1:7882", os.environ["GL_TOKEN"]) as client:
     })
     receipt = draft.publish("新增道路")
     rows = client.features(project.id, dataset.id, revision=receipt["revision"])
+    print(receipt["revision"], rows)
 ```
 
-业务资源使用不可变数据类；要素、差异和审计使用普通字典。完整流程见
+在当前环境设置 `GL_TOKEN` 后运行此示例，输出发布修订及该修订的要素。业务资源使用不可变数据类；要素、差异和审计使用普通字典。完整流程见
 [Python 示例](../sdk/python/tests/smoke.py)。
 
 ## Rust
 
-客户端 crate 为 [geoledger-client](../sdk/rust/Cargo.toml)。
+客户端 crate 为 [geoledger-client](../sdk/rust/Cargo.toml)，位于同一 Cargo 工作区。以下代码放在 Tokio 异步函数中，`endpoint` 和 `token` 为应用配置的服务地址与令牌。
 
 ```rust,ignore
 use geoledger_client::Client;
@@ -66,7 +72,7 @@ let receipt = draft.publish("新增道路").await?;
 
 ## Go
 
-模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)。所有网络调用接受标准 `context.Context`。
+模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.23+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`token` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
 
 ```go
 client, err := geoledger.Dial(endpoint, token)
@@ -99,6 +105,8 @@ npm run build --prefix sdk/ts
 
 ```typescript
 import { Client } from "@geoledger/client";
+const endpoint = process.env.GL_ENDPOINT ?? "http://127.0.0.1:7882";
+const token = process.env.GL_TOKEN!;
 const client = new Client(endpoint, token);
 try {
   const project = await client.createProject("城市道路");
@@ -118,6 +126,19 @@ try {
 大整数读为 `bigint`。`parseJson` / `stringifyJson` 用于精确 JSON 读写，保持大整数的精确表示。
 也可直接传原始 GeoJSON 文本。对象中的大整数使用 `bigint`，也可通过原始文本保存精确数值。
 完整示例见 [TypeScript 示例](../sdk/ts/test/smoke.cjs)。此 SDK 面向 Node.js。
+
+## 运行完整示例
+
+四个语言的可执行示例从私有 `GL_TOKEN_FILE` 读取测试身份，连接 `GL_ENDPOINT` 指定的服务。设置专用测试服务地址和凭证路径后执行：
+
+```sh
+cargo run --locked -p geoledger-client --example smoke
+python sdk/python/tests/smoke.py
+node sdk/ts/test/smoke.cjs
+go -C sdk/go run ./cmd/smoke
+```
+
+Python SDK 与 TS SDK 分别按上文安装和构建；统一安装与联调流程见 [四语言联调](development.md#四语言联调)。成功时，各示例输出完成提示，业务流程包含创建、精确要素保存、发布、重试和读取。
 
 ## 常用操作
 
@@ -157,7 +178,7 @@ TS 使用 `stringifyJson`；恢复时用 `parseJson` 读取，并将 `expectedWo
 
 大量冲突时错误只含 head、version、total 等摘要，完整内容通过工作区 `conflicts()` 分页查询。
 
-## 浏览器 HTTP
+## HTTP 业务 API
 
 `POST /api/v1/{operation}`，使用 snake_case 操作名，例如 `create_project`、`save`、`publish`、`features`。JSON 请求体字段对应 RPC 请求；HTTP 的 `feature` 为 GeoJSON 对象。列表响应为 JSON 数组，Features 返回 FeatureCollection 或单个 Feature。
 
@@ -166,6 +187,8 @@ curl --fail-with-body http://127.0.0.1:7881/api/v1/create_project \
   -H "Authorization: Bearer $GL_TOKEN" -H 'Content-Type: application/json' \
   --data '{"name":"roads"}'
 ```
+
+Web 控制台通过 Next.js 的 `/api/session` 管理登录和退出，通过 `/api/console` 调用经过校验的业务方法。应用直接使用 HTTP 时调用上面的 GeoLedger 服务端 API，使用自己的 Bearer 令牌。两条路径由同一业务应用层执行权限和事务语义。
 
 业务服务 `GET /` 为 JSON 服务信息；管理界面由独立 Web 项目提供。`GET /health` 为存活检查；`GET /ready` 最多 2 秒检查存储；`GET /metrics` 要求同样的 Bearer 认证。默认同源，跨域授权需由部署网关明确配置。
 

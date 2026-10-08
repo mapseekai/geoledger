@@ -65,6 +65,40 @@ with sync_playwright() as p:
     page.get_by_role('button',name='编辑',exact=True).click()
     assert '18446744073709551615' in page.get_by_label('GeoJSON',exact=True).input_value()
     page.get_by_role('button',name='取消',exact=True).click()
+    page.get_by_role('button',name='查看 GeoJSON',exact=True).click()
+    expect(page.get_by_role('status').filter(has_text='地图已就绪')).to_be_visible(timeout=30000)
+    expect(page.locator('.geojson-map canvas')).to_be_visible()
+    assert '18446744073709551615' in page.locator('pre').inner_text()
+    page.get_by_role('button',name='放大',exact=True).click()
+    page.screenshot(path=str(shots/'next-geojson-map.png'),full_page=True)
+    page.get_by_role('button',name='Close',exact=True).click()
+    # Reopening exercises map cleanup and worker recreation.
+    page.get_by_role('button',name='查看 GeoJSON',exact=True).click()
+    expect(page.get_by_role('status').filter(has_text='地图已就绪')).to_be_visible(timeout=30000)
+    page.get_by_role('button',name='Close',exact=True).click()
+    # A collection exercises point, line and fill layers together.
+    collection=json.loads(feature)
+    collection['geometry']={'type':'GeometryCollection','geometries':[
+        {'type':'MultiPoint','coordinates':[[104,35],[104.01,35.01]]},
+        {'type':'LineString','coordinates':[[103.99,34.99],[104.02,35.02]]},
+        {'type':'Polygon','coordinates':[[[104,35],[104.02,35],[104.02,35.02],[104,35.02],[104,35]]]}]}
+    page.get_by_role('button',name='编辑',exact=True).click()
+    page.get_by_label('GeoJSON',exact=True).fill(json.dumps(collection))
+    page.get_by_role('button',name='保存到工作区',exact=True).click()
+    page.get_by_role('button',name='查看 GeoJSON',exact=True).click()
+    expect(page.get_by_role('status').filter(has_text='地图已就绪')).to_be_visible(timeout=30000)
+    page.screenshot(path=str(shots/'next-geojson-collection.png'),full_page=True)
+    page.set_viewport_size({'width':390,'height':844})
+    expect(page.locator('.geojson-map canvas')).to_be_visible()
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))))')
+    page.evaluate('() => Promise.all(document.getAnimations().map(animation => animation.finished))')
+    page.screenshot(path=str(shots/'next-geojson-mobile.png'),full_page=True)
+    page.get_by_role('button',name='Close',exact=True).click()
+    page.set_viewport_size({'width':1440,'height':960})
+    page.get_by_role('button',name='编辑',exact=True).click()
+    page.get_by_label('GeoJSON',exact=True).fill(feature)
+    page.get_by_role('button',name='保存到工作区',exact=True).click()
     captured=[]
     def interrupted(route):
         body=route.request.post_data_json
@@ -167,6 +201,7 @@ with sync_playwright() as p:
     command({'action':'publish','project':edge,'workspace':next_workspace['id'],'version':next_saved['version'],'requestId':str(uuid.uuid4()),'message':'snapshot two'})
     page.get_by_role('button',name='下一页',exact=True).click()
     page.get_by_role('row').filter(has=page.get_by_role('cell',name='f-20',exact=True)).get_by_role('button',name='查看 GeoJSON',exact=True).click()
+    expect(page.get_by_role('status').filter(has_text='添加几何坐标后')).to_be_visible()
     assert 'late' in page.locator('pre').inner_text() and 'second' not in page.locator('pre').inner_text()
     page.goto(origin+'/projects')
     expect(page.get_by_role('link',name=name,exact=True)).to_be_visible()

@@ -8,6 +8,7 @@ import {
   type Project,
   type Workspace,
 } from "@/lib/browser-api";
+import { GeoJSONPreview } from "./geojson-preview";
 import { featureText, geometryType, pretty } from "@/lib/geojson";
 import {
   publication,
@@ -345,6 +346,7 @@ export function FeatureList({
       </Panel>
       {inspect && (
         <Modal title={`要素 ${inspect.id}`} close={() => setInspect(undefined)}>
+          <GeoJSONPreview raw={inspect.geojson} />
           <pre className="json-view">{pretty(inspect.geojson)}</pre>
         </Modal>
       )}

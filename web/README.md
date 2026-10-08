@@ -1,76 +1,78 @@
 # GeoLedger Console
 
-独立的 Next.js 管理应用。浏览器通过 HTTP 访问此项目；Next.js 的 Node.js
-服务端使用 `@geoledger/client` 业务 SDK 连接 GeoLedger gRPC。Web 与业务服务可独立构建和部署。
+<img src="public/logo.svg" alt="GeoLedger Console" width="180">
 
-技术栈按 npm stable 锁定：Next.js 16.4、React 19.3、TypeScript 7、Tailwind CSS 4.3，
-shadcn/ui 源码组件（Radix）与 lucide 图标。以 `package-lock.json` 为可复现安装依据。
+GeoLedger Console 提供空间数据的协作管理界面：项目与数据集管理、GeoJSON 编辑、工作区发布、冲突解决、版本撤销、成员权限和审计查询。浏览器使用 HTTP，Next.js 的 Node.js 服务端通过 `@geoledger/client` 连接 GeoLedger gRPC，数据与权限由业务服务统一管理。
+
+桌面与手机操作见 [控制台教程](../docs/console.md)。[浏览器验证](../docs/development.md#控制台浏览器验证) 可生成登录页、项目页和手机布局截图，输出到 `--screenshots` 指定目录。
+
+## 获取代码
+
+按照 [仓库克隆说明](../README.md#获取代码) 获取完整仓库。以下命令均从仓库根目录执行；`web/` 通过本地包依赖使用 `sdk/ts`。
+
+## 环境准备
+
+- [Node.js 22](https://nodejs.org/en/download) 与随附 npm，和 Web Dockerfile、主 CI 保持一致。
+- 已运行的 GeoLedger 服务及管理员分配的令牌，启动方式见 [快速开始](../docs/getting-started.md)。
+- OpenSSL 或 Python 3，用于生成随机会话密钥。
+
+```sh
+node --version
+npm --version
+```
+
+依赖以 `package-lock.json` 为安装依据。技术栈为 Next.js 16.4、React 19.3、TypeScript 7、Tailwind CSS 4.3，组件采用 shadcn/ui 源码与 Radix、lucide 图标。
 
 ## 本地启动
 
-在仓库根目录执行（Node.js 22）：
+### 安装依赖
+
+先构建 TS SDK，再安装控制台依赖：
 
 ```sh
 npm ci --prefix sdk/ts
 npm --prefix sdk/ts run build
 npm ci --prefix web
-cp web/.env.example web/.env.local
 ```
 
-编辑 `.env.local`：设置 `GL_WEB_ENDPOINT` 为 GeoLedger 的 gRPC 地址；
-设置 `GL_WEB_ORIGIN` 为浏览器实际访问的完整 origin；生成并填入至少 32 字符的
-随机 `GL_WEB_SESSION_SECRET`（例如 `openssl rand -base64 48`）。凭证保存在本地环境配置或秘密管理系统中。
+### 配置本地环境
+
+首次配置时创建本地文件：
+
+```sh
+cp web/.env.example web/.env.local
+openssl rand -base64 48
+```
+
+将生成的随机值填入 `web/.env.local` 的 `GL_WEB_SESSION_SECRET`。也可用 `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'` 生成密钥。配置文件采用以下字段：
+
+| 字段 | 默认值 / 要求 |
+|---|---|
+| `GL_WEB_ENDPOINT` | `http://127.0.0.1:7882`，GeoLedger 的 gRPC 地址 |
+| `GL_WEB_ORIGIN` | `http://localhost:3000`，与浏览器访问的协议、主机和端口一致 |
+| `GL_WEB_SESSION_SECRET` | 至少 32 字符的随机密钥，保存在本地配置或秘密管理系统 |
+
+### 开发服务器
+
+保持后端运行，在另一个终端执行：
 
 ```sh
 npm --prefix web run dev
 ```
 
-访问 `http://localhost:3000`，输入管理员分配的令牌。默认后端地址为
-`http://127.0.0.1:7882`。SDK 是工作区的本地包依赖；修改 SDK 后重新构建 SDK。
+终端显示 Ready 后，访问 `http://localhost:3000`。输入用户令牌，进入项目列表；侧栏显示存储后端与“已连接”。此命令运行带热更新的本地开发服务，TS SDK 修改后先重新构建 SDK。
 
-## 生产运行
-
-```sh
-npm --prefix web run build
-npm --prefix web start
-```
-
-生产服务使用固定的 `GL_WEB_SESSION_SECRET`，多实例共享同一密钥和配置。
-`GL_WEB_ORIGIN` 在非 loopback 环境必须使用 HTTPS；通过反向代理终结 TLS，
-让 Node 服务只监听内网。SDK 对远程服务可用 `https://` 校验 gRPC TLS 证书。
-反向代理应设置请求体大小、连接数和登录速率限制，并保留浏览器的 Origin。
-
-也可从仓库根目录构建镜像：
+使用其他端口时，同时设置 `GL_WEB_ORIGIN`。例如将其改为 `http://localhost:3001` 后执行：
 
 ```sh
-docker build -f web/Dockerfile -t geoledger-console .
-# 在环境中设置 GL_WEB_SESSION_SECRET，再启动组合：
-docker compose --profile console up --build
+npm --prefix web run dev -- --port 3001
 ```
 
-Web 通过统一业务服务访问数据；切换 SQLite/PostGIS 时在 GeoLedger 服务端配置存储后端。
-Web 镜像以非 root 用户运行，包含 standalone 产物、SDK 和本地字体/静态资源。
-构建使用源码和锁定依赖，运行时通过环境配置注入密钥和业务服务地址。
+浏览器始终访问配置中的完整 origin。
 
-## 开发结构
+## 构建、测试与部署
 
-- `src/app/api`：登录/退出与已认证浏览器业务接口。
-- `src/lib/operations.ts`：严格白名单请求到 SDK 业务方法的映射。
-- `src/components`：浏览器页面交互，通过 HTTP 调用服务端业务接口。
-- `src/components/ui`：shadcn/ui 源组件，可维护和定制。
-- `src/app/globals.css`：管理后台主题与响应式布局。
-
-UI 请求版本号使用十进制字符串，服务端转换为 SDK bigint。要素内容使用原始
-GeoJSON 文本，展示/补齐 ID 使用 lossless-json；保持原始数字的精度。
-访问令牌放入加密、签名的 HttpOnly/SameSite=Strict Cookie，会话最多 8 小时，
-HTTPS 下启用 Secure。控制台令牌上限为 2000 个 ASCII 字符；较大的企业 JWT
-需由身份提供方精简 claims，或通过 SDK 使用。所有业务请求仍由 GeoLedger 检查权限与令牌有效性。
-
-待确认的发布意图（项目、工作区、版本、说明、请求 ID）暂存在本标签页的
-sessionStorage，保存恢复发布所需的请求标识和版本信息。断线、刷新和会话过期后可原样重试；
-主动退出会清除此记录，退出前请先确认发布结果。写操作由用户明确发起，发布重试复用原请求。
-
-## 验证
+### 检查与构建
 
 ```sh
 npm --prefix web test
@@ -79,15 +81,48 @@ npm --prefix web run format:check
 npm --prefix web run build
 ```
 
-完整浏览器回归见 [控制台文档](../docs/console.md)。
+生产构建输出至 `web/.next`；浏览器与真实服务联调入口见 [开发指南](../docs/development.md#控制台浏览器验证)。
 
-## 设计来源
+### 生产运行
 
-管理后台布局：深色侧边导航（项目上下文、数据管理 / 系统管理分组、服务状态与会话），
-顶部面包屑与连接状态，内容区由页面标题、统计卡片、项目上下文卡片和表格面板组成。
-中性灰白界面，GeoLedger 橙色作为唯一强调色；文字与实心按钮使用深橙 `#cc3a05`
-以满足 WCAG AA 对比度，亮橙仅用于标志和指示元素。8px 控件 / 12px 卡片圆角、细边框、
-轻阴影；状态与角色使用带圆点的色彩徽标。1024px 以下侧边栏切换为抽屉，640px 以下工具栏与统计卡片紧凑排列。
-使用本地打包的 Inter；登录页标题使用开源 Newsreader（中文衬线采用系统字体）。
-Logo 使用 [GeoLedger SVG 标志](public/logo.svg)；深色背景中的标志主体跟随文字颜色。
-shadcn/ui 源码基于 MIT 许可，参见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+完成构建并配置运行环境后执行：
+
+```sh
+npm --prefix web start
+```
+
+生产服务使用固定的 `GL_WEB_SESSION_SECRET`，多实例共享密钥和 origin 配置。公开入口使用 HTTPS，反向代理终结 TLS；Node 服务监听内网，代理配置请求体大小、连接数、登录速率和 Origin 转发。SDK 的 `https://` 地址启用 gRPC 服务端证书验证。
+
+### 容器运行
+
+```sh
+docker build -f web/Dockerfile -t geoledger-console .
+export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
+docker compose --profile console up --build -d
+```
+
+Compose 启动业务服务和控制台，控制台默认使用 `http://localhost:3000`。镜像以非 root 用户运行，包含 standalone 产物、SDK 和本地字体/静态资源；运行时注入会话密钥和业务服务地址。持久化与部署配置见 [生产运行](../docs/production.md#容器部署)。
+
+## 贡献
+
+问题反馈和 Pull Request 流程见 [仓库贡献说明](../README.md#贡献)；修改 Web 后完成本页检查和相关浏览器验证。
+
+| 路径 | 职责 |
+|---|---|
+| `src/app/api` | 登录、退出与认证后的浏览器接口 |
+| `src/lib/operations.ts` | 已验证的请求到 TS SDK 业务方法的映射 |
+| `src/components` | 页面交互，通过 HTTP 调用业务接口 |
+| `src/components/ui` | 可维护、可定制的 shadcn/ui 源组件 |
+| `src/app/globals.css` | 主题、布局与响应式样式 |
+
+版本号在浏览器请求中用十进制字符串表达，服务端转换为 bigint。GeoJSON 使用原始文本和 lossless-json，保留大整数精度；要素查看弹窗通过 MapLibre GL JS 按需加载 WGS 84 几何预览，支持自动定位、缩放和拖动，使用本地纯色背景；认证会话和发布恢复行为见 [控制台教程](../docs/console.md#发布结果确认与恢复)。
+
+项目采用 [MIT 许可证](../LICENSE)，字体与组件许可见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+
+## 界面设计
+
+控制台采用管理后台布局：深色侧边导航展示项目上下文、数据管理与系统管理分组、服务状态和当前会话；顶部提供面包屑与连接状态，内容区使用统计卡片、项目上下文卡片和表格面板组织操作。
+
+界面以中性灰白为底色，GeoLedger 橙色为强调色，文字与实心按钮使用深橙 `#cc3a05`。表格提供清晰的行分隔、悬停反馈和操作菜单；手机布局采用抽屉导航和自适应工具栏。
+
+Inter 与 Newsreader 字体本地打包，中文衬线采用系统字体。[GeoLedger SVG 标志](public/logo.svg) 用于登录页、导航和浏览器图标，深色背景中主体跟随文字颜色。相关主题实现见 `src/app/globals.css`，组件和字体许可见 [第三方说明](THIRD_PARTY_NOTICES.md)。

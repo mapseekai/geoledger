@@ -1,6 +1,6 @@
 # 生产运行
 
-[项目概览](../README.md) · [存储扩展](storage.md) · [验证记录](production-review.md)
+[项目概览](../README.md) · [存储扩展](storage.md) · [开发验证](development.md)
 
 ## 部署形态
 
@@ -9,6 +9,38 @@
 SQLite 适合单机部署和较轻写入，写事务串行；本地可靠磁盘、持久化目录、WAL/FULL synchronous 是运行前提。活动 SQLite 数据目录使用本地可靠文件系统。PostGIS 适合更高并发写入、集中备份与数据库运维。20 个用户的业务目标需要结合实际几何、编辑量和磁盘性能验收。
 
 源码附 [Dockerfile](../Dockerfile)、[Compose](../compose.yaml) 和 [systemd 示例](../deploy/geoledger.service)。容器的 `/data` 必须挂载持久化卷。生产环境在可信网关后暴露端口；示例默认对本机开放。
+
+## 本机与 systemd 部署
+
+从仓库根目录构建并运行生产二进制：
+
+```sh
+cargo build --release --locked --bins
+./target/release/geoledger-server --data-dir ./geoledger-data
+```
+
+使用专用操作系统账号，将二进制和 [systemd 示例](../deploy/geoledger.service) 安装到目标机器，按实际路径、用户和环境文件调整 unit。服务的数据目录和凭证文件由运行账号持有。构建平台的工具准备见 [快速开始](getting-started.md#环境准备)。
+
+## 容器部署
+
+```sh
+docker compose up --build -d
+```
+
+配置使用命名卷 `geoledger-data` 持久化 `/data`，将 HTTP 和 gRPC 映射到本机 7881/7882。检查就绪与日志：
+
+```sh
+curl --fail http://127.0.0.1:7881/ready
+docker compose logs geoledger
+```
+
+在容器内使用生成的私有管理员文件验证业务连接：
+
+```sh
+docker compose exec geoledger gl --token-file /data/tokens.json info
+```
+
+控制台组合部署按 [Web 容器运行](../web/README.md#容器运行) 先设置会话密钥，再启用 console profile。`docker compose down` 停止组合服务，命名卷按数据保留策略管理。
 
 ## 配置
 
@@ -27,6 +59,8 @@ SQLite 适合单机部署和较轻写入，写事务串行；本地可靠磁盘�
 
 启动时校验显式配置，确保使用指定存储和身份文件。新库自动初始化，已有库必须匹配格式 5。旧版本数据应导出并导入到新库，部署前核对数据及历史保留要求。
 
+根目录 [.env.example](../.env.example) 提供当前服务配置模板。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
+
 ## 身份与网络
 
 初次默认启动生成 admin 凭证；多人使用独立凭证与项目成员关系。静态凭证文件或 JWT 二选一。JWT 接受受信任 JWKS 中的 RS256 密钥，校验签名、issuer、audience、exp、可选 nbf 和 subject。文件由运维分发，密钥轮换后重启服务；在线 JWKS 自动刷新与集中即时撤销需由身份网关提供。
@@ -44,7 +78,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 - 列表默认 100、最多 1000 条；响应还有展开内存预算，复杂属性需降低页大小。
 - 磁盘预算覆盖原始要素、历史、索引、WAL、审计与备份，按数据增长和保留策略预留空间。
 
-本版本的容量验收结合当前存储格式、几何实现、RPC 路径和目标环境开展。已测场景、环境与结果见 [验证记录](production-review.md)。
+容量验收结合当前存储格式、几何类型、历史深度、RPC 请求模型和目标环境开展，测量吞吐、延迟分位数与磁盘增长。专项测试入口见 [容量验证](development.md#容量验证)。
 
 ## 运维与恢复
 

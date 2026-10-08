@@ -2,6 +2,8 @@
 
 [项目概览](../README.md) · [开发验证](development.md)
 
+本指南面向存储适配器开发者。现有 SQLite 与 PostGIS 后端通过相同接口提供事务、版本历史、发布收据和审计，扩展后端时沿用客户端协议和应用层合并规则。
+
 ## 分层与接入
 
 `geoledger-server` 负责传输、认证和资源上限；`geoledger-engine::Application` 负责授权、校验、三方合并与操作编排；[repository.rs](../crates/engine/src/repository.rs) 定义存储语义。SQL、PostgreSQL 客户端和 SQLite 连接都封装在 [session 适配器](../crates/engine/src/session.rs) 中。
@@ -68,3 +70,5 @@ PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工�
 ## 新后端验收
 
 运行 [conformance](../crates/engine/tests/conformance.rs) 同一组业务场景，并增加该后端的事务失败、锁等待期限、重启和崩溃恢复测试。必须覆盖并发发布、草稿竞态、删除遮蔽、精确数字、XYZ 几何、旧解决选择失效、权限隔离、失败批次回滚、原请求重试、历史分页与不可变性。单独运行容量用例验证索引与真实数据规模。
+
+接入步骤为实现 trait、配置服务端后端选择、运行共用 conformance 套件，再完成故障恢复和专项容量验收。构建与测试命令见 [开发指南](development.md#回归测试入口)，上线配置和备份要求见 [生产运行](production.md)。

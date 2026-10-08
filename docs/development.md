@@ -2,6 +2,8 @@
 
 [项目概览](../README.md) · [存储接口](storage.md)
 
+开发者在仓库根目录构建 Cargo 工作区，Web 使用独立 npm 项目。安装工具与验证版本见 [环境准备](getting-started.md#环境准备)，本地服务和热更新控制台分别见 [快速开始](getting-started.md) 与 [Web 文档](../web/README.md#本地启动)。
+
 ## 代码结构
 
 | 目录 | 职责 |
@@ -14,14 +16,24 @@
 | crates/cli | 基于 Rust SDK 的远程命令行 |
 | web | 独立 Next.js 控制台、服务端 TS SDK 与浏览器 HTTP |
 
-构建依赖 Rust 1.88+（推荐 1.92）、C 编译器、protoc、pkg-config、OpenSSL 开发库。SQLite 后端随二进制提供，可直接运行。
+## 构建与检查
+
+构建 debug 服务端、CLI 和 Rust SDK 示例，再运行仓库检查：
 
 ```sh
 cargo build --locked --workspace --bins --examples
 ./scripts/check.sh
 ```
 
-常规检查包括文档链接、fmt、Clippy、Rust 单元、SQLite 一致性、事务失败与真实服务测试。引擎单元测试还会独立运行，验证默认 serde_json 特性配置下的行为。DB 测试仅使用隔离的 `geoledger_test` 数据库；设置 `GL_TEST_DATABASE_URL` 后会追加 PostGIS 的相同 conformance 套件、审计提交顺序并发测试和存储测试。
+`scripts/check.sh` 使用 Python 3 和 Bash，依次执行文档检查、rustfmt、Clippy、独立引擎单元测试和工作区测试。完整检查中的真实服务用例会监听临时本地端口。
+
+PostGIS 回归通过环境中的 `GL_TEST_DATABASE_URL` 启用，目标库名为 `geoledger_test`。测试服务账号需要对应隔离库的建表和事务权限。Web 检查命令见 [Web 构建与测试](../web/README.md#构建测试与部署)。
+
+生产构建：
+
+```sh
+cargo build --release --locked --bins
+```
 
 ## 生成 SDK
 
@@ -30,7 +42,10 @@ SDK 业务层手工维护，公开接口提供业务客户端、业务模型和�
 ```sh
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
 go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+python3 -m venv .venv
+. .venv/bin/activate
 python -m pip install grpcio-tools==1.78.0
+export PATH="$(go env GOPATH)/bin:$PATH"
 npm ci --prefix sdk/ts
 ./scripts/generate-sdk.sh
 ```
@@ -41,9 +56,21 @@ npm ci --prefix sdk/ts
 
 启动一个隔离服务，设置 `GL_ENDPOINT` 和 `GL_TOKEN_FILE`，运行 [test-sdks.sh](../scripts/test-sdks.sh)。令牌通过私有文件读取，脚本通过公开业务接口创建独立项目、保存精确数字、发布、重复原请求和读回。分别对 SQLite/PostGIS 地址运行。
 
+在一个终端启动专用服务：
+
 ```sh
+./target/debug/geoledger-server --data-dir ./target/sdk-test
+```
+
+另一个终端准备 Python 环境、TS 依赖并运行联调（Go 1.23+ 已在 PATH）：
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install ./sdk/python
+npm ci --prefix sdk/ts
 export GL_ENDPOINT=http://127.0.0.1:7882
-export GL_TOKEN_FILE="$PWD/geoledger-data/tokens.json"
+export GL_TOKEN_FILE="$PWD/target/sdk-test/tokens.json"
 ./scripts/test-sdks.sh
 ```
 
@@ -55,22 +82,42 @@ SDK 示例与测试会写入新的测试项目，请使用专用测试服务。C
 
 容量测试需要显式启用并记录环境、数据规模、几何类型、索引、请求模型和耗时分位数。分别记录 SQL 直接播种和公共接口导入的验证结果；生产 SLA 通过目标环境中的专项容量与延迟验收确定。
 
-### 2026-10-08 格式 5 修复验证
+## 回归测试入口
 
-本地 macOS arm64、Rust 1.95 nightly、Node.js 22、Python 3.12 环境完成带隔离 PostGIS 库的 `scripts/check.sh`：SQLite/PostGIS 各 15 个一致性用例通过，包括每条含 7,000 个数组元素的 1,000 条要素发布及冲突分页。原有超时和测试规模保持不变；审计提交顺序、事务回滚、服务重启和存储契约检查通过。
+| 入口 | 验证内容 |
+|---|---|
+| [存储一致性](../crates/engine/tests/conformance.rs) | SQLite/PostGIS 的授权、并发编辑、发布幂等、合并冲突、历史与分页语义 |
+| [事务与持久化](../crates/engine/tests/durability.rs) | SQLite 锁等待期限、事务回滚、原请求重试与重启读取 |
+| [存储契约](../crates/engine/tests/storage.rs) | 后端事务接口与不可变记录约束 |
+| [真实服务](../crates/server/tests/service.rs) | HTTP/gRPC、身份校验、并发发布与重启 |
+| [冲突分页](../crates/server/tests/rpc_errors.rs) | HTTP/2 错误摘要与完整冲突分页查询 |
+| [Rust SDK](../sdk/rust/tests/client.rs) | 发布结果确认与原请求恢复 |
+| [Go SDK](../sdk/go/client_test.go)、[Python SDK](../sdk/python/tests/test_client.py)、[TS SDK](../sdk/ts/test/client.test.cjs) | JSON 精度、显式编辑、工作区版本与发布重试 |
+| [四语言联调](../scripts/test-sdks.sh) | SDK 连接实际服务完成创建、编辑、发布与读取 |
 
-四语言 SDK 的单元测试及 `test-sdks.sh` 在两个后端通过。Web 单元测试、类型检查、格式检查和生产构建通过；真实浏览器验证覆盖登录、项目创建、弹窗关闭与重新打开、表格筛选和退出。另用独立 Rust crate 验证默认、`raw_value`、`arbitrary_precision` 特性组合下的数字与保留键行为。本次验证范围为上述正确性回归与浏览器交互场景；百万要素容量基线见 [容量记录](production-review.md#容量方法)，完整浏览器套件的执行入口见下节。生产延迟指标通过目标环境专项验收确定。
+## 容量验证
+
+[容量测试](../crates/engine/tests/capacity.rs) 在百万 Point 要素上运行 20 个独立身份的分页查询、草稿保存、发布、原请求重试与读取，并核对版本和历史一致性。
+
+```sh
+cargo test --locked -p geoledger-engine --test capacity -- --ignored --nocapture
+GL_CONFORMANCE_BACKEND=postgis cargo test --locked -p geoledger-engine --test capacity -- --ignored --nocapture
+```
+
+SQLite 用例使用临时目录并自动清理；PostGIS 用例使用 `GL_TEST_DATABASE_URL` 指定的隔离 `geoledger_test` 数据库。准备数 GB 可用空间。用例通过 SQL 播种建立数据集，操作耗时从播种完成后开始测量；公共接口导入、复杂几何和长期运行按目标业务模型单独验收。
 
 ## 控制台浏览器验证
 
-[控制台说明](console.md) 包含登录、资源管理和失败恢复流程。
+[控制台说明](console.md) 包含登录、资源管理和发布结果确认与恢复流程。
 Web 的安装、构建和单元检查见 [web/README.md](../web/README.md)。
 真实浏览器验证需要 Python Playwright 和 Chromium：
 
 ```sh
-python3 -m pip install playwright
-python3 -m playwright install chromium
-# 启动隔离的 geoledger-server 与已配置的 Web 项目后：
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install playwright
+python -m playwright install chromium
+# 在独立终端用 --data-dir ./target/console-test 启动后端，按 Web 文档配置并启动控制台后：
 python3 scripts/test-console.py \
   --url http://localhost:3000 \
   --token-file target/console-test/tokens.json \
@@ -81,3 +128,15 @@ python3 scripts/test-console.py \
 测试会写入新项目，验证登录、CSRF、精确数字、断线后原请求重试、分页、
 撤销、权限、审计、退出与手机布局。只对隔离测试服务运行。
 前端检查独立于 Rust 的 `check.sh`，CI 单独安装依赖并执行 Web 检查。
+
+截图由 `--screenshots artifacts` 生成：`artifacts/next-login.png`、`artifacts/next-projects.png`、`artifacts/next-mobile.png` 和 `artifacts/next-login-mobile.png`。这些是本地生成产物。
+
+## 贡献流程
+
+1. 在 [GitHub Issues](https://github.com/mapseekai/geoledger/issues) 描述需求或问题，提供服务版本、存储后端、复现步骤和期望结果；日志使用脱敏内容。
+2. 获取仓库，阅读 [AGENTS.md](../AGENTS.md)，创建针对单个问题的工作分支。
+3. 保持 core、Application、存储适配器和传输层的职责；业务操作统一经过 Application，SQL 封装在 session 适配器。
+4. 为行为修改增加对应回归，运行 `scripts/check.sh`；Web 修改完成 Web 检查及相关浏览器场景，PostGIS 修改完成隔离库回归。
+5. 提交 Pull Request，说明问题、最终行为、验证命令与范围。主 [CI](../.github/workflows/ci.yml) 覆盖 Linux、Windows、Rust 最低版本、Web 和双后端 SDK 联调。
+
+协议以 `proto/geoledger/v1/geoledger.proto` 为统一来源，生成绑定按本页工具版本更新。存储结构变化使用显式格式版本和新库初始化，格式与恢复要求见 [存储接口](storage.md)。文档保持主题集中、仓库相对链接与当前行为说明；项目使用 [MIT 许可证](../LICENSE)。

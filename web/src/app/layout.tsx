@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/newsreader";
+import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
 export const metadata: Metadata = {
   title: "GeoLedger Console",
