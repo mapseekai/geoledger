@@ -38,6 +38,7 @@ pub struct PgSettings {
     pub config: tokio_postgres::Config,
     pub mode: SslMode,
     root_cert: Option<PathBuf>,
+    verify_chain: bool,
     client_cert: Option<(PathBuf, PathBuf)>,
 }
 /// Summary that is safe to log or validate (no secrets).
@@ -226,11 +227,13 @@ impl PgSettings {
             // Require: the driver fails instead of falling back when TLS is refused.
             tokio_postgres::config::SslMode::Require
         });
+        let verify_chain = mode != SslMode::Require || root_cert.is_some();
         let root_cert = root_cert.filter(|r| r != "system").map(PathBuf::from);
         Ok(Self {
             config,
             mode,
             root_cert,
+            verify_chain,
             client_cert,
         })
     }
@@ -266,11 +269,7 @@ impl PgSettings {
             let key = std::fs::read(key).map_err(|e| fail(&e))?;
             builder.identity(native_tls::Identity::from_pkcs8(&cert, &key).map_err(|e| fail(&e))?);
         }
-        let verify_chain = match self.mode {
-            SslMode::Require => self.root_cert.is_some(),
-            _ => true,
-        };
-        builder.danger_accept_invalid_certs(!verify_chain);
+        builder.danger_accept_invalid_certs(!self.verify_chain);
         builder.danger_accept_invalid_hostnames(self.mode != SslMode::VerifyFull);
         builder.build().map_err(|e| fail(&e))
     }
@@ -319,6 +318,8 @@ mod tests {
         )?;
         assert_eq!(s.mode, SslMode::Require);
         assert!(s.root_cert.is_none());
+        assert!(s.verify_chain);
+        assert!(!PgSettings::parse("host=localhost sslmode=require")?.verify_chain);
         assert_eq!(s.config.get_user(), Some("a b"));
         assert!(
             PgSettings::parse("host=localhost sslmode=disable")?

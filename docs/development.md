@@ -37,7 +37,7 @@ cargo build --release --locked --bins
 
 ## 生成 SDK
 
-SDK 业务层手工维护，公开接口提供业务客户端、业务模型和业务错误。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：protoc 3.21+、protoc-gen-go 1.36.10、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.11.0。
+SDK 业务层手工维护，公开接口提供业务客户端、业务模型和业务错误。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：protoc 3.21.12、protoc-gen-go 1.36.10、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.13.0。
 
 ```sh
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10

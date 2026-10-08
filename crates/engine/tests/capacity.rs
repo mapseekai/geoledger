@@ -66,8 +66,8 @@ fn million_features_twenty_distinct_writers() -> Result<(), Box<dyn std::error::
             |ctx| {
                 let v: Value = serde_json::from_str(&ctx.get::<String>(0)?)
                     .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
-                let axis: usize = ctx.get(1)?;
-                Ok(v["coordinates"][axis % 2].as_f64())
+                let axis: u32 = ctx.get(1)?;
+                Ok(v["coordinates"][(axis % 2) as usize].as_f64())
             },
         )?;
         let tx = c.transaction()?;

@@ -141,7 +141,8 @@ impl Client {
                 c.busy_timeout(timeout).map_err(sqlite_error)?;
                 c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;")
                     .map_err(sqlite_error)?;
-                c.progress_handler(1000, Some(move || Instant::now() >= deadline));
+                c.progress_handler(1000, Some(move || Instant::now() >= deadline))
+                    .map_err(sqlite_error)?;
                 let flags = FunctionFlags::SQLITE_UTF8
                     | FunctionFlags::SQLITE_DETERMINISTIC
                     | FunctionFlags::SQLITE_INNOCUOUS;
@@ -186,13 +187,15 @@ impl Client {
                 .map_err(sqlite_error)?;
                 c.create_scalar_function("gl_bound", 2, flags, |ctx| {
                     let source: Option<String> = ctx.get(0usize)?;
-                    let axis: usize = ctx.get(1usize)?;
+                    let axis: u32 = ctx.get(1usize)?;
                     let Some(s) = source else {
                         return Ok(None::<f64>);
                     };
                     Ok(crate::geometry::bounds(&s)
                         .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?
-                        .map(|r| [r.min().x, r.min().y, r.max().x, r.max().y][axis.min(3)]))
+                        .map(|r| {
+                            [r.min().x, r.min().y, r.max().x, r.max().y][axis.min(3) as usize]
+                        }))
                 })
                 .map_err(sqlite_error)?;
                 Backend::Sqlite(c)
@@ -458,7 +461,7 @@ impl Drop for Client {
         if self.transaction {
             match &mut self.backend {
                 Backend::Sqlite(c) => {
-                    c.progress_handler(0, None::<fn() -> bool>);
+                    let _ = c.progress_handler(0, None::<fn() -> bool>);
                     let _ = c.execute_batch("ROLLBACK");
                 }
                 Backend::Postgis(c) => {
@@ -696,6 +699,13 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         )
     }
     fn owned_projects(&mut self, subject: &str) -> Result<Row> {
+        if matches!(self.0.backend, Backend::Postgis(_)) {
+            // Serialize quota checks through commit, including when the subject has no projects.
+            self.query_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1,7883))::text",
+                &[&subject],
+            )?;
+        }
         self.query_one("SELECT count(*) FROM gl_project_members m JOIN gl_projects p ON p.id=m.project WHERE m.subject=$1 AND m.role='owner' AND NOT m.removed AND p.state<>'deleted'", &[&subject])
     }
     fn ensure_identity(&mut self, project: &str, subject: &str) -> Result<()> {

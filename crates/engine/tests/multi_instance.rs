@@ -72,6 +72,41 @@ fn scenario(instances: &[Application]) -> TestResult {
         )
     };
 
+    // Quota checks must serialize across independent pools, including the first project.
+    let subject = format!("quota-{}", Uuid::new_v4());
+    let barrier = std::sync::Barrier::new(WRITERS);
+    let quota_apps: Vec<_> = instances
+        .iter()
+        .cloned()
+        .map(|app| {
+            app.with_policy(geoledger_engine::Policy {
+                max_owned_projects: Some(1),
+                ..Default::default()
+            })
+        })
+        .collect();
+    let results = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..WRITERS)
+            .map(|i| {
+                let app = &quota_apps[i % quota_apps.len()];
+                let subject = &subject;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    app.execute(subject, "create_project", json!({"name":"quota race"}))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().map_err(|_| "quota writer panicked"))
+            .collect::<Result<Vec<_>, _>>()
+    })?;
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    for error in results.into_iter().filter_map(Result::err) {
+        assert_eq!(error.status, 403, "{}", error.body);
+    }
+
     // 1. Disjoint edits published concurrently through alternating instances.
     let workspaces = (0..WRITERS)
         .map(|i| open(vec![feature(&dataset, &format!("own-{i}"), i)]))

@@ -107,9 +107,21 @@ pub fn spawn_acceptor(
     grpc: bool,
 ) -> tokio::sync::mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)> {
     let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let pending = Arc::new(tokio::sync::Semaphore::new(64));
     tokio::spawn(async move {
         loop {
-            let (stream, peer) = match listener.accept().await {
+            let permit = tokio::select! {
+                _ = tx.closed() => return,
+                permit = pending.clone().acquire_owned() => match permit {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                },
+            };
+            let accepted = tokio::select! {
+                _ = tx.closed() => return,
+                accepted = listener.accept() => accepted,
+            };
+            let (stream, peer) = match accepted {
                 Ok(accepted) => accepted,
                 Err(error) => {
                     // EMFILE and similar resource errors: back off instead of spinning.
@@ -126,7 +138,12 @@ pub fn spawn_acceptor(
             };
             let tx = tx.clone();
             tokio::spawn(async move {
-                match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {
+                let _permit = permit;
+                let result = tokio::select! {
+                    _ = tx.closed() => return,
+                    result = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)) => result,
+                };
+                match result {
                     Ok(Ok(stream)) => {
                         let _ = tx.send((stream, peer)).await;
                     }
@@ -185,5 +202,45 @@ impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TcpL
 {
     fn connect_info(stream: axum::serve::IncomingStream<'_, TcpListener>) -> Self {
         Self(*stream.remote_addr())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn dropping_receiver_releases_listener_and_stalled_handshakes() -> Result<(), BoxError> {
+        use tokio::io::AsyncReadExt;
+        let dir = tempfile::tempdir()?;
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
+        let files = TlsFiles {
+            cert: dir.path().join("cert.pem"),
+            key: dir.path().join("key.pem"),
+            client_ca: None,
+        };
+        std::fs::write(&files.cert, cert.cert.pem())?;
+        std::fs::write(&files.key, cert.key_pair.serialize_pem())?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let rx = spawn_acceptor(listener, Tls::load(files)?, false);
+        let mut stalled = TcpStream::connect(address).await?;
+        tokio::task::yield_now().await;
+        drop(rx);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut byte = [0];
+            match stalled.read(&mut byte).await {
+                Ok(0) | Err(_) => (),
+                _ => panic!("unexpected TLS data"),
+            }
+            loop {
+                if let Ok(listener) = TcpListener::bind(address).await {
+                    drop(listener);
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        Ok(())
     }
 }

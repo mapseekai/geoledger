@@ -107,7 +107,7 @@ pub trait RepositoryTransaction: Send {
     fn remove_member(&mut self, project: &str, subject: &str) -> Result<()>;
     /// One of active, archived, deleted.
     fn set_project_state(&mut self, project: &str, state: &str) -> Result<()>;
-    /// Count of projects that are not deleted where `subject` is an active owner.
+    /// Lock creation for this subject through commit and count their active owned projects.
     fn owned_projects(&mut self, subject: &str) -> Result<Row>;
     /// Ensure an (inactive, if new) member row exists so audit events can reference `subject`.
     fn ensure_identity(&mut self, project: &str, subject: &str) -> Result<()>;

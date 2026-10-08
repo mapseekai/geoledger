@@ -173,7 +173,9 @@ pub(crate) async fn restore(
                 return Err(e);
             }
         };
-        std::fs::rename(&staging, &target)?;
+        // A target created since the initial check must never be overwritten.
+        std::fs::hard_link(&staging, &target)?;
+        std::fs::remove_file(&staging)?;
         if let Some(dir) = target.parent() {
             #[cfg(unix)]
             File::open(dir)?.sync_all()?;

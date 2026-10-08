@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:25-bookworm-slim AS build
+FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY sdk/ts ./sdk/ts
 COPY web ./web
@@ -17,7 +17,7 @@ RUN --mount=type=secret,id=proxy_ca \
     mv web/.next/static /output/web/.next/static && \
     cp -a web/public /output/web/public && \
     rm -rf sdk/ts/node_modules web/node_modules web/.next
-FROM node:25-bookworm-slim AS runtime
+FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
 COPY --from=build --chown=node:node /output ./
