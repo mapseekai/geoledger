@@ -131,6 +131,14 @@ python3 scripts/test-console.py \
 
 截图由 `--screenshots artifacts` 生成：`artifacts/next-login.png`、`artifacts/next-projects.png`、`artifacts/next-mobile.png` 和 `artifacts/next-login-mobile.png`。这些是本地生成产物。
 
+## 依赖与发布
+
+[audit.sh](../scripts/audit.sh) 是依赖安全门禁（需要网络）：`cargo audit --deny warnings`（RustSec，已接受的公告和理由写在 [.cargo/audit.toml](../.cargo/audit.toml)）、`web/` 与 `sdk/ts/` 的 `npm audit`（运行时依赖 moderate 及以上、全部依赖 high 及以上）、`sdk/go` 的 `govulncheck`、`sdk/python` 的 `pip-audit --strict`。后两个工具未安装时跳过，设置 `GL_AUDIT_REQUIRE_ALL=1` 时视为失败（CI 设置）。`govulncheck` 按运行它的 Go 版本判断标准库公告，使用当前受支持的 Go 版本运行。
+
+[Dependabot](../.github/dependabot.yml) 每周为 Cargo、npm（web、sdk/ts）、Go、pip、GitHub Actions 与 Dockerfile 基础镜像提出更新。Actions 固定到完整 commit SHA 并在注释中标注版本；Dockerfile 基础镜像固定 digest，由 Dependabot 刷新。
+
+发布流程：更新 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml`（PEP 440 形式，如 `0.3.0a1`）的版本，在 `CHANGELOG.md` 增加同名版本段落，合并后在 main 上推送 `vX.Y.Z` 标签。发布 workflow（`.github/workflows/release.yml`）校验标签与各包版本一致，构建 Linux x86_64/aarch64 与 Windows x86_64 二进制（含 SHA256、源码 SBOM 和构建来源证明）、多架构服务与控制台镜像（推送到 GHCR，附 SBOM 与 provenance，cosign 无密钥签名），创建 GitHub Release，并在配置凭证时发布 npm/PyPI SDK、为 Go 模块打 `sdk/go/vX.Y.Z` 标签。协议兼容性由 CI 的 `buf breaking` 对比目标分支检查。
+
 ## 贡献流程
 
 1. 在 [GitHub Issues](https://github.com/mapseekai/geoledger/issues) 描述需求或问题，提供服务版本、存储后端、复现步骤和期望结果；日志使用脱敏内容。
@@ -139,4 +147,4 @@ python3 scripts/test-console.py \
 4. 为行为修改增加对应回归，运行 `scripts/check.sh`；Web 修改完成 Web 检查及相关浏览器场景，PostGIS 修改完成隔离库回归。
 5. 提交 Pull Request，说明问题、最终行为、验证命令与范围。主 [CI](../.github/workflows/ci.yml) 覆盖 Linux、Windows、Rust 最低版本、Web 和双后端 SDK 联调。
 
-协议以 `proto/geoledger/v1/geoledger.proto` 为统一来源，生成绑定按本页工具版本更新。存储结构变化使用显式格式版本和新库初始化，格式与恢复要求见 [存储接口](storage.md)。文档保持主题集中、仓库相对链接与当前行为说明；项目使用 [MIT 许可证](../LICENSE)。
+协议以 `proto/geoledger/v1/geoledger.proto` 为统一来源，生成绑定按本页工具版本更新。存储结构变化使用显式格式版本和前向迁移（`geoledger-server migrate`），格式与恢复要求见 [存储接口](storage.md)。文档保持主题集中、仓库相对链接与当前行为说明；项目使用 [MIT 许可证](../LICENSE)。
