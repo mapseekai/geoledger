@@ -107,7 +107,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 
 启动时校验显式配置，确保使用指定存储和身份文件。新库自动初始化为格式 6；已有库必须匹配当前格式，旧格式的库启动时返回 409 并提示先备份再执行 `geoledger-server migrate`。服务启动从不修改已有库的结构，升级步骤见 [格式升级](#格式升级)。
 
-根目录 [.env.example](../.env.example) 提供当前服务配置模板。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
+根目录 [.env.example](../.env.example) 提供当前服务配置模板，列出服务端和 `gl` 的全部 `GL_*` 参数及默认值，[check-env.py](../scripts/check-env.py) 在 `check.sh` 中校验它与代码一致。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
 
 ## 身份与网络
 
