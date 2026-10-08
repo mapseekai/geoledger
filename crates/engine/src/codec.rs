@@ -10,7 +10,11 @@ use std::io::{self, Write};
 
 pub(crate) fn stored<T: serde::de::DeserializeOwned>(source: &str) -> Result<T> {
     let value = parse(source.as_bytes()).map_err(|error| {
-        Error::new(500, "stored GeoLedger number or JSON violates codec contract").caused_by(error)
+        Error::new(
+            500,
+            "stored GeoLedger number or JSON violates codec contract",
+        )
+        .caused_by(error)
     })?;
     serde_json::from_value(value).map_err(Error::stored_json)
 }
