@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use geoledger_server::{
-    Application, Authentication, Authenticator, JwtAuthenticator, Service, Storage, Tokens,
+    Application, Authentication, Authenticator, JwtAuthenticator, Limits, Rate, Service, Storage,
+    StorageOptions, Tokens,
     tls::{Tls, TlsFiles, TlsListener},
 };
 use std::{
@@ -61,6 +62,41 @@ struct Args {
     /// How often token, JWKS and TLS files are checked for changes (SIGHUP reloads immediately).
     #[arg(long, env = "GL_RELOAD_INTERVAL_SECS", default_value_t = 10)]
     reload_interval_secs: u64,
+    /// Optional plaintext listener serving only /health and /ready (for container probes).
+    #[arg(long, env = "GL_HEALTH_LISTEN")]
+    health_listen: Option<SocketAddr>,
+    /// Concurrent application operations (HTTP + gRPC); excess calls get 429.
+    #[arg(long, env = "GL_MAX_CONCURRENCY", default_value_t = 20)]
+    max_concurrency: usize,
+    /// Upper bound for every operation, including client gRPC deadlines.
+    #[arg(long, env = "GL_REQUEST_TIMEOUT_SECS", default_value_t = 30)]
+    request_timeout_secs: u64,
+    /// Maximum PostgreSQL connections.
+    #[arg(long, env = "GL_DB_POOL_SIZE", default_value_t = 20)]
+    db_pool_size: usize,
+    #[arg(long, env = "GL_DB_STATEMENT_TIMEOUT_SECS", default_value_t = 30)]
+    db_statement_timeout_secs: u64,
+    #[arg(long, env = "GL_DB_LOCK_TIMEOUT_SECS", default_value_t = 10)]
+    db_lock_timeout_secs: u64,
+    /// Sustained requests per second per authenticated subject (0 disables).
+    #[arg(long, env = "GL_RATE_LIMIT_SUBJECT_RPS", default_value_t = 0.0)]
+    rate_limit_subject_rps: f64,
+    #[arg(long, env = "GL_RATE_LIMIT_SUBJECT_BURST", default_value_t = 50.0)]
+    rate_limit_subject_burst: f64,
+    /// Sustained requests per second per client IP, checked before authentication (0 disables).
+    #[arg(long, env = "GL_RATE_LIMIT_IP_RPS", default_value_t = 0.0)]
+    rate_limit_ip_rps: f64,
+    #[arg(long, env = "GL_RATE_LIMIT_IP_BURST", default_value_t = 100.0)]
+    rate_limit_ip_burst: f64,
+    /// Take the client IP from the right-most X-Forwarded-For entry (only behind a trusted gateway).
+    #[arg(long, env = "GL_TRUST_FORWARDED_FOR", default_value_t = false, action = clap::ArgAction::Set)]
+    trust_forwarded_for: bool,
+    /// Seconds to keep serving while /ready reports 503 before closing listeners.
+    #[arg(long, env = "GL_SHUTDOWN_DRAIN_SECS", default_value_t = 0)]
+    shutdown_drain_secs: u64,
+    /// Maximum seconds to wait for in-flight requests after listeners close.
+    #[arg(long, env = "GL_SHUTDOWN_TIMEOUT_SECS", default_value_t = 30)]
+    shutdown_timeout_secs: u64,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Backend {
@@ -89,6 +125,13 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Exit 0 when the local server reports ready (for container health checks).
+    /// Uses GL_HEALTH_LISTEN when set, otherwise the HTTP listener.
+    Probe {
+        /// Explicit URL to probe instead of the configured listener.
+        #[arg(long)]
+        url: Option<String>,
+    },
 }
 #[tokio::main]
 async fn main() {
@@ -99,9 +142,43 @@ async fn main() {
                 .unwrap_or_else(|_| "geoledger_server=info,geoledger_engine=info".into()),
         )
         .init();
-    if let Err(e) = run(Args::parse()).await {
-        eprintln!("geoledger-server: {e}");
-        std::process::exit(1);
+    // Exit explicitly: a forced shutdown must not wait for abandoned blocking work.
+    let code = match run(Args::parse()).await {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("geoledger-server: {e}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+fn loopback(addr: SocketAddr) -> SocketAddr {
+    match addr.ip() {
+        std::net::IpAddr::V4(ip) if ip.is_unspecified() => {
+            SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, addr.port()))
+        }
+        std::net::IpAddr::V6(ip) if ip.is_unspecified() => {
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, addr.port()))
+        }
+        _ => addr,
+    }
+}
+async fn probe(args: &Args, url: Option<String>) -> Result<(), BoxError> {
+    let url = url.unwrap_or_else(|| match args.health_listen {
+        Some(addr) => format!("http://{}/ready", loopback(addr)),
+        None if args.tls_cert.is_some() => format!("https://{}/ready", loopback(args.http)),
+        None => format!("http://{}/ready", loopback(args.http)),
+    });
+    // The probe targets this host's own listener; certificate identity is checked by real clients.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .danger_accept_invalid_certs(true)
+        .build()?;
+    let response = client.get(&url).send().await?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("{url} returned {}", response.status()).into())
     }
 }
 /// Where authentication material comes from, for reloads.
@@ -157,6 +234,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
             return Ok(());
         }
         Some(Command::HashTokens { input, out }) => return hash_tokens(&input, &out),
+        Some(Command::Probe { ref url }) => return probe(&args, url.clone()).await,
         None => {}
     }
     let jwt = args.jwks_file.is_some() || args.jwks_url.is_some();
@@ -268,14 +346,32 @@ async fn run(args: Args) -> Result<(), BoxError> {
         (AuthSource::TokenFile(path), initial)
     };
     let authentication = Arc::new(Authentication::new(initial));
-    let app = Application::new(storage);
+    let app = Application::with_options(
+        storage,
+        StorageOptions {
+            pool_size: args.db_pool_size.max(1),
+            statement_timeout: Duration::from_secs(args.db_statement_timeout_secs.max(1)),
+            lock_timeout: Duration::from_secs(args.db_lock_timeout_secs.max(1)),
+        },
+    );
     let bootstrap = app.clone();
     tokio::task::spawn_blocking(move || bootstrap.migrate()).await??;
     let backend = app.backend();
-    let service = Service::with_authentication(app, authentication.clone());
+    let limits = Limits {
+        max_concurrency: args.max_concurrency.max(1),
+        request_timeout: Duration::from_secs(args.request_timeout_secs.max(1)),
+        per_subject: Rate::new(args.rate_limit_subject_rps, args.rate_limit_subject_burst),
+        per_ip: Rate::new(args.rate_limit_ip_rps, args.rate_limit_ip_burst),
+        trust_forwarded_for: args.trust_forwarded_for,
+    };
+    let service = Service::with_authentication(app, authentication.clone()).with_limits(limits);
     // Bind both before reporting readiness. A failed listener leaves no half-started service.
     let http = tokio::net::TcpListener::bind(args.http).await?;
     let grpc = tokio::net::TcpListener::bind(args.grpc).await?;
+    let health = match args.health_listen {
+        Some(addr) => Some(tokio::net::TcpListener::bind(addr).await?),
+        None => None,
+    };
     let http_addr = http.local_addr()?;
     let grpc_addr = grpc.local_addr()?;
     if tls.is_none() && !(http_addr.ip().is_loopback() && grpc_addr.ip().is_loopback()) {
@@ -316,10 +412,30 @@ async fn run(args: Args) -> Result<(), BoxError> {
             }
         });
     }
-    tracing::info!(http=%http_addr,grpc=%grpc_addr,%backend,tls=tls.is_some(),mtls=args.tls_client_ca.is_some(),"GeoLedger ready");
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<geoledger_rpc::v1::geo_ledger_server::GeoLedgerServer<Service>>()
+        .await;
+    tracing::info!(http=%http_addr,grpc=%grpc_addr,%backend,tls=tls.is_some(),mtls=args.tls_client_ca.is_some(),max_concurrency=service.limits().max_concurrency,"GeoLedger ready");
     let (stop, rx) = tokio::sync::watch::channel(false);
     let mut http_stop = rx.clone();
-    let mut grpc_stop = rx;
+    let mut grpc_stop = rx.clone();
+    if let Some(listener) = health {
+        let mut health_stop = rx;
+        let router = geoledger_server::health_router(service.clone());
+        tokio::spawn(async move {
+            let shutdown = async move {
+                let _ = health_stop.changed().await;
+            };
+            if let Err(error) = axum::serve(listener, router)
+                .with_graceful_shutdown(shutdown)
+                .await
+            {
+                tracing::warn!(%error, "health listener stopped");
+            }
+        });
+    }
+    let draining = service.clone();
     let router = geoledger_server::router(service.clone())
         .into_make_service_with_connect_info::<geoledger_server::tls::PeerAddr>();
     let http_tls = tls.clone();
@@ -341,16 +457,20 @@ async fn run(args: Args) -> Result<(), BoxError> {
         }
     });
     let mut g = tokio::spawn(async move {
+        let limits = service.limits().clone();
+        let concurrency = u32::try_from(limits.max_concurrency).unwrap_or(u32::MAX);
         let builder = tonic::transport::Server::builder()
-            .timeout(Duration::from_secs(30))
-            .concurrency_limit_per_connection(20)
-            .max_concurrent_streams(Some(20))
+            .timeout(limits.request_timeout + Duration::from_secs(5))
+            .concurrency_limit_per_connection(limits.max_concurrency)
+            .max_concurrent_streams(Some(concurrency))
             .load_shed(true);
         let shutdown = async move {
             let _ = grpc_stop.changed().await;
         };
         let mut builder = builder;
-        let router = builder.add_service(geoledger_server::grpc(service));
+        let router = builder
+            .add_service(health_service)
+            .add_service(geoledger_server::grpc(service));
         match tls {
             Some(tls) => {
                 let incoming = tokio_stream::wrappers::ReceiverStream::new(
@@ -374,12 +494,55 @@ async fn run(args: Args) -> Result<(), BoxError> {
             }
         }
     });
+    let deadline = Duration::from_secs(args.shutdown_timeout_secs);
     tokio::select! {
-     result=&mut h=>{let _=stop.send(true);result??;g.await??;},
-     result=&mut g=>{let _=stop.send(true);result??;h.await??;},
-     _=shutdown()=>{tracing::info!("draining requests");let _=stop.send(true);h.await??;g.await??;}
+        result = &mut h => {
+            let _ = stop.send(true);
+            result??;
+            bounded(deadline, async { Ok(g.await??) }).await?;
+        }
+        result = &mut g => {
+            let _ = stop.send(true);
+            result??;
+            bounded(deadline, async { Ok(h.await??) }).await?;
+        }
+        _ = shutdown() => {
+            draining.start_draining();
+            health_reporter
+                .set_not_serving::<geoledger_rpc::v1::geo_ledger_server::GeoLedgerServer<Service>>()
+                .await;
+            if args.shutdown_drain_secs > 0 {
+                tracing::info!(seconds = args.shutdown_drain_secs, "reporting not ready before shutdown");
+                tokio::time::sleep(Duration::from_secs(args.shutdown_drain_secs)).await;
+            }
+            tracing::info!(timeout_secs = args.shutdown_timeout_secs, "draining requests");
+            let _ = stop.send(true);
+            bounded(deadline, async {
+                h.await??;
+                g.await??;
+                Ok(())
+            })
+            .await?;
+        }
     }
+    tracing::info!("shutdown complete");
     Ok(())
+}
+/// Wait for listeners to finish, giving up after the shutdown deadline.
+async fn bounded(
+    deadline: Duration,
+    work: impl std::future::Future<Output = Result<(), BoxError>>,
+) -> Result<(), BoxError> {
+    match tokio::time::timeout(deadline, work).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
+                timeout_secs = deadline.as_secs(),
+                "shutdown deadline exceeded; abandoning in-flight requests"
+            );
+            Err("shutdown deadline exceeded".into())
+        }
+    }
 }
 type Fingerprint = Option<(SystemTime, u64)>;
 fn fingerprint(path: &Path) -> Fingerprint {

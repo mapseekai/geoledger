@@ -67,13 +67,50 @@ pub enum Storage {
     Sqlite(std::path::PathBuf),
     Postgis(String),
 }
+/// Tunable limits for the built-in SQL backends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StorageOptions {
+    /// Maximum concurrent PostgreSQL connections.
+    pub pool_size: usize,
+    /// PostgreSQL `statement_timeout` for every session.
+    pub statement_timeout: Duration,
+    /// PostgreSQL `lock_timeout` for every session.
+    pub lock_timeout: Duration,
+}
+impl Default for StorageOptions {
+    fn default() -> Self {
+        Self {
+            pool_size: 20,
+            statement_timeout: Duration::from_secs(30),
+            lock_timeout: Duration::from_secs(10),
+        }
+    }
+}
+/// Connection pool occupancy, exported as metrics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    pub capacity: usize,
+    pub active: usize,
+    pub idle: usize,
+    /// Acquisitions that gave up because no connection became free before the deadline.
+    pub wait_timeouts: u64,
+}
 type Transaction = Box<dyn RepositoryTransaction>;
 impl Application {
     pub fn new(storage: Storage) -> Self {
+        Self::with_options(storage, StorageOptions::default())
+    }
+    pub fn with_options(storage: Storage, options: StorageOptions) -> Self {
         Self::with_backend(std::sync::Arc::new(session::SqlStorage {
             storage,
-            pool: Default::default(),
+            pool: std::sync::Arc::new(session::postgres::Pool::new(StorageOptions {
+                pool_size: options.pool_size.max(1),
+                ..options
+            })),
         }))
+    }
+    pub fn pool_stats(&self) -> Option<PoolStats> {
+        self.storage.pool_stats()
     }
     pub fn with_backend(storage: std::sync::Arc<dyn StorageBackend>) -> Self {
         Self {

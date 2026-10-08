@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=build /src/target/release/geoledger-server /src/target/release/gl /usr/local/bin/
 USER 10001:10001
 VOLUME /data
-ENV GL_DATA_DIR=/data
+ENV GL_DATA_DIR=/data GL_HTTP_LISTEN=0.0.0.0:7881 GL_GRPC_LISTEN=0.0.0.0:7882
 EXPOSE 7881 7882
+# `probe` reads the same GL_* settings (GL_HEALTH_LISTEN when set) and checks /ready.
+HEALTHCHECK --interval=15s --timeout=6s --start-period=30s --retries=3 CMD ["geoledger-server", "probe"]
 ENTRYPOINT ["geoledger-server"]
-CMD ["--http", "0.0.0.0:7881", "--grpc", "0.0.0.0:7882"]

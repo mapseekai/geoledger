@@ -850,6 +850,9 @@ impl StorageBackend for SqlStorage {
             Client::open(&self.storage, &self.pool, timeout)?.transaction(read_only)?,
         ))
     }
+    fn pool_stats(&self) -> Option<crate::PoolStats> {
+        matches!(self.storage, Storage::Postgis(_)).then(|| self.pool.stats())
+    }
 }
 
 #[cfg(test)]

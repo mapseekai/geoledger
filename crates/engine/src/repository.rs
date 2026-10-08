@@ -11,6 +11,10 @@ pub trait StorageBackend: Send + Sync {
     fn initialize(&self, timeout: Duration) -> Result<()>;
     fn health(&self, timeout: Duration) -> Result<()>;
     fn begin(&self, read_only: bool, timeout: Duration) -> Result<Box<dyn RepositoryTransaction>>;
+    /// Connection pool occupancy for metrics; backends without a pool return None.
+    fn pool_stats(&self) -> Option<crate::PoolStats> {
+        None
+    }
 }
 #[derive(Clone)]
 pub struct FeatureQuery {

@@ -60,7 +60,17 @@ docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 | GL_RELOAD_INTERVAL_SECS | 令牌、JWKS、证书文件检查间隔，默认 10；SIGHUP 立即加载 |
 | GL_JWT_ISSUER / --jwt-issuer | 固定 HTTPS issuer |
 | GL_JWT_AUDIENCE / --jwt-audience | 固定 audience |
-| RUST_LOG | geoledger_server=info，结构化 JSON 日志 |
+| GL_HEALTH_LISTEN | 可选明文探针监听地址，只提供 /health 与 /ready |
+| GL_MAX_CONCURRENCY | HTTP 与 gRPC 共用执行槽，默认 20 |
+| GL_REQUEST_TIMEOUT_SECS | 单次操作期限上限，默认 30 |
+| GL_DB_POOL_SIZE | PostgreSQL 连接上限，默认 20 |
+| GL_DB_STATEMENT_TIMEOUT_SECS / GL_DB_LOCK_TIMEOUT_SECS | PostgreSQL 语句与锁等待期限，默认 30 / 10 |
+| GL_RATE_LIMIT_SUBJECT_RPS / _BURST | 每个身份的持续速率与突发量，默认 0（关闭）/ 50 |
+| GL_RATE_LIMIT_IP_RPS / _BURST | 每个客户端 IP 的速率与突发量（认证前检查），默认 0（关闭）/ 100 |
+| GL_TRUST_FORWARDED_FOR | 以 X-Forwarded-For 最右侧地址作为客户端 IP，仅在可信网关后开启，默认 false |
+| GL_SHUTDOWN_DRAIN_SECS | 收到停止信号后保持服务、/ready 返回 503 的秒数，默认 0 |
+| GL_SHUTDOWN_TIMEOUT_SECS | 关闭监听器后等待在途请求的上限，默认 30 |
+| RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
 启动时校验显式配置，确保使用指定存储和身份文件。新库自动初始化，已有库必须匹配格式 5。旧版本数据应导出并导入到新库，部署前核对数据及历史保留要求。
 
@@ -72,12 +82,13 @@ docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 
 公网访问使用服务端 TLS（`GL_TLS_CERT`/`GL_TLS_KEY`，可选 mTLS）或 TLS 网关：HTTP 转发到 HTTP 监听器；gRPC 网关保持 HTTP/2 并转发到 gRPC 监听器，参考 [nginx.conf](../deploy/gateway/nginx.conf) 与 [Caddyfile](../deploy/gateway/Caddyfile)。SDK 的 https 地址启用服务器证书验证；http 地址只用于回环主机，其他主机需要显式开启明文。凭证通过秘密管理注入；浏览器使用加密 HttpOnly 会话 Cookie，代理通过过滤认证头和请求体日志保护凭证。
 
-PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装扩展后让服务账号创建应用表。默认 `sslmode=verify-full`，跨主机数据库连接校验证书链与主机名。每个实例最多 20 条活跃数据库会话，数据库和网关连接预算按实例数计算。
+PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装扩展后让服务账号创建应用表。默认 `sslmode=verify-full`，跨主机数据库连接校验证书链与主机名。每个实例的活跃数据库会话上限为 `GL_DB_POOL_SIZE`（默认 20），数据库和网关连接预算按实例数计算。
 
 ## 容量规划
 
-- HTTP 与 RPC 共用 20 个执行槽，耗尽时明确返回繁忙。
-- 默认操作期限 30 秒；RPC 可缩短期限。PostgreSQL 单语句 30 秒、锁等待 10 秒，同时受总期限约束；SQLite 锁等待服从剩余总期限。
+- HTTP 与 RPC 共用 `GL_MAX_CONCURRENCY` 个执行槽（默认 20），耗尽时明确返回繁忙（429）。
+- 默认操作期限 `GL_REQUEST_TIMEOUT_SECS`（30 秒）；RPC 可缩短期限。PostgreSQL 单语句与锁等待期限可配置（默认 30 / 10 秒），同时受总期限约束；SQLite 锁等待服从剩余总期限。
+- 速率限制按身份和客户端 IP 使用令牌桶，超限返回 429 与 `Retry-After: 1`。部署在网关后时，在网关限速（参考 [nginx.conf](../deploy/gateway/nginx.conf) 的 `limit_req`），或开启 `GL_TRUST_FORWARDED_FOR` 让服务按真实客户端地址限速。
 - 请求/响应最多 4 MiB，单个 Feature 最多 16 KiB、256 个属性；空间坐标为 EPSG:4326 XY/XYZ。
 - 每批 Save 最多 100 条修改，单工作区最多 1000 个不同要素。百万要素初次导入需要分批、分工作区；客户端为每次发布保留独立请求 ID。
 - 列表默认 100、最多 1000 条；响应还有展开内存预算，复杂属性需降低页大小。
@@ -87,9 +98,36 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 ## 运维与恢复
 
-`/health` 检查进程，`/ready` 检查数据库格式与连接，失败返回 503。`/metrics` 需要 Bearer 身份，输出应用调用次数、错误、冲突、繁忙、耗时直方图与可用执行槽。指标采用聚合标签，应用调用计数从认证及请求体读取完成后进入应用层时开始。
+### 健康检查
 
-停止进程使用 SIGTERM / Ctrl+C，让 HTTP、RPC 完成在途请求后退出。发布结果未知时使用原 request_id 和原内容确认，以服务端保存的发布收据确定提交结果。
+`/health` 检查进程，`/ready` 检查数据库格式与连接，失败或关闭中返回 503。gRPC 监听器同时提供标准 [gRPC Health Checking](https://grpc.io/docs/guides/health-checking/) 服务（服务名 `geoledger.v1.GeoLedger`），关闭时切换为 `NOT_SERVING`。启用服务端 TLS 时，可设置 `GL_HEALTH_LISTEN=127.0.0.1:7880` 提供仅含探针的明文监听器。
+
+`geoledger-server probe` 按同一组 `GL_*` 配置访问本机 `/ready`，成功退出码为 0；容器镜像的 `HEALTHCHECK` 与 Compose 健康检查使用该命令。控制台提供 `/api/health` 存活检查。
+
+### 日志与请求关联
+
+日志为单行 JSON。每次业务调用输出一条访问日志（target `geoledger_server::access`），字段包括 `request_id`、`protocol`、`operation`、`status`、`duration_ms`、`subject` 与 `peer`。服务接受网关传入的 `x-request-id`（最长 128 个字符，字母数字与 `-_.:`），否则生成 UUID；同一 ID 写入响应头、gRPC 元数据与错误体 `request_id`。5xx 错误额外输出 `operation failed` 错误日志，`diagnostic` 字段只含安全摘要（PostgreSQL 仅记录 SQLSTATE）。排查用户报告的错误时，用错误体中的 `request_id` 检索日志。控制台服务端把 5xx 失败写为 JSON 行，包含 GeoLedger 的 `requestId`。
+
+### 指标
+
+`/metrics` 需要 Bearer 身份，输出 Prometheus 文本格式：
+
+| 指标 | 说明 |
+|---|---|
+| `geoledger_operations_total{protocol,operation,status}` | 按协议、操作、状态码统计的调用次数 |
+| `geoledger_operation_duration_seconds{protocol,operation}` | 按协议与操作的耗时直方图 |
+| `geoledger_requests_total` / `errors_total` / `internal_errors_total` / `conflicts_total` / `busy_total` | 汇总计数 |
+| `geoledger_auth_failures_total` | 认证失败次数 |
+| `geoledger_rate_limited_total{scope}` | 按 `subject` / `ip` 的限速拒绝次数 |
+| `geoledger_in_flight_requests`、`geoledger_execution_slots_available`、`geoledger_execution_slots_capacity` | 并发占用 |
+| `geoledger_db_pool_connections{state}`、`geoledger_db_pool_capacity`、`geoledger_db_pool_wait_timeouts_total` | PostgreSQL 连接池（postgis 模式） |
+| `geoledger_draining`、`geoledger_build_info{version}` | 关闭状态与版本 |
+
+标签只使用固定的操作名与状态码集合，从不使用身份、项目、要素 ID 或请求 ID。建议告警：`internal_errors_total` 增速、`rate(busy_total)`、`db_pool_wait_timeouts_total` 增长、`/ready` 失败。
+
+### 停止与发布确认
+
+停止进程使用 SIGTERM / Ctrl+C：服务先把 `/ready` 与 gRPC 健康状态切换为不可用并保持 `GL_SHUTDOWN_DRAIN_SECS` 秒，然后关闭监听器，在 `GL_SHUTDOWN_TIMEOUT_SECS` 内等待在途请求完成；超时后记录警告并以非零状态退出。编排系统的终止宽限期应大于两者之和（Compose 示例为 60 秒）。发布结果未知时使用原 request_id 和原内容确认，以服务端保存的发布收据确定提交结果。
 
 SQLite 简单可靠的备份流程是停止服务后备份整个数据目录，再恢复服务；在线备份使用 SQLite backup API 或经过验证的备份工具，备份工具应保证数据库与 WAL 的一致性。恢复到独立目录后执行健康检查、历史查询和发布重试验证。
 
