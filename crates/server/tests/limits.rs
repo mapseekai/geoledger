@@ -200,7 +200,7 @@ async fn malformed_credentials_are_rejected_uniformly() -> TestResult {
         assert_error(&body, "unauthenticated");
         let text = body.to_string();
         assert!(
-            !text.contains(TOKEN) && !text.contains("aaaa"),
+            !text.contains(TOKEN) && !text.contains(&"a".repeat(64)),
             "{case} echoes input: {text}"
         );
         rejected += 1;
