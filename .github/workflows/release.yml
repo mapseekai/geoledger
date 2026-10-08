@@ -1,0 +1,242 @@
+name: Release
+# Tag vX.Y.Z (or vX.Y.Z-alpha.N) on main. Builds signed multi-arch images and
+# binaries with SBOMs and provenance, creates the GitHub release, then publishes
+# the TypeScript (npm) and Python (PyPI) SDKs when credentials are configured and
+# tags the Go module. The Rust client is consumed from git until geoledger-rpc
+# vendors its proto for crates.io packaging.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - id: version
+        name: Tag matches every package version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$version\"" Cargo.toml
+          grep -q "\"version\": \"$version\"" sdk/ts/package.json
+          python_version=$(sed -E 's/-alpha\./a/; s/-beta\./b/; s/-rc\./rc/' <<<"$version")
+          grep -q "^version = \"$python_version\"" sdk/python/pyproject.toml
+          grep -q "## \[$version\]" CHANGELOG.md
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+  binaries:
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          # Replaces the former windows-cli / center-windows packaging workflows.
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          rustup toolchain install 1.92.0 --profile minimal
+      - name: Toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustup toolchain install 1.92.0 --profile minimal
+          gh release download v35.1 --repo protocolbuffers/protobuf --pattern protoc-35.1-win64.zip --dir $env:RUNNER_TEMP
+          $archive = Join-Path $env:RUNNER_TEMP 'protoc-35.1-win64.zip'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082') { throw 'protoc checksum mismatch' }
+          $tools = Join-Path $env:RUNNER_TEMP 'protoc'
+          Expand-Archive -LiteralPath $archive -DestinationPath $tools
+          (Join-Path $tools 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build, smoke test and package
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo +1.92.0 build --release --locked --bins --target "$TARGET"
+          exe=$([[ $RUNNER_OS == Windows ]] && echo .exe || true)
+          out="target/$TARGET/release"
+          "$out/geoledger-server$exe" --version
+          "$out/gl$exe" --version
+          dist="geoledger-$VERSION-$TARGET"
+          mkdir "$dist"
+          cp "$out/geoledger-server$exe" "$out/gl$exe" LICENSE README.md CHANGELOG.md "$dist/"
+          if [[ $RUNNER_OS == Windows ]]; then
+            7z a -tzip "$dist.zip" "$dist" >/dev/null
+            sha256sum "$dist.zip" > "$dist.zip.sha256"
+          else
+            tar czf "$dist.tar.gz" "$dist"
+            sha256sum "$dist.tar.gz" > "$dist.tar.gz.sha256"
+          fi
+      - name: Source SBOM (Cargo.lock, npm and Go lockfiles; identical for every target)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: anchore/sbom-action@da167eac915b4e86f08b264dbdbc867b61be6f0c # v0.20.5
+        with:
+          path: .
+          format: spdx-json
+          output-file: geoledger-${{ needs.verify.outputs.version }}-source.spdx.json
+          upload-artifact: false
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            geoledger-*.tar.gz
+            geoledger-*.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binaries-${{ matrix.target }}
+          path: |
+            geoledger-*.tar.gz
+            geoledger-*.zip
+            geoledger-*.sha256
+            geoledger-*.spdx.json
+          if-no-files-found: error
+  images:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      matrix:
+        include:
+          - name: geoledger
+            file: Dockerfile
+          - name: geoledger-console
+            file: web/Dockerfile
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
+      - id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Keyless signature
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for tag in $TAGS; do
+            cosign sign --yes "${tag%%:*}@${DIGEST}"
+          done
+  github-release:
+    needs: [verify, binaries, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - name: Create release from CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > notes.md
+          prerelease=$([[ "$VERSION" == *-* ]] && echo --prerelease || true)
+          gh release create "$GITHUB_REF_NAME" dist/* --title "GeoLedger $VERSION" --notes-file notes.md --verify-tag $prerelease
+  sdks:
+    needs: [verify, github-release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+      - name: TypeScript client (npm, provenance)
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        run: |
+          npm ci --prefix sdk/ts
+          npm --prefix sdk/ts run build
+          tag=$([[ "${{ needs.verify.outputs.version }}" == *-* ]] && echo next || echo latest)
+          npm publish ./sdk/ts --provenance --access public --tag "$tag"
+      - name: Python client build
+        run: |
+          python3 -m pip install build==1.2.2
+          python3 -m build sdk/python --outdir sdk/python/dist
+      - name: Python client (PyPI trusted publishing)
+        if: ${{ vars.PYPI_TRUSTED_PUBLISHING == 'true' }}
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+        with:
+          packages-dir: sdk/python/dist
+      - name: Go module tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/git/refs -f ref="refs/tags/sdk/go/${GITHUB_REF_NAME}" -f sha="${GITHUB_SHA}"

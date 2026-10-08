@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 35
     services:
       postgis:
-        image: imresamu/postgis@sha256:088210a8556029c7b3dafa7c721f40ba4dfda70e1f3ec19a4d53b943902fd33f
+        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6 # 17-3.5 (official image)
         env:
           POSTGRES_USER: mapseekai
           POSTGRES_DB: geoledger_test
@@ -27,20 +27,20 @@ jobs:
     env:
       GL_TEST_DATABASE_URL: postgresql://mapseekai:geoledger-ci-disposable@127.0.0.1:5432/geoledger_test?sslmode=disable
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: '1.23.x'
+          go-version: '1.26.x'
           cache-dependency-path: sdk/go/go.sum
       - name: Toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev nginx-light
           rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy
           rustup default 1.92.0
           python3 -m pip install grpcio-tools==1.78.0
@@ -60,15 +60,15 @@ jobs:
           for backend in sqlite postgis; do
             export GL_DATA_DIR="$RUNNER_TEMP/geoledger-$backend"
             export GL_ENDPOINT=http://127.0.0.1:7882
-            export GL_TOKEN_FILE="$GL_DATA_DIR/tokens.json"
+            export GL_TOKEN_FILE="$GL_DATA_DIR/admin-credentials.json"
             mkdir -p "$GL_DATA_DIR"
-            target/debug/geoledger-server tokens --out "$GL_TOKEN_FILE" admin
+            target/debug/geoledger-server tokens --out "$GL_DATA_DIR/tokens.json" --client-out "$GL_TOKEN_FILE" admin
             if [[ "$backend" == postgis ]]; then
               export GL_DATABASE_URL="$GL_TEST_DATABASE_URL"
             else
               unset GL_DATABASE_URL
             fi
-            target/debug/geoledger-server --storage "$backend" > "$RUNNER_TEMP/server-$backend.log" 2>&1 &
+            target/debug/geoledger-server --storage "$backend" --token-file "$GL_DATA_DIR/tokens.json" > "$RUNNER_TEMP/server-$backend.log" 2>&1 &
             service_pid=$!
             trap 'kill "$service_pid" 2>/dev/null || true' EXIT
             for attempt in $(seq 1 100); do
@@ -80,12 +80,16 @@ jobs:
             wait "$service_pid"
             trap - EXIT
           done
+      - name: Reference TLS gateway
+        run: ./scripts/test-gateway.sh
   web:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
       - name: Web dependencies and production checks
@@ -121,12 +125,14 @@ jobs:
             if curl --fail --silent http://127.0.0.1:3000/login >/dev/null && curl --fail --silent http://127.0.0.1:7895/ready >/dev/null; then break; fi
             sleep .2
           done
-          python3 scripts/test-console.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/tokens.json"
+          python3 scripts/test-console.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/admin-credentials.json"
   msrv:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
@@ -136,7 +142,9 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Rust and protoc
         shell: pwsh
         env:
@@ -153,3 +161,44 @@ jobs:
           (Join-Path $tools 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+  supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          # Latest release: stdlib advisories are judged against a supported Go.
+          go-version: stable
+          cache-dependency-path: sdk/go/go.sum
+      - name: Scanners
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal
+          cargo +1.92.0 install --locked cargo-audit@0.22.2
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          pipx install pip-audit==2.9.0
+      - name: Dependency advisories (Rust, npm, Go, Python)
+        env:
+          GL_AUDIT_REQUIRE_ALL: '1'
+        run: ./scripts/audit.sh
+  proto-compatibility:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: bufbuild/buf-action@c231a1aa9281e5db706c970f468f0744a37561fd # v1.2.0
+        with:
+          input: proto
+          lint: false
+          format: false
+          push: false
+          breaking: true
+          breaking_against: ${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }},subdir=proto
