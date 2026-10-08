@@ -44,7 +44,7 @@ GeoJSON 原始数字在读取、展示、编辑与保存中保持精度，包括
 ## 设计与验证
 
 设计依据 [Mistral DESIGN.md](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/mistral.ai/DESIGN.md)，
-使用暖白、奶油色、橙色强调、细边框、页底日落色带。复用 [GeoLedger 标志](../web/public/logo.png)。
+使用暖白、奶油色、橙色强调、细边框、页底日落色带。[GeoLedger 矢量标志](../web/public/logo.svg) 使用 G 与叠层轮廓；登录页、导航及浏览器图标共用 SVG，按比例完整显示。
 字体与图标随 Web 打包，运行时无外部 CDN 请求；桌面与手机均可使用。
 字体授权与替代说明见 [Web 项目文档](../web/README.md#设计来源)。
 

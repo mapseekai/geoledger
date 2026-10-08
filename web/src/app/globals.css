@@ -124,7 +124,7 @@ select {
   background: #fffcf4;
 }
 .brand {
-  display: flex;
+  display: inline-flex;
   gap: 10px;
   align-items: center;
   color: #1f1f1f;
@@ -136,14 +136,15 @@ select {
 .brand-icon {
   height: 32px;
   width: 32px;
-  overflow: hidden;
+  flex: 0 0 32px;
   display: grid;
   place-items: center;
 }
 .brand-icon img {
-  min-width: 50px;
-  transform: translateY(-1px);
-  filter: grayscale(1) brightness(0.35);
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
 }
 .brand-dot {
   color: #fa520f;

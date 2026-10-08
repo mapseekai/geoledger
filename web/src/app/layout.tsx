@@ -5,6 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "GeoLedger Console",
   description: "空间数据版本控制管理控制台",
+  icons: { icon: "/logo.svg" },
   robots: { index: false, follow: false },
 };
 export default function RootLayout({

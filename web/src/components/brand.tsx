@@ -2,7 +2,7 @@ export function Brand() {
   return (
     <span className="brand">
       <span className="brand-icon">
-        <img src="/logo.png" width="50" height="50" alt="" />
+        <img src="/logo.svg" width="32" height="32" alt="" />
       </span>
       <span>
         GeoLedger<span className="brand-dot">_</span>

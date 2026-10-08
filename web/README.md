@@ -88,5 +88,5 @@ npm --prefix web run build
 橙色按钮采用深色文字以提高正文对比度；导航的橙色文字使用更深的色阶。
 使用本地打包的 Inter；商业字体 PP Editorial Old 不随本项目分发，显示字体
 回退为开源 Newsreader（中文衬线采用系统字体）。如持有授权，可自行配置展示字体。
-Logo 沿用 GeoLedger 标志，不使用 Mistral 商标。
+Logo 使用 [GeoLedger SVG 标志](public/logo.svg)，不使用 Mistral 商标。
 shadcn/ui 源码基于 MIT 许可，参见 [第三方说明](THIRD_PARTY_NOTICES.md)。
