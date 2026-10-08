@@ -16,7 +16,7 @@ tokio.workspace = true
 tokio-postgres = "0.7"
 postgres-native-tls = "0.5"
 native-tls = "0.2"
-rusqlite = { version = "0.37", features = ["bundled", "functions", "hooks"] }
+rusqlite = { version = "0.40", features = ["bundled", "functions", "hooks"] }
 geo = "0.31"
 geojson = { version = "0.24", features = ["geo-types"] }
 
