@@ -162,7 +162,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 所有命令使用与服务相同的 `GL_STORAGE`、`GL_DATA_DIR`、`GL_DATABASE_URL` 配置，期限由 `GL_DATA_TIMEOUT_SECS`（默认 3600）设置。输出文件以 0600 新建且从不覆盖已有文件；导出包含全部业务数据和发布请求内容，按凭证同等级别加密保存。导出文件的表摘要与后端无关，SQLite 与 PostgreSQL 之间可以互相导入，用于更换后端或迁移主机；摘要用于发现损坏和不完整的复制，文件真实性通过存储与传输的访问控制保证。
 
-**SQLite。** 按 RPO 定时执行 `backup`（例如每小时，配合 systemd timer 或 cron），把备份文件复制到另一台主机或对象存储，并保留多个版本。RPO 等于备份间隔；恢复步骤：
+**SQLite。** 按 RPO 定时执行 `backup`，把备份文件复制到另一台主机或对象存储，并保留多个版本。systemd 部署可使用 [geoledger-backup.service](../deploy/geoledger-backup.service) 与 [geoledger-backup.timer](../deploy/geoledger-backup.timer)：每小时写入带时间戳的新文件并校验，删除本机超过 `GL_BACKUP_KEEP_DAYS`（默认 14）天的副本；先执行 `install -d -o geoledger -g geoledger -m 0700 /var/backups/geoledger`，再 `systemctl enable --now geoledger-backup.timer`。RPO 等于备份间隔；恢复步骤：
 
 1. 停止服务，将原数据目录改名保留。
 2. 使用新的空数据目录执行 `geoledger-server --data-dir <新目录> restore --input <备份文件>`，并放回 `tokens.json` 等凭证文件（凭证不在数据库备份中）。

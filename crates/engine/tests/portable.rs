@@ -315,6 +315,22 @@ fn sqlite_online_backup_is_consistent_and_verified() -> TestResult {
     let restored = Application::new(Storage::Sqlite(target));
     restored.migrate()?;
     assert_eq!(restored.data_summary()?, app.data_summary()?);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.path().join("backup.sqlite3"))?
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "backups are private");
+    }
+    // A missing database is reported and leaves no file behind.
+    let none = Application::new(Storage::Sqlite(dir.path().join("missing.sqlite3")));
+    let empty_target = dir.path().join("empty-backup.sqlite3");
+    assert_eq!(
+        none.backup(&empty_target).err().map(|e| e.status),
+        Some(404)
+    );
+    assert!(!empty_target.exists() && !dir.path().join("missing.sqlite3").exists());
     let garbage = dir.path().join("garbage.sqlite3");
     std::fs::write(&garbage, b"not a database at all, just bytes")?;
     assert!(Application::verify_sqlite_file(&garbage, std::time::Duration::from_secs(10)).is_err());

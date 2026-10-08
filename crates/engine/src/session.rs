@@ -1011,30 +1011,57 @@ impl StorageBackend for SqlStorage {
         portable::import(Client::open(&self.storage, &self.pool, timeout)?, input)
     }
     fn backup(&self, target: &std::path::Path, timeout: Duration) -> Result<()> {
-        let Storage::Sqlite(_) = self.storage else {
+        let Storage::Sqlite(source) = &self.storage else {
             return Err(Error::new(
                 409,
                 "PostgreSQL backups use pg_dump or WAL archiving (see docs/production.md); `geoledger-server export` gives a portable logical copy",
             ));
         };
-        if target.exists() {
-            return Err(Error::new(409, "backup target already exists"));
+        let missing = || Error::new(404, "no GeoLedger database to back up");
+        if !source.is_file() {
+            return Err(missing());
         }
         let target_text = target
             .to_str()
             .ok_or_else(|| Error::new(400, "backup path must be valid UTF-8"))?
             .to_owned();
-        let mut c = Client::open(&self.storage, &self.pool, timeout)?;
-        // VACUUM INTO reads one consistent snapshot while writers continue (WAL).
-        c.execute("VACUUM INTO $1", &[&target_text])?;
-        drop(c);
+        // Reserve the target as a new private file (VACUUM INTO accepts an empty
+        // file), so a backup is never readable by others and never overwrites.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| Error::new(500, "cannot restrict backup permissions").caused_by(e))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-        verify_sqlite_file(target, timeout)
+        options.open(target).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::new(409, "backup target already exists")
+            } else {
+                Error::new(500, "cannot create backup file").caused_by(e)
+            }
+        })?;
+        let result = (|| {
+            let mut c = Client::open(&self.storage, &self.pool, timeout)?;
+            let exists = c
+                .query_opt(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_format'",
+                    &[],
+                )?
+                .is_some();
+            if !exists {
+                return Err(missing());
+            }
+            // VACUUM INTO reads one consistent snapshot while writers continue (WAL).
+            c.execute("VACUUM INTO $1", &[&target_text])?;
+            drop(c);
+            verify_sqlite_file(target, timeout)
+        })();
+        if result.is_err() {
+            // Never leave a file that looks like a usable backup.
+            let _ = std::fs::remove_file(target);
+        }
+        result
     }
 }
 /// Check that a SQLite file is an intact GeoLedger database at the current format.
