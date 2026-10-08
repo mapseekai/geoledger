@@ -3,17 +3,25 @@
 use crate::{Error, Result};
 use std::{
     collections::HashMap,
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
 use tokio_postgres::{Row, Statement, types::ToSql};
 
-pub(crate) const CAPACITY: usize = 20;
-#[derive(Default)]
 pub(crate) struct Pool {
     state: Mutex<State>,
     available: Condvar,
+    options: crate::StorageOptions,
+    wait_timeouts: AtomicU64,
+}
+impl Default for Pool {
+    fn default() -> Self {
+        Self::new(crate::StorageOptions::default())
+    }
 }
 #[derive(Default)]
 struct State {
@@ -37,6 +45,27 @@ impl Drop for Connection {
     }
 }
 impl Pool {
+    pub fn new(options: crate::StorageOptions) -> Self {
+        Self {
+            state: Mutex::default(),
+            available: Condvar::new(),
+            options,
+            wait_timeouts: AtomicU64::new(0),
+        }
+    }
+    pub fn stats(&self) -> crate::PoolStats {
+        let (active, idle) = self
+            .state
+            .lock()
+            .map(|s| (s.active, s.idle.len()))
+            .unwrap_or_default();
+        crate::PoolStats {
+            capacity: self.options.pool_size,
+            active,
+            idle,
+            wait_timeouts: self.wait_timeouts.load(Ordering::Relaxed),
+        }
+    }
     pub fn connect(self: &Arc<Self>, dsn: &str, timeout: Duration) -> Result<Client> {
         let deadline = Instant::now()
             .checked_add(timeout)
@@ -45,9 +74,10 @@ impl Pool {
             .state
             .lock()
             .map_err(|_| Error::new(500, "pool unavailable"))?;
-        while state.active == CAPACITY {
+        while state.active >= self.options.pool_size {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
+                self.wait_timeouts.fetch_add(1, Ordering::Relaxed);
                 return Err(expired());
             }
             state = self
@@ -79,13 +109,14 @@ impl Pool {
                 .map_err(|source| {
                     Error::new(503, "database runtime unavailable").caused_by(source)
                 })?;
-            let config: tokio_postgres::Config = dsn.parse().map_err(Error::database)?;
-            let tls = native_tls::TlsConnector::new()
-                .map_err(|source| Error::new(503, "TLS configuration failed").caused_by(source))?;
+            let settings = super::pgtls::PgSettings::parse(dsn)?;
+            let tls = settings.connector()?;
             let connected = runtime.block_on(async {
                 tokio::time::timeout_at(
                     deadline.into(),
-                    config.connect(postgres_native_tls::MakeTlsConnector::new(tls)),
+                    settings
+                        .config
+                        .connect(postgres_native_tls::MakeTlsConnector::new(tls)),
                 )
                 .await
                 .map_err(|_| expired())?
@@ -107,7 +138,12 @@ impl Pool {
                 driver,
                 statements: HashMap::new(),
             });
-            session.batch_execute("SET statement_timeout='30s'; SET lock_timeout='10s'; SET search_path=public,pg_catalog")?;
+            let settings = format!(
+                "SET statement_timeout='{}ms'; SET lock_timeout='{}ms'; SET search_path=public,pg_catalog",
+                self.options.statement_timeout.as_millis(),
+                self.options.lock_timeout.as_millis()
+            );
+            session.batch_execute(&settings)?;
         }
         Ok(session)
     }

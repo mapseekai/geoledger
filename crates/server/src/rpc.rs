@@ -105,48 +105,66 @@ fn status(error: Error) -> Status {
     }
     s
 }
+/// Peer IP for both plain TCP and TLS connections.
+fn peer<T>(request: &Request<T>) -> Option<std::net::IpAddr> {
+    request
+        .remote_addr()
+        .or_else(|| request.extensions().get::<tls::PeerAddr>().map(|p| p.0))
+        .map(|a| a.ip())
+}
+fn incoming_id<T>(request: &Request<T>) -> String {
+    crate::limits::request_id(
+        request
+            .metadata()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok()),
+    )
+}
+fn with_id<T>(mut response: Response<T>, id: &str) -> Response<T> {
+    if let Ok(id) = id.parse() {
+        response.metadata_mut().insert("x-request-id", id);
+    }
+    response
+}
 impl Service {
     async fn call<I: Serialize, O: DeserializeOwned>(
         &self,
         request: Request<I>,
         op: &str,
     ) -> std::result::Result<Response<O>, Status> {
+        let mut call = Call::new("grpc", op, incoming_id(&request), peer(&request));
+        let result = self.handle(&mut call, request).await;
+        let response = self.finish(&call, result).map_err(status)?;
+        Ok(with_id(Response::new(response), &call.request_id))
+    }
+    async fn handle<I: Serialize, O: DeserializeOwned>(
+        &self,
+        call: &mut Call,
+        request: Request<I>,
+    ) -> Result<O> {
         let headers = request.metadata().clone().into_headers();
-        let subject = self.authenticate(&headers).map_err(status)?;
         let timeout = request
             .metadata()
             .get("grpc-timeout")
             .and_then(|v| v.to_str().ok())
             .and_then(parse_timeout);
-        let permit = self.permit().map_err(status)?;
-        let value = serde_json::to_value(request.into_inner())
-            .map_err(|_| Status::invalid_argument("invalid request"))?;
-        let value = input(value).map_err(status)?;
-        let mut result = self
-            .execute(subject, op, value, timeout, permit)
-            .await
-            .map_err(status)?;
-        result = match op {
+        let permit = self.admit(call, &headers)?;
+        let value = serde_json::to_value(request.into_inner()).map_err(|_| bad())?;
+        let value = input(value)?;
+        let mut result = self.execute(call, value, timeout, permit).await?;
+        result = match call.operation.as_str() {
             "list_projects" => json!({"projects":result}),
             "list_datasets" => json!({"datasets":result}),
             "list_workspaces" => json!({"workspaces":result}),
             "history" => json!({"commits":result}),
+            "list_members" => json!({"members":result}),
             "features" if result["type"] == "Feature" => {
                 json!({"revision":result["revision"],"workspace_version":result["workspace_version"],"features":[result]})
             }
             _ => result,
         };
-        let response = serde_json::from_value(output(result))
-            .map_err(|_| Status::internal("response contract violation"))?;
-        let mut response = Response::new(response);
-        response.metadata_mut().insert(
-            "x-request-id",
-            uuid::Uuid::new_v4()
-                .to_string()
-                .parse()
-                .map_err(|_| Status::internal("request id"))?,
-        );
-        Ok(response)
+        serde_json::from_value(output(result))
+            .map_err(|_| Error::new(500, "response contract violation"))
     }
 }
 fn parse_timeout(s: &str) -> Option<Duration> {
@@ -171,15 +189,21 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         &self,
         request: Request<pb::Empty>,
     ) -> std::result::Result<Response<pb::InfoReply>, Status> {
-        self.authenticate(&request.metadata().clone().into_headers())
-            .map_err(status)?;
-        Ok(Response::new(pb::InfoReply {
-            version: env!("CARGO_PKG_VERSION").into(),
-            backend: self.app.backend().into(),
-            format_version: geoledger_engine::FORMAT_VERSION as u32,
-            max_request_bytes: MAX_BYTES as u32,
-            max_feature_bytes: 16384,
-        }))
+        let mut call = Call::new("grpc", "info", incoming_id(&request), peer(&request));
+        let admitted = self
+            .admit(&mut call, &request.metadata().clone().into_headers())
+            .map(drop);
+        self.finish(&call, admitted).map_err(status)?;
+        Ok(with_id(
+            Response::new(pb::InfoReply {
+                version: env!("CARGO_PKG_VERSION").into(),
+                backend: self.app.backend().into(),
+                format_version: geoledger_engine::FORMAT_VERSION as u32,
+                max_request_bytes: MAX_BYTES as u32,
+                max_feature_bytes: 16384,
+            }),
+            &call.request_id,
+        ))
     }
     async fn create_project(
         &self,
@@ -306,5 +330,29 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         request: tonic::Request<pb::RestoreRequest>,
     ) -> std::result::Result<tonic::Response<pb::WorkspaceReply>, tonic::Status> {
         self.call(request, "restore").await
+    }
+    async fn list_members(
+        &self,
+        request: tonic::Request<pb::ProjectPageRequest>,
+    ) -> std::result::Result<tonic::Response<pb::MembersReply>, tonic::Status> {
+        self.call(request, "list_members").await
+    }
+    async fn remove_member(
+        &self,
+        request: tonic::Request<pb::MemberRefRequest>,
+    ) -> std::result::Result<tonic::Response<pb::OkReply>, tonic::Status> {
+        self.call(request, "remove_member").await
+    }
+    async fn archive_project(
+        &self,
+        request: tonic::Request<pb::ArchiveProjectRequest>,
+    ) -> std::result::Result<tonic::Response<pb::ProjectReply>, tonic::Status> {
+        self.call(request, "archive_project").await
+    }
+    async fn delete_project(
+        &self,
+        request: tonic::Request<pb::DeleteProjectRequest>,
+    ) -> std::result::Result<tonic::Response<pb::OkReply>, tonic::Status> {
+        self.call(request, "delete_project").await
     }
 }

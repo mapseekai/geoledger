@@ -172,15 +172,63 @@ fn normalize(value: &mut Value) -> Result<(), Error> {
     Ok(())
 }
 
+/// Connection options. Plaintext `http://` is accepted only for loopback hosts unless
+/// `allow_insecure` is set (or `GL_ALLOW_INSECURE_TRANSPORT=true`), because the bearer
+/// token would otherwise cross the network unencrypted.
+#[derive(Clone, Debug)]
+pub struct ConnectOptions {
+    pub timeout: Duration,
+    pub allow_insecure: bool,
+    /// Extra PEM CA bundle trusted for `https://` endpoints (private PKI).
+    pub ca_pem: Option<Vec<u8>>,
+}
+impl Default for ConnectOptions {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(30),
+            allow_insecure: false,
+            ca_pem: None,
+        }
+    }
+}
+/// True for `localhost` and loopback IP literals.
+pub fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+fn insecure_opt_in() -> bool {
+    std::env::var("GL_ALLOW_INSECURE_TRANSPORT")
+        .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+}
+
 impl Client {
     pub async fn connect(endpoint: impl Into<String>, token: &str) -> Result<Self, Error> {
-        Self::connect_with_timeout(endpoint, token, Duration::from_secs(30)).await
+        Self::connect_with(endpoint, token, ConnectOptions::default()).await
     }
     pub async fn connect_with_timeout(
         endpoint: impl Into<String>,
         token: &str,
         timeout: Duration,
     ) -> Result<Self, Error> {
+        Self::connect_with(
+            endpoint,
+            token,
+            ConnectOptions {
+                timeout,
+                ..ConnectOptions::default()
+            },
+        )
+        .await
+    }
+    pub async fn connect_with(
+        endpoint: impl Into<String>,
+        token: &str,
+        options: ConnectOptions,
+    ) -> Result<Self, Error> {
+        let timeout = options.timeout;
         let endpoint = endpoint.into();
         let mut e = Endpoint::from_shared(endpoint)
             .map_err(|_| Error::invalid("endpoint must be http(s)://host:port"))?;
@@ -197,10 +245,23 @@ impl Client {
         if token.is_empty() || timeout.is_zero() {
             return Err(Error::invalid("token and positive timeout required"));
         }
+        if e.uri().scheme_str() == Some("http")
+            && !e.uri().host().is_some_and(is_loopback_host)
+            && !options.allow_insecure
+            && !insecure_opt_in()
+        {
+            return Err(Error::invalid(
+                "refusing to send credentials over plaintext http to a non-loopback host; use https or opt in with allow_insecure / GL_ALLOW_INSECURE_TRANSPORT=true",
+            ));
+        }
         e = e.connect_timeout(Duration::from_secs(10)).timeout(timeout);
         if e.uri().scheme_str() == Some("https") {
+            let mut tls = tonic::transport::ClientTlsConfig::new().with_native_roots();
+            if let Some(pem) = options.ca_pem {
+                tls = tls.ca_certificate(tonic::transport::Certificate::from_pem(pem));
+            }
             e = e
-                .tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())
+                .tls_config(tls)
                 .map_err(|_| Error::invalid("TLS configuration failed"))?
         }
         let auth = Authentication {
@@ -353,6 +414,26 @@ impl Client {
                     .await?
                     .into_inner(),
             )?,
+            "list_members" => serde_json::to_value(
+                rpc.list_members(serde_json::from_value::<pb::ProjectPageRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "remove_member" => serde_json::to_value(
+                rpc.remove_member(serde_json::from_value::<pb::MemberRefRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "archive_project" => serde_json::to_value(
+                rpc.archive_project(serde_json::from_value::<pb::ArchiveProjectRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "delete_project" => serde_json::to_value(
+                rpc.delete_project(serde_json::from_value::<pb::DeleteProjectRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
             _ => return Err(Error::invalid(format!("unknown operation: {operation}"))),
         })
     }
@@ -382,6 +463,46 @@ impl Client {
         self.execute(
             "set_member",
             json!({"project":project,"subject":subject,"role":role}),
+        )
+        .await?;
+        Ok(())
+    }
+    /// Active members ordered by subject.
+    pub async fn members(&self, project: &str, page: Page) -> Result<Vec<Member>, Error> {
+        decode(
+            self.execute(
+                "list_members",
+                json!({"project":project,"after":page.after,"limit":page.limit}),
+            )
+            .await?["members"]
+                .take(),
+        )
+    }
+    /// Remove a member (owners and administrators), or leave the project when
+    /// `subject` is the caller. The last owner cannot be removed.
+    pub async fn remove_member(&self, project: &str, subject: &str) -> Result<(), Error> {
+        self.execute(
+            "remove_member",
+            json!({"project":project,"subject":subject}),
+        )
+        .await?;
+        Ok(())
+    }
+    /// Archive (read-only) or reactivate a project.
+    pub async fn archive_project(&self, project: &str, archived: bool) -> Result<Project, Error> {
+        decode(
+            self.execute(
+                "archive_project",
+                json!({"project":project,"archived":archived}),
+            )
+            .await?,
+        )
+    }
+    /// Permanently hide a project. `confirm_name` must equal the project name.
+    pub async fn delete_project(&self, project: &str, confirm_name: &str) -> Result<(), Error> {
+        self.execute(
+            "delete_project",
+            json!({"project":project,"confirm_name":confirm_name}),
         )
         .await?;
         Ok(())

@@ -7,18 +7,26 @@ from threading import RLock
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
+import ipaddress
 import json
+import os
 import grpc as _grpc
 from ._internal.v1 import geoledger_pb2 as _pb
 from ._internal.v1.geoledger_pb2_grpc import GeoLedgerStub as _Stub
 
-__all__ = ["Client", "Workspace", "Project", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
+__all__ = ["Client", "Workspace", "Project", "Member", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
 
 @dataclass(frozen=True)
 class Project:
     id: str
     name: str
     head: int
+    role: str
+    state: str = "active"  # active, archived (read-only) or deleted
+
+@dataclass(frozen=True)
+class Member:
+    subject: str
     role: str
 
 @dataclass(frozen=True)
@@ -104,10 +112,23 @@ _REQUESTS = {"Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "P
              "CreateWorkspace": "ProjectRequest", "ListWorkspaces": "ProjectPageRequest", "GetWorkspace": "WorkspaceRequest",
              "Save": "SaveRequest", "Discard": "VersionRequest", "Features": "FeaturesRequest", "Diff": "DiffRequest",
              "Conflicts": "DiffRequest", "History": "HistoryRequest", "Commit": "CommitRequest", "Audit": "HistoryRequest",
-             "Publish": "PublishRequest", "Resolve": "ResolveRequest", "Rebase": "ResolveRequest", "Restore": "RestoreRequest"}
+             "Publish": "PublishRequest", "Resolve": "ResolveRequest", "Rebase": "ResolveRequest", "Restore": "RestoreRequest",
+             "ListMembers": "ProjectPageRequest", "RemoveMember": "MemberRefRequest",
+             "ArchiveProject": "ArchiveProjectRequest", "DeleteProject": "DeleteProjectRequest"}
+
+def _is_loopback(host: str) -> bool:
+    host = host.strip("[]")
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 class Client:
-    def __init__(self, endpoint: str, token: str, timeout: float = 30):
+    """Plaintext ``http://`` is accepted only for loopback hosts unless ``allow_insecure=True``
+    (or ``GL_ALLOW_INSECURE_TRANSPORT=true``): the bearer token would cross the network unencrypted."""
+    def __init__(self, endpoint: str, token: str, timeout: float = 30, *, allow_insecure: bool = False):
         try:
             url = urlparse(endpoint)
             if url.scheme not in ("http", "https") or not url.hostname or url.path not in ("", "/") or url.query or url.fragment or url.username is not None or url.password is not None or not url.port:
@@ -116,6 +137,9 @@ class Client:
             raise _invalid("endpoint must be http(s)://host:port") from None
         if not token or not token.isascii() or any(ord(c) < 32 or ord(c) >= 127 for c in token) or not isfinite(timeout) or timeout <= 0:
             raise _invalid("ASCII token and finite positive timeout required")
+        opted_in = allow_insecure or os.environ.get("GL_ALLOW_INSECURE_TRANSPORT", "") in ("1", "true", "yes")
+        if url.scheme == "http" and not _is_loopback(url.hostname or "") and not opted_in:
+            raise _invalid("refusing to send credentials over plaintext http to a non-loopback host; use https or allow_insecure=True")
         options = [("grpc.max_receive_message_length", 4 * 1024 * 1024),
                    ("grpc.max_send_message_length", 4 * 1024 * 1024), ("grpc.enable_retries", 0)]
         self._channel = (_grpc.secure_channel(url.netloc, _grpc.ssl_channel_credentials(), options)
@@ -180,6 +204,22 @@ class Client:
 
     def set_member(self, project: str, subject: str, role: str) -> None:
         self._call("SetMember", project=project, subject=subject, role=role)
+
+    def members(self, project: str, *, after: str = "", limit: int = 100) -> list[Member]:
+        """Active members ordered by subject."""
+        return [Member(**r) for r in self._call("ListMembers", project=project, after=after, limit=limit)["members"]]
+
+    def remove_member(self, project: str, subject: str) -> None:
+        """Remove a member (owners/administrators) or leave when subject is the caller."""
+        self._call("RemoveMember", project=project, subject=subject)
+
+    def archive_project(self, project: str, archived: bool = True) -> Project:
+        """Archive (read-only) or reactivate a project."""
+        return Project(**self._call("ArchiveProject", project=project, archived=archived))
+
+    def delete_project(self, project: str, confirm_name: str) -> None:
+        """Permanently hide a project; confirm_name must equal its name."""
+        self._call("DeleteProject", project=project, confirm_name=confirm_name)
 
     def create_dataset(self, project: str, name: str) -> Dataset:
         return Dataset(**self._call("CreateDataset", project=project, name=name))

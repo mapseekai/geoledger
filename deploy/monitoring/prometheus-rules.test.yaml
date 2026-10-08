@@ -1,0 +1,30 @@
+# promtool test rules prometheus-rules.test.yaml
+rule_files: [prometheus-rules.yaml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'geoledger_internal_errors_total{instance="a",job="geoledger"}'
+        values: '0 0 0 1 1 1'
+      - series: 'geoledger_busy_total{instance="a",job="geoledger"}'
+        values: '0+10x20'
+      - series: 'geoledger_requests_total{instance="a",job="geoledger"}'
+        values: '0+100x20'
+      - series: 'geoledger_execution_slots_available{instance="a",job="geoledger"}'
+        values: '5 5 5 5 5 5'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: GeoLedgerInternalErrors
+        exp_alerts:
+          - exp_labels: { severity: critical, instance: a, job: geoledger }
+            exp_annotations:
+              summary: "GeoLedger returned internal errors; search logs for 'operation failed' by request_id"
+      - eval_time: 18m
+        alertname: GeoLedgerBusy
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: a, job: geoledger }
+            exp_annotations:
+              summary: "Over 5% of requests answered 429 busy; raise GL_MAX_CONCURRENCY or add capacity"
+      - eval_time: 5m
+        alertname: GeoLedgerExecutionSlotsExhausted
+        exp_alerts: []

@@ -61,7 +61,7 @@ def main() -> int:
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT
     ).decode().split("\0")
     tracked = {name for name in indexed if name and (ROOT / name).is_file()}
-    documents = [ROOT / "README.md", ROOT / "AGENTS.md", *sorted((ROOT / "docs").rglob("*.md"))]
+    documents = [ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "SECURITY.md", ROOT / "CHANGELOG.md", *sorted((ROOT / "docs").rglob("*.md"))]
     errors: list[str] = []
     external: set[str] = set()
     local_count = 0

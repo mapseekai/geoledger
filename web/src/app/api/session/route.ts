@@ -19,9 +19,7 @@ export async function POST(request: Request) {
       .parse(await body(request, 4096));
     client = new Client(configuration().endpoint, token);
     const info = await client.info();
-    const auth = await session();
-    auth.token = token;
-    await auth.save();
+    await (await session()).login(token);
     return reply({ info });
   } catch (error) {
     return failure(error);

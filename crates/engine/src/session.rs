@@ -1,4 +1,6 @@
 //! Portable transaction boundary; SQL is shared, locking and spatial indexes are explicit dialect choices.
+pub(crate) mod pgtls;
+pub(crate) mod portable;
 pub(crate) mod postgres;
 use crate::repository::{RepositoryTransaction, StorageBackend};
 use crate::{Error, FORMAT_VERSION, Result, Storage};
@@ -265,7 +267,7 @@ impl Client {
                     .into_iter()
                     .map(|v| -> Box<dyn ToSql + Sync> {
                         match v {
-                            Cell::Null => Box::new(None::<String>),
+                            Cell::Null => Box::new(AnyNull),
                             Cell::Text(s) => Box::new(s),
                             Cell::Integer(v) => Box::new(v),
                             Cell::Real(v) => Box::new(v),
@@ -344,7 +346,26 @@ impl Client {
         self.transaction = true;
         Ok(SqlTransaction(self))
     }
-    pub fn migrate(mut self) -> Result<()> {
+    /// Create a fresh database (base format 5 plus every migration) or verify
+    /// that an existing one is at the current format. Never upgrades data.
+    pub fn migrate(self) -> Result<()> {
+        self.prepare(false).map(drop)
+    }
+    /// Explicit, operator-triggered upgrade of an existing database. Returns
+    /// (current version, target version); `dry_run` only reports.
+    pub fn upgrade(self, dry_run: bool) -> Result<(i32, i32)> {
+        let Some((from, mut t)) = self.prepare(true)? else {
+            return Err(Error::new(500, "unexpected fresh database"));
+        };
+        if !dry_run && from < FORMAT_VERSION {
+            t.apply_migrations(from)?;
+            t.commit()?;
+        }
+        Ok((from, FORMAT_VERSION))
+    }
+    /// Returns the open transaction and the stored version for an existing
+    /// database, or None after creating a fresh one.
+    fn prepare(mut self, upgrade: bool) -> Result<Option<(i32, SqlTransaction)>> {
         let sqlite = matches!(self.backend, Backend::Sqlite(_));
         if sqlite {
             self.batch_execute("PRAGMA journal_mode=WAL;")?;
@@ -363,26 +384,75 @@ impl Client {
             t.query_one("SELECT to_regclass('public.gl_format') IS NOT NULL", &[])?
                 .get::<_, bool>(0usize)?
         };
-        if exists {
-            if t.query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
-                .get::<_, i32>(0usize)?
-                != FORMAT_VERSION
-            {
+        if !exists {
+            if upgrade {
                 return Err(Error::new(
-                    409,
-                    "unsupported storage format; initialize a fresh database",
+                    404,
+                    "no GeoLedger database to upgrade; start the server to initialize one",
                 ));
             }
-        } else {
             t.batch_execute(if sqlite {
                 include_str!("sqlite.sql")
             } else {
                 include_str!("postgis.sql")
             })?;
+            // Fresh databases run the same migrations as upgrades, so every
+            // initialization exercises the upgrade path.
+            t.apply_migrations(5)?;
+            t.commit()?;
+            return Ok(None);
         }
-        t.commit()
+        let version = t
+            .query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
+            .get::<_, i32>(0usize)?;
+        if version > FORMAT_VERSION {
+            return Err(Error::new(
+                409,
+                "storage format is newer than this server; upgrade the server",
+            ));
+        }
+        if version < FORMAT_VERSION && !upgrade {
+            return Err(Error::new(
+                409,
+                "storage format predates this server; back up, then run `geoledger-server migrate`",
+            ));
+        }
+        if version < 5 {
+            return Err(Error::new(
+                409,
+                "storage format predates the oldest upgradable format (5); export and import into a fresh database",
+            ));
+        }
+        Ok(Some((version, t)))
     }
 }
+impl SqlTransaction {
+    fn apply_migrations(&mut self, from: i32) -> Result<()> {
+        let sqlite = matches!(self.0.backend, Backend::Sqlite(_));
+        for (version, sqlite_sql, postgis_sql) in MIGRATIONS {
+            if *version > from {
+                self.batch_execute(if sqlite { sqlite_sql } else { postgis_sql })?;
+            }
+        }
+        let version = self
+            .query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
+            .get::<_, i32>(0usize)?;
+        if version != FORMAT_VERSION {
+            return Err(Error::new(
+                500,
+                "migration left an unexpected format version",
+            ));
+        }
+        Ok(())
+    }
+}
+/// (target version, SQLite script, PostgreSQL script). Each script must leave
+/// gl_format.version at its target version.
+const MIGRATIONS: &[(i32, &str, &str)] = &[(
+    6,
+    include_str!("migrations/0006.sqlite.sql"),
+    include_str!("migrations/0006.postgis.sql"),
+)];
 impl Drop for Client {
     fn drop(&mut self) {
         if self.transaction {
@@ -468,8 +538,8 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>> {
         self.query_opt(
             &self.lock_sql(
-                "SELECT role FROM gl_project_members WHERE project=$1 AND subject=$2",
-                "FOR SHARE",
+                "SELECT m.role,p.state FROM gl_project_members m JOIN gl_projects p ON p.id=m.project WHERE m.project=$1 AND m.subject=$2 AND NOT m.removed AND p.state<>'deleted'",
+                "FOR SHARE OF m",
             ),
             &[&project, &subject],
         )
@@ -583,21 +653,55 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn insert_owner(&mut self, project: &str, subject: &str) -> Result<()> {
         self.execute(
-            "INSERT INTO gl_project_members VALUES($1,$2,'owner')",
+            "INSERT INTO gl_project_members(project,subject,role) VALUES($1,$2,'owner')",
             &[&project, &subject],
         )
     }
     fn list_projects(&mut self, subject: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
-        self.query("SELECT p.id,p.name,p.head FROM gl_projects p JOIN gl_project_members m ON m.project=p.id WHERE m.subject=$1 AND p.id>$2 ORDER BY p.id LIMIT $3", &[&subject, &after, &limit])
+        self.query("SELECT p.id,p.name,p.head,p.state,m.role FROM gl_projects p JOIN gl_project_members m ON m.project=p.id WHERE m.subject=$1 AND NOT m.removed AND p.state<>'deleted' AND p.id>$2 ORDER BY p.id LIMIT $3", &[&subject, &after, &limit])
     }
     fn project_info(&mut self, project: &str) -> Result<Row> {
-        self.query_one("SELECT name,head FROM gl_projects WHERE id=$1", &[&project])
+        self.query_one(
+            "SELECT name,head,state FROM gl_projects WHERE id=$1",
+            &[&project],
+        )
     }
     fn owner_summary(&mut self, project: &str, subject: &str) -> Result<Row> {
-        self.query_one("SELECT count(*) FILTER (WHERE role='owner'), coalesce(max(CASE WHEN subject=$2 AND role='owner' THEN 1 ELSE 0 END),0) FROM gl_project_members WHERE project=$1", &[&project, &subject])
+        self.query_one("SELECT count(*) FILTER (WHERE role='owner'), coalesce(max(CASE WHEN subject=$2 AND role='owner' THEN 1 ELSE 0 END),0) FROM gl_project_members WHERE project=$1 AND NOT removed", &[&project, &subject])
     }
     fn set_member(&mut self, project: &str, subject: &str, role: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_project_members VALUES($1,$2,$3) ON CONFLICT(project,subject) DO UPDATE SET role=excluded.role", &[&project, &subject, &role])
+        self.execute("INSERT INTO gl_project_members(project,subject,role) VALUES($1,$2,$3) ON CONFLICT(project,subject) DO UPDATE SET role=excluded.role,removed=false", &[&project, &subject, &role])
+    }
+    fn live_project(&mut self, project: &str, lock: bool) -> Result<Option<Row>> {
+        let sql = "SELECT name,head,state FROM gl_projects WHERE id=$1 AND state<>'deleted'";
+        if lock {
+            self.query_opt(&self.lock_sql(sql, "FOR UPDATE"), &[&project])
+        } else {
+            self.query_opt(sql, &[&project])
+        }
+    }
+    fn list_members(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
+        self.query("SELECT subject,role FROM gl_project_members WHERE project=$1 AND NOT removed AND subject>$2 ORDER BY subject LIMIT $3", &[&project, &after, &limit])
+    }
+    fn remove_member(&mut self, project: &str, subject: &str) -> Result<()> {
+        self.execute(
+            "UPDATE gl_project_members SET removed=true WHERE project=$1 AND subject=$2",
+            &[&project, &subject],
+        )
+    }
+    fn set_project_state(&mut self, project: &str, state: &str) -> Result<()> {
+        self.execute(
+            "UPDATE gl_projects SET state=$2 WHERE id=$1",
+            &[&project, &state],
+        )
+    }
+    fn owned_projects(&mut self, subject: &str) -> Result<Row> {
+        self.query_one("SELECT count(*) FROM gl_project_members m JOIN gl_projects p ON p.id=m.project WHERE m.subject=$1 AND m.role='owner' AND NOT m.removed AND p.state<>'deleted'", &[&subject])
+    }
+    fn ensure_identity(&mut self, project: &str, subject: &str) -> Result<()> {
+        // Audit rows reference a member row; administrators acting without
+        // membership get an inactive placeholder that grants nothing.
+        self.execute("INSERT INTO gl_project_members(project,subject,role,removed) VALUES($1,$2,'viewer',true) ON CONFLICT(project,subject) DO NOTHING", &[&project, &subject])
     }
     fn insert_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()> {
         self.execute(
@@ -704,7 +808,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.query("SELECT id,subject,action,detail,created_at FROM gl_audit_events WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3", &[&project, &after, &limit])
     }
     fn begin_merge(&mut self) -> Result<()> {
-        self.batch_execute("DROP TABLE IF EXISTS center_merge; CREATE TEMP TABLE center_merge(dataset text, feature_id text, before_value text, after_value text)")
+        self.batch_execute("DROP TABLE IF EXISTS gl_merge_stage; CREATE TEMP TABLE gl_merge_stage(dataset text, feature_id text, before_value text, after_value text)")
     }
     fn merge_page(
         &mut self,
@@ -725,7 +829,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         after: &Option<String>,
     ) -> Result<()> {
         self.execute(
-            "INSERT INTO center_merge VALUES($1,$2,$3,$4)",
+            "INSERT INTO gl_merge_stage VALUES($1,$2,$3,$4)",
             &[&dataset, &key, &before, &after],
         )
     }
@@ -748,13 +852,13 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,$2,$3,$4,$5)", &[&project, &revision, &workspace, &subject, &message])
     }
     fn append_changes(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,NULLIF(before_value,'null'),after_value FROM center_merge", &[&project, &revision])
+        self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,NULLIF(before_value,'null'),after_value FROM gl_merge_stage", &[&project, &revision])
     }
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.execute("UPDATE gl_history AS h SET valid_to=$2 FROM center_merge m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL", &[&project, &revision])
+        self.execute("UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL", &[&project, &revision])
     }
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM center_merge", &[&project, &revision])
+        self.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM gl_merge_stage", &[&project, &revision])
     }
     fn advance_head(&mut self, project: &str, revision: i64) -> Result<()> {
         self.execute(
@@ -787,7 +891,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn stage_resolution(&mut self, dataset: &str, key: &str, after: &Option<String>) -> Result<()> {
         self.execute(
-            "INSERT INTO center_merge(dataset,feature_id,after_value) VALUES($1,$2,$3)",
+            "INSERT INTO gl_merge_stage(dataset,feature_id,after_value) VALUES($1,$2,$3)",
             &[&dataset, &key, &after],
         )
     }
@@ -798,7 +902,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         )
     }
     fn replace_deltas_with_merge(&mut self, project: &str, workspace: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom) SELECT $1,$2,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM center_merge", &[&project, &workspace])
+        self.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom) SELECT $1,$2,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM gl_merge_stage", &[&project, &workspace])
     }
     fn advance_base(&mut self, project: &str, workspace: &str, revision: i64) -> Result<()> {
         self.execute(
@@ -820,6 +924,23 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
 }
 
+/// SQL NULL accepted for any parameter type (a typed `None` only matches its own type).
+#[derive(Debug)]
+struct AnyNull;
+impl tokio_postgres::types::ToSql for AnyNull {
+    fn to_sql(
+        &self,
+        _: &tokio_postgres::types::Type,
+        _: &mut bytes::BytesMut,
+    ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    {
+        Ok(tokio_postgres::types::IsNull::Yes)
+    }
+    fn accepts(_: &tokio_postgres::types::Type) -> bool {
+        true
+    }
+    tokio_postgres::types::to_sql_checked!();
+}
 pub(crate) struct SqlStorage {
     pub(crate) storage: Storage,
     pub(crate) pool: std::sync::Arc<postgres::Pool>,
@@ -849,6 +970,136 @@ impl StorageBackend for SqlStorage {
             Client::open(&self.storage, &self.pool, timeout)?.transaction(read_only)?,
         ))
     }
+    fn pool_stats(&self) -> Option<crate::PoolStats> {
+        matches!(self.storage, Storage::Postgis(_)).then(|| self.pool.stats())
+    }
+    fn upgrade(&self, dry_run: bool, timeout: Duration) -> Result<(i32, i32)> {
+        Client::open(&self.storage, &self.pool, timeout)?.upgrade(dry_run)
+    }
+    fn export(
+        &self,
+        out: &mut dyn std::io::Write,
+        timeout: Duration,
+    ) -> Result<crate::DataSummary> {
+        let missing = || Error::new(404, "no GeoLedger database to export");
+        if matches!(&self.storage, Storage::Sqlite(path) if !path.is_file()) {
+            return Err(missing());
+        }
+        let mut t = Client::open(&self.storage, &self.pool, timeout)?.transaction(true)?;
+        let exists = match self.storage {
+            Storage::Sqlite(_) => t
+                .query_opt(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_format'",
+                    &[],
+                )?
+                .is_some(),
+            Storage::Postgis(_) => t
+                .query_one("SELECT to_regclass('public.gl_format') IS NOT NULL", &[])?
+                .get::<_, bool>(0usize)?,
+        };
+        if !exists {
+            return Err(missing());
+        }
+        portable::export(&mut t, self.name(), out)
+    }
+    fn import(
+        &self,
+        input: &mut dyn std::io::BufRead,
+        timeout: Duration,
+    ) -> Result<crate::DataSummary> {
+        Client::open(&self.storage, &self.pool, timeout)?.migrate()?;
+        portable::import(Client::open(&self.storage, &self.pool, timeout)?, input)
+    }
+    fn backup(&self, target: &std::path::Path, timeout: Duration) -> Result<()> {
+        let Storage::Sqlite(source) = &self.storage else {
+            return Err(Error::new(
+                409,
+                "PostgreSQL backups use pg_dump or WAL archiving (see docs/production.md); `geoledger-server export` gives a portable logical copy",
+            ));
+        };
+        let missing = || Error::new(404, "no GeoLedger database to back up");
+        if !source.is_file() {
+            return Err(missing());
+        }
+        let target_text = target
+            .to_str()
+            .ok_or_else(|| Error::new(400, "backup path must be valid UTF-8"))?
+            .to_owned();
+        // Reserve the target as a new private file (VACUUM INTO accepts an empty
+        // file), so a backup is never readable by others and never overwrites.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(target).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::new(409, "backup target already exists")
+            } else {
+                Error::new(500, "cannot create backup file").caused_by(e)
+            }
+        })?;
+        let result = (|| {
+            let mut c = Client::open(&self.storage, &self.pool, timeout)?;
+            let exists = c
+                .query_opt(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_format'",
+                    &[],
+                )?
+                .is_some();
+            if !exists {
+                return Err(missing());
+            }
+            // VACUUM INTO reads one consistent snapshot while writers continue (WAL).
+            c.execute("VACUUM INTO $1", &[&target_text])?;
+            drop(c);
+            verify_sqlite_file(target, timeout)
+        })();
+        if result.is_err() {
+            // Never leave a file that looks like a usable backup.
+            let _ = std::fs::remove_file(target);
+        }
+        result
+    }
+}
+/// Check that a SQLite file is an intact GeoLedger database at the current format.
+pub(crate) fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> Result<()> {
+    if !path.is_file() {
+        return Err(Error::new(404, "database file not found"));
+    }
+    let mut c = Client::open(
+        &Storage::Sqlite(path.to_owned()),
+        &Arc::new(postgres::Pool::default()),
+        timeout,
+    )?;
+    c.batch_execute("PRAGMA query_only=ON")?;
+    let check = c
+        .query_one("PRAGMA integrity_check", &[])?
+        .get::<_, String>(0usize)?;
+    if check != "ok" {
+        return Err(Error::new(409, "SQLite integrity check failed"));
+    }
+    let exists = c
+        .query_opt(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_format'",
+            &[],
+        )?
+        .is_some();
+    if !exists {
+        return Err(Error::new(409, "not a GeoLedger database"));
+    }
+    let version = c
+        .query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
+        .get::<_, i32>(0usize)?;
+    if version != FORMAT_VERSION {
+        return Err(Error::new(
+            409,
+            &format!("database has storage format {version}; this server uses {FORMAT_VERSION}"),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

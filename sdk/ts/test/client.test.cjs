@@ -3,6 +3,17 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { Client, Workspace, GeoLedgerError, parseJson } = require("../dist");
 
+test("plaintext to remote hosts requires explicit opt-in", () => {
+  const { Client, isLoopbackHost } = require("../dist/index.js");
+  assert.throws(
+    () => new Client("http://geoledger.example:7882", "token"),
+    (e) => e.code === "invalid_argument",
+  );
+  new Client("http://geoledger.example:7882", "token", 1000, { allowInsecure: true }).close();
+  new Client("http://127.0.0.1:7882", "token").close();
+  assert.ok(isLoopbackHost("[::1]") && isLoopbackHost("localhost") && !isLoopbackHost("10.0.0.1"));
+});
+
 test("public client keeps generated transport private", () => {
   const client = new Client("http://127.0.0.1:7882", "test-only-token");
   try {

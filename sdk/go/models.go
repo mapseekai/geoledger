@@ -16,6 +16,13 @@ type Project struct {
 	Name string `json:"name"`
 	Head int64  `json:"head"`
 	Role string `json:"role"`
+	// State is active, archived (read-only) or deleted.
+	State string `json:"state"`
+}
+
+type Member struct {
+	Subject string `json:"subject"`
+	Role    string `json:"role"`
 }
 
 type Dataset struct {

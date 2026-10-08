@@ -6,6 +6,15 @@ services:
       - "127.0.0.1:7882:7882"
     volumes:
       - geoledger-data:/data
+    environment:
+      GL_SHUTDOWN_DRAIN_SECS: "5"
+      GL_SHUTDOWN_TIMEOUT_SECS: "40"
+    healthcheck:
+      test: ["CMD", "geoledger-server", "probe"]
+      interval: 15s
+      timeout: 6s
+      start_period: 30s
+      retries: 3
     restart: unless-stopped
     stop_grace_period: 60s
   console:
@@ -17,10 +26,19 @@ services:
       - "127.0.0.1:3000:3000"
     environment:
       GL_WEB_ENDPOINT: http://geoledger:7882
+      # Plaintext only inside this private Compose network; see docs/security.md.
+      GL_ALLOW_INSECURE_TRANSPORT: "true"
       GL_WEB_ORIGIN: ${GL_WEB_ORIGIN:-http://localhost:3000}
       GL_WEB_SESSION_SECRET: ${GL_WEB_SESSION_SECRET:-}
     depends_on:
-      - geoledger
+      geoledger:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     restart: unless-stopped
 volumes:
   geoledger-data:

@@ -1,0 +1,8 @@
+# cargo-audit configuration (scripts/audit.sh, CI supply-chain job).
+[advisories]
+# RUSTSEC-2023-0089 atomic-polyfill is unmaintained. It is only reachable through
+# geo-types' optional rstar_0_9/0_10/0_11 features (heapless 0.7), which this
+# workspace does not enable: Cargo.lock lists every optional dependency, but
+# `cargo tree --target all -i atomic-polyfill` is empty, so it is never compiled.
+# Re-check when geo/geojson drop the old rstar features.
+ignore = ["RUSTSEC-2023-0089"]

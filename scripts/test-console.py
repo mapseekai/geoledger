@@ -12,7 +12,12 @@ parser.add_argument('--token-file', required=True)
 parser.add_argument('--chromium')
 parser.add_argument('--screenshots', default='artifacts')
 args = parser.parse_args()
-token = json.loads(Path(args.token_file).read_text())[0]['token']
+credentials = Path(args.token_file)
+entries = json.loads(credentials.read_text())
+if 'token' not in entries[0]:
+    # Server token files hold digests only; bootstrap writes plaintext beside them.
+    entries = json.loads(credentials.with_name('admin-credentials.json').read_text())
+token = entries[0]['token']
 shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
 origin = args.url.rstrip('/')
@@ -160,6 +165,13 @@ with sync_playwright() as p:
     page.get_by_label('成员身份',exact=True).fill('browser-test-viewer')
     page.get_by_role('button',name='保存权限',exact=True).click()
     expect(page.get_by_text('成员权限已更新。',exact=True)).to_be_visible()
+    expect(page.get_by_role('cell',name='browser-test-viewer',exact=True)).to_be_visible()
+    page.get_by_role('button',name='移除成员 browser-test-viewer',exact=True).click()
+    expect(page.get_by_role('cell',name='browser-test-viewer',exact=True)).to_have_count(0)
+    page.get_by_role('button',name='归档项目',exact=True).click()
+    expect(page.get_by_role('button',name='恢复项目',exact=True)).to_be_visible()
+    page.get_by_role('button',name='恢复项目',exact=True).click()
+    expect(page.get_by_role('button',name='归档项目',exact=True)).to_be_visible()
     page.goto(origin+'/audit?project='+project)
     expect(page.get_by_text('第 1 页 · 本页 20 项',exact=True)).to_be_visible()
     page.get_by_role('button',name='下一页',exact=True).click()
@@ -210,10 +222,17 @@ with sync_playwright() as p:
     expect(page.get_by_role('button',name='打开导航',exact=True)).to_be_visible()
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     page.screenshot(path=str(shots/'next-mobile.png'),full_page=True)
+    copied=next(c for c in context.cookies() if c['name']=='gl_session')
     page.get_by_role('button',name='打开导航',exact=True).click()
     page.get_by_role('button',name='退出登录',exact=True).click()
     page.wait_for_url('**/login')
     assert not any(c['name']=='gl_session' for c in context.cookies())
+    # Logout revokes the server-side session: a copied cookie no longer authenticates.
+    replay=browser.new_context()
+    replay.add_cookies([copied])
+    response=replay.request.post(origin+'/api/console',data={'action':'info'},headers={'Origin':origin})
+    assert response.status==401, response.status
+    replay.close()
     assert page.evaluate('localStorage.length')==0
     assert page.evaluate('sessionStorage.getItem("gl.publication")') is None
     page.screenshot(path=str(shots/'next-login-mobile.png'),full_page=True)
@@ -221,4 +240,4 @@ with sync_playwright() as p:
     assert response.status==401
     assert not errors, errors
     browser.close()
-print('Console passed: session/CSRF, exact JSON, interrupted publication + expired-login retry, 101 workspaces, long IDs, concurrent draft/published paging, history/undo, access/audit, logout and mobile layout.')
+print('Console passed: session/CSRF, exact JSON, interrupted publication + expired-login retry, 101 workspaces, long IDs, concurrent draft/published paging, history/undo, access/audit, logout (server-side revocation) and mobile layout.')

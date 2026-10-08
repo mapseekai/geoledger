@@ -19,3 +19,14 @@ web/*.tsbuildinfo
 web/.env*
 !web/.env.example
 web/test-results/
+
+# Local certificates for deploy/compose.production.yaml
+/deploy/tls/
+*credentials*.json
+
+# cargo-fuzz
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+/fuzz/Cargo.lock

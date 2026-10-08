@@ -46,6 +46,30 @@ class MemberRequest(_message.Message):
     role: str
     def __init__(self, project: _Optional[str] = ..., subject: _Optional[str] = ..., role: _Optional[str] = ...) -> None: ...
 
+class MemberRefRequest(_message.Message):
+    __slots__ = ("project", "subject")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    SUBJECT_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    subject: str
+    def __init__(self, project: _Optional[str] = ..., subject: _Optional[str] = ...) -> None: ...
+
+class ArchiveProjectRequest(_message.Message):
+    __slots__ = ("project", "archived")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    ARCHIVED_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    archived: bool
+    def __init__(self, project: _Optional[str] = ..., archived: bool = ...) -> None: ...
+
+class DeleteProjectRequest(_message.Message):
+    __slots__ = ("project", "confirm_name")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    CONFIRM_NAME_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    confirm_name: str
+    def __init__(self, project: _Optional[str] = ..., confirm_name: _Optional[str] = ...) -> None: ...
+
 class DatasetRequest(_message.Message):
     __slots__ = ("project", "name")
     PROJECT_FIELD_NUMBER: _ClassVar[int]
@@ -209,22 +233,38 @@ class InfoReply(_message.Message):
     def __init__(self, version: _Optional[str] = ..., backend: _Optional[str] = ..., format_version: _Optional[int] = ..., max_request_bytes: _Optional[int] = ..., max_feature_bytes: _Optional[int] = ...) -> None: ...
 
 class ProjectReply(_message.Message):
-    __slots__ = ("project", "name", "head", "role")
+    __slots__ = ("project", "name", "head", "role", "state")
     PROJECT_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     HEAD_FIELD_NUMBER: _ClassVar[int]
     ROLE_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
     project: str
     name: str
     head: int
     role: str
-    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., head: _Optional[int] = ..., role: _Optional[str] = ...) -> None: ...
+    state: str
+    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., head: _Optional[int] = ..., role: _Optional[str] = ..., state: _Optional[str] = ...) -> None: ...
 
 class ProjectsReply(_message.Message):
     __slots__ = ("projects",)
     PROJECTS_FIELD_NUMBER: _ClassVar[int]
     projects: _containers.RepeatedCompositeFieldContainer[ProjectReply]
     def __init__(self, projects: _Optional[_Iterable[_Union[ProjectReply, _Mapping]]] = ...) -> None: ...
+
+class MemberInfo(_message.Message):
+    __slots__ = ("subject", "role")
+    SUBJECT_FIELD_NUMBER: _ClassVar[int]
+    ROLE_FIELD_NUMBER: _ClassVar[int]
+    subject: str
+    role: str
+    def __init__(self, subject: _Optional[str] = ..., role: _Optional[str] = ...) -> None: ...
+
+class MembersReply(_message.Message):
+    __slots__ = ("members",)
+    MEMBERS_FIELD_NUMBER: _ClassVar[int]
+    members: _containers.RepeatedCompositeFieldContainer[MemberInfo]
+    def __init__(self, members: _Optional[_Iterable[_Union[MemberInfo, _Mapping]]] = ...) -> None: ...
 
 class OkReply(_message.Message):
     __slots__ = ("ok",)

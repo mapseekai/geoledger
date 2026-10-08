@@ -12,6 +12,9 @@ mod publication;
 use publication::*;
 mod codec;
 mod errors;
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod fuzzing;
 mod session;
 use geoledger_core::{Cell, Record, merge::merge_record};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -19,6 +22,7 @@ use serde_json::{Map, Value, json};
 use session::Row;
 pub mod repository;
 use repository::{RepositoryTransaction, StorageBackend};
+pub use session::pgtls::{PgTlsSummary, SslMode, summarize as postgres_tls_summary};
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -28,9 +32,10 @@ use std::{
 use uuid::Uuid;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
-pub const FORMAT_VERSION: i32 = 5;
+pub const FORMAT_VERSION: i32 = 6;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
+pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
 fn bad() -> Error {
     Error::new(400, "invalid request")
 }
@@ -60,25 +65,112 @@ fn id(s: &str) -> Result<()> {
 pub struct Application {
     storage: std::sync::Arc<dyn StorageBackend>,
     timeout: Duration,
+    policy: std::sync::Arc<Policy>,
+}
+/// Platform-level authorization that is not tied to project membership.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Policy {
+    /// Subjects that may administer any project (members, archive, delete)
+    /// and create projects regardless of the creation policy or quota.
+    /// Administrators gain no data access until they add themselves as members.
+    pub admins: BTreeSet<String>,
+    /// Only administrators may create projects.
+    pub admin_only_project_creation: bool,
+    /// Maximum projects (not deleted) a non-administrator may own.
+    pub max_owned_projects: Option<u32>,
 }
 #[derive(Clone)]
 pub enum Storage {
     Sqlite(std::path::PathBuf),
     Postgis(String),
 }
+/// Tunable limits for the built-in SQL backends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StorageOptions {
+    /// Maximum concurrent PostgreSQL connections.
+    pub pool_size: usize,
+    /// PostgreSQL `statement_timeout` for every session.
+    pub statement_timeout: Duration,
+    /// PostgreSQL `lock_timeout` for every session.
+    pub lock_timeout: Duration,
+}
+impl Default for StorageOptions {
+    fn default() -> Self {
+        Self {
+            pool_size: 20,
+            statement_timeout: Duration::from_secs(30),
+            lock_timeout: Duration::from_secs(10),
+        }
+    }
+}
+/// Connection pool occupancy, exported as metrics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    pub capacity: usize,
+    pub active: usize,
+    pub idle: usize,
+    /// Acquisitions that gave up because no connection became free before the deadline.
+    pub wait_timeouts: u64,
+}
 type Transaction = Box<dyn RepositoryTransaction>;
 impl Application {
     pub fn new(storage: Storage) -> Self {
+        Self::with_options(storage, StorageOptions::default())
+    }
+    pub fn with_options(storage: Storage, options: StorageOptions) -> Self {
         Self::with_backend(std::sync::Arc::new(session::SqlStorage {
             storage,
-            pool: Default::default(),
+            pool: std::sync::Arc::new(session::postgres::Pool::new(StorageOptions {
+                pool_size: options.pool_size.max(1),
+                ..options
+            })),
         }))
+    }
+    pub fn pool_stats(&self) -> Option<PoolStats> {
+        self.storage.pool_stats()
     }
     pub fn with_backend(storage: std::sync::Arc<dyn StorageBackend>) -> Self {
         Self {
             storage,
             timeout: Duration::from_secs(30),
+            policy: Default::default(),
         }
+    }
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = std::sync::Arc::new(policy);
+        self
+    }
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
+    /// Explicit upgrade of an existing database: (stored version, current version).
+    pub fn upgrade(&self, dry_run: bool) -> Result<(i32, i32)> {
+        self.storage.upgrade(dry_run, self.timeout)
+    }
+    /// Stream a logical export of the whole database (consistent snapshot; the
+    /// server may keep running).
+    pub fn export_data(&self, out: &mut dyn std::io::Write) -> Result<DataSummary> {
+        self.storage.export(out, self.timeout)
+    }
+    /// Row counts and digests of the live database, comparable with an export.
+    pub fn data_summary(&self) -> Result<DataSummary> {
+        self.storage.export(&mut std::io::sink(), self.timeout)
+    }
+    /// Import an export into a new or empty database; all-or-nothing.
+    pub fn import_data(&self, input: &mut dyn std::io::BufRead) -> Result<DataSummary> {
+        self.storage.import(input, self.timeout)
+    }
+    /// Online consistent backup into a new file (SQLite).
+    pub fn backup(&self, target: &std::path::Path) -> Result<()> {
+        self.storage.backup(target, self.timeout)
+    }
+    /// Validate an export file's structure, digests and checksum without a database.
+    pub fn read_export(input: &mut dyn std::io::BufRead) -> Result<DataSummary> {
+        session::portable::read(input, |_, _, _| Ok(()))
+    }
+    /// Integrity and format check of a SQLite database file, e.g. a backup.
+    pub fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> Result<()> {
+        session::verify_sqlite_file(path, timeout)
     }
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
@@ -119,13 +211,19 @@ impl Application {
                 | "history"
                 | "audit"
                 | "commit"
+                | "list_members"
         );
+        let policy = self.policy.as_ref();
         let mut t = self.storage.begin(read_only, self.timeout)?;
         let result = match command {
-            Command::CreateProject(r) => create_project(&mut t, subject, r),
+            Command::CreateProject(r) => create_project(&mut t, subject, policy, r),
             Command::ListProjects(r) => list_projects(&mut t, subject, r),
-            Command::GetProject(r) => get_project(&mut t, subject, r),
-            Command::SetMember(r) => set_member(&mut t, subject, r),
+            Command::GetProject(r) => get_project(&mut t, subject, policy, r),
+            Command::SetMember(r) => set_member(&mut t, subject, policy, r),
+            Command::RemoveMember(r) => remove_member(&mut t, subject, policy, r),
+            Command::ListMembers(r) => list_members(&mut t, subject, policy, r),
+            Command::ArchiveProject(r) => archive_project(&mut t, subject, policy, r),
+            Command::DeleteProject(r) => delete_project(&mut t, subject, policy, r),
             Command::CreateDataset(r) => create_dataset(&mut t, subject, r),
             Command::ListDatasets(r) => list_datasets(&mut t, subject, r),
             Command::CreateWorkspace(r) => create_workspace(&mut t, subject, r),
@@ -215,6 +313,10 @@ enum Command {
     ListProjects(Page),
     GetProject(Project),
     SetMember(Member),
+    RemoveMember(MemberRef),
+    ListMembers(ProjectPage),
+    ArchiveProject(Archive),
+    DeleteProject(DeleteProject),
     CreateDataset(NamedProject),
     ListDatasets(ProjectPage),
     CreateWorkspace(Project),

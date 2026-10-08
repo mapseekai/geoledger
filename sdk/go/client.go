@@ -16,7 +16,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"math"
+	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -86,17 +88,50 @@ type Client struct {
 	closed atomic.Bool
 }
 
+// DialOptions configures a client. Plaintext http:// is accepted only for loopback hosts
+// unless AllowInsecure is set (or GL_ALLOW_INSECURE_TRANSPORT=true): the bearer token would
+// otherwise cross the network unencrypted.
+type DialOptions struct {
+	Timeout       time.Duration
+	AllowInsecure bool
+}
+
+// IsLoopbackHost reports whether host is localhost or a loopback IP literal.
+func IsLoopbackHost(host string) bool {
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func insecureOptIn() bool {
+	switch os.Getenv("GL_ALLOW_INSECURE_TRANSPORT") {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
 // Dial accepts a service URL and a token. It never retries writes automatically.
 func Dial(endpoint, token string) (*Client, error) {
-	return DialWithTimeout(endpoint, token, 30*time.Second)
+	return DialWithOptions(endpoint, token, DialOptions{Timeout: 30 * time.Second})
 }
 func DialWithTimeout(endpoint, token string, timeout time.Duration) (*Client, error) {
+	return DialWithOptions(endpoint, token, DialOptions{Timeout: timeout})
+}
+func DialWithOptions(endpoint, token string, options DialOptions) (*Client, error) {
+	timeout := options.Timeout
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Hostname() == "" || u.Port() == "" || (u.Scheme != "http" && u.Scheme != "https") || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return nil, invalid("endpoint must be http(s)://host:port")
 	}
 	if token == "" || timeout <= 0 || strings.IndexFunc(token, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
 		return nil, invalid("ASCII token and positive timeout required")
+	}
+	if u.Scheme == "http" && !IsLoopbackHost(u.Hostname()) && !options.AllowInsecure && !insecureOptIn() {
+		return nil, invalid("refusing to send credentials over plaintext http to a non-loopback host; use https or set AllowInsecure / GL_ALLOW_INSECURE_TRANSPORT=true")
 	}
 	var transport credentials.TransportCredentials
 	if u.Scheme == "https" {
@@ -268,6 +303,35 @@ func (c *Client) Projects(ctx context.Context, page Page) ([]Project, error) {
 func (c *Client) SetMember(ctx context.Context, project, subject, role string) error {
 	var r struct{ OK bool }
 	return call(c, ctx, c.rpc.SetMember, &pb.MemberRequest{Project: project, Subject: subject, Role: role}, &r)
+}
+
+// Members lists active members ordered by subject.
+func (c *Client) Members(ctx context.Context, project string, page Page) ([]Member, error) {
+	var r struct {
+		Members []Member `json:"members"`
+	}
+	e := call(c, ctx, c.rpc.ListMembers, &pb.ProjectPageRequest{Project: project, After: page.After, Limit: limit(page.Limit)}, &r)
+	return r.Members, e
+}
+
+// RemoveMember removes a member (owners and administrators) or leaves the
+// project when subject is the caller. The last owner cannot be removed.
+func (c *Client) RemoveMember(ctx context.Context, project, subject string) error {
+	var r struct{ OK bool }
+	return call(c, ctx, c.rpc.RemoveMember, &pb.MemberRefRequest{Project: project, Subject: subject}, &r)
+}
+
+// ArchiveProject makes a project read-only (archived=true) or active again.
+func (c *Client) ArchiveProject(ctx context.Context, project string, archived bool) (Project, error) {
+	var r Project
+	e := call(c, ctx, c.rpc.ArchiveProject, &pb.ArchiveProjectRequest{Project: project, Archived: archived}, &r)
+	return r, e
+}
+
+// DeleteProject permanently hides a project; confirmName must equal its name.
+func (c *Client) DeleteProject(ctx context.Context, project, confirmName string) error {
+	var r struct{ OK bool }
+	return call(c, ctx, c.rpc.DeleteProject, &pb.DeleteProjectRequest{Project: project, ConfirmName: confirmName}, &r)
 }
 func (c *Client) CreateDataset(ctx context.Context, project, name string) (Dataset, error) {
 	var r Dataset

@@ -4,6 +4,7 @@ import {
   type Feature,
   type ServerInfo,
   type Project,
+  type Member,
   type Dataset,
   type WorkspaceInfo,
   type SaveResult,
@@ -40,7 +41,16 @@ export function decodeServerInfo(v: wire.InfoReply): ServerInfo {
   };
 }
 export function decodeProject(v: wire.ProjectReply): Project {
-  return { id: v.project, name: v.name, head: BigInt(v.head), role: v.role };
+  return {
+    id: v.project,
+    name: v.name,
+    head: BigInt(v.head),
+    role: v.role,
+    state: v.state,
+  };
+}
+export function decodeMember(v: wire.MemberInfo): Member {
+  return { subject: v.subject, role: v.role };
 }
 export function decodeDataset(v: wire.DatasetReply): Dataset {
   return { id: v.dataset, name: v.name };

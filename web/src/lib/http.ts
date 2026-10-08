@@ -3,6 +3,7 @@ import { GeoLedgerError } from "@geoledger/client";
 import { ZodError } from "zod";
 import { configuration } from "./config";
 import { encode } from "./operations";
+import { logFailure } from "./log";
 export class HttpError extends Error {
   constructor(
     public status: number,
@@ -93,6 +94,9 @@ export function failure(error: unknown) {
       resource_exhausted: 429,
       timeout: 504,
     };
+    const status = statuses[error.code] ?? 503;
+    if (status >= 500)
+      logFailure({ status, code: error.code, requestId: error.requestId });
     return reply(
       {
         error: {
@@ -102,9 +106,10 @@ export function failure(error: unknown) {
           uncertain: error.uncertain,
         },
       },
-      statuses[error.code] ?? 503,
+      status,
     );
   }
+  logFailure({ status: 503, error });
   // Avoid leaking cookies, credentials or upstream connection diagnostics into logs/responses.
   return reply(
     {

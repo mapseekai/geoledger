@@ -9,6 +9,8 @@ license.workspace = true
 geoledger-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
+bytes = "1"
 uuid.workspace = true
 tokio.workspace = true
 tokio-postgres = "0.7"
@@ -17,7 +19,10 @@ native-tls = "0.2"
 rusqlite = { version = "0.37", features = ["bundled", "functions", "hooks"] }
 geo = "0.31"
 geojson = { version = "0.24", features = ["geo-types"] }
-tracing = "0.1"
+
+[features]
+# Exposes `fuzzing` entry points for the cargo-fuzz targets in fuzz/.
+fuzzing = []
 
 [dev-dependencies]
 tempfile.workspace = true

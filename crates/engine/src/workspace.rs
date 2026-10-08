@@ -74,14 +74,63 @@ pub(super) struct Version {
     pub(super) workspace: String,
     pub(super) expected_workspace_version: i64,
 }
+/// Data access for an active member. Writes need editor/owner and an active project.
 pub(super) fn membership(t: &mut Transaction, p: &str, s: &str, write: bool) -> Result<String> {
     id(p)?;
     let row = t.member_role(p, s)?.ok_or_else(missing)?;
     let role: String = row.get(0usize)?;
+    let state: String = row.get(1usize)?;
     if write && role == "viewer" {
         return Err(missing());
     }
+    if write && state == "archived" {
+        return Err(Error::new(
+            409,
+            "project is archived; unarchive it before making changes",
+        ));
+    }
     Ok(role)
+}
+/// Project administration (members, archive, delete): active owners and
+/// platform administrators. Returns (role, state); administrators without
+/// membership report role "admin".
+pub(super) fn manage(
+    t: &mut Transaction,
+    p: &str,
+    s: &str,
+    policy: &Policy,
+    write: bool,
+) -> Result<(String, String)> {
+    id(p)?;
+    if let Some(row) = t.member_role(p, s)? {
+        let role: String = row.get(0usize)?;
+        if role == "owner" {
+            return Ok((role, row.get(1usize)?));
+        }
+    }
+    if !policy.admins.contains(s) {
+        return Err(missing());
+    }
+    let row = t.live_project(p, false)?.ok_or_else(missing)?;
+    if write {
+        t.ensure_identity(p, s)?;
+    }
+    let role = match t.member_role(p, s)? {
+        Some(member) => member.get(0usize)?,
+        None => "admin".to_owned(),
+    };
+    Ok((role, row.get(2usize)?))
+}
+/// Read access to project metadata: any active member or an administrator.
+fn visible(t: &mut Transaction, p: &str, s: &str, policy: &Policy) -> Result<String> {
+    id(p)?;
+    if let Some(row) = t.member_role(p, s)? {
+        return row.get(0usize);
+    }
+    if policy.admins.contains(s) && t.live_project(p, false)?.is_some() {
+        return Ok("admin".into());
+    }
+    Err(missing())
 }
 pub(super) fn audit(
     t: &mut Transaction,
@@ -119,32 +168,167 @@ pub(super) fn workspace(
 pub(super) fn bump(t: &mut Transaction, p: &str, w: &str, status: &str) -> Result<i64> {
     t.advance_workspace(p, w, status)?.get(0usize)
 }
-pub(super) fn create_project(t: &mut Transaction, s: &str, r: Name) -> Result<Value> {
+pub(super) fn create_project(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: Name,
+) -> Result<Value> {
     text(&r.name, 256)?;
+    let admin = policy.admins.contains(s);
+    if policy.admin_only_project_creation && !admin {
+        return Err(Error::new(
+            403,
+            "project creation is restricted to administrators",
+        ));
+    }
+    if let Some(max) = policy.max_owned_projects.filter(|_| !admin)
+        && t.owned_projects(s)?.get::<_, i64>(0usize)? >= i64::from(max)
+    {
+        return Err(Error::new(403, "project quota exceeded"));
+    }
     let p = Uuid::new_v4().to_string();
     t.insert_project(&p, &r.name)?;
     t.insert_owner(&p, s)?;
     audit(t, &p, s, "create_project", json!({}))?;
-    Ok(json!({"project":p,"name":r.name,"head":0}))
+    Ok(json!({"project":p,"name":r.name,"head":0,"role":"owner","state":"active"}))
 }
 pub(super) fn list_projects(t: &mut Transaction, s: &str, r: Page) -> Result<Value> {
     r.check()?;
     let rows = t.list_projects(s, &r.after, r.limit)?;
-    Ok(json!(rows.iter().map(|x|Ok(json!({"project":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?,"head":x.get::<_,i64>(2usize)?}))).collect::<Result<Vec<_>>>()?))
+    Ok(json!(rows.iter().map(|x|Ok(json!({"project":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?,"head":x.get::<_,i64>(2usize)?,"state":x.get::<_,String>(3usize)?,"role":x.get::<_,String>(4usize)?}))).collect::<Result<Vec<_>>>()?))
 }
-pub(super) fn get_project(t: &mut Transaction, s: &str, r: Project) -> Result<Value> {
-    let role = membership(t, &r.project, s, false)?;
-    let row = t.project_info(&r.project)?;
+fn project_json(t: &mut Transaction, p: &str, role: &str) -> Result<Value> {
+    let row = t.project_info(p)?;
     Ok(
-        json!({"project":r.project,"name":row.get::<_,String>(0usize)?,"head":row.get::<_,i64>(1usize)?,"role":role}),
+        json!({"project":p,"name":row.get::<_,String>(0usize)?,"head":row.get::<_,i64>(1usize)?,"role":role,"state":row.get::<_,String>(2usize)?}),
     )
 }
-pub(super) fn set_member(t: &mut Transaction, s: &str, r: Member) -> Result<Value> {
+pub(super) fn get_project(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: Project,
+) -> Result<Value> {
+    let role = visible(t, &r.project, s, policy)?;
+    project_json(t, &r.project, &role)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MemberRef {
+    pub(super) project: String,
+    pub(super) subject: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Archive {
+    pub(super) project: String,
+    pub(super) archived: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DeleteProject {
+    pub(super) project: String,
+    pub(super) confirm_name: String,
+}
+pub(super) fn list_members(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: ProjectPage,
+) -> Result<Value> {
+    visible(t, &r.project, s, policy)?;
+    r.page()?;
+    let rows = t.list_members(&r.project, &r.after, r.limit)?;
+    Ok(json!(
+        rows.iter()
+            .map(|x| Ok(
+                json!({"subject":x.get::<_,String>(0usize)?,"role":x.get::<_,String>(1usize)?})
+            ))
+            .collect::<Result<Vec<_>>>()?
+    ))
+}
+pub(super) fn remove_member(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: MemberRef,
+) -> Result<Value> {
+    // Same lock order as set_member and publication.
+    head(t, &r.project, true)?;
+    text(&r.subject, 128)?;
+    if r.subject == s {
+        // Any active member may leave a project.
+        membership(t, &r.project, s, false)?;
+    } else {
+        manage(t, &r.project, s, policy, true)?;
+    }
+    t.member_role(&r.project, &r.subject)?.ok_or_else(missing)?;
+    let owners = t.owner_summary(&r.project, &r.subject)?;
+    if owners.get::<_, i64>(1usize)? != 0 && owners.get::<_, i64>(0usize)? == 1 {
+        return Err(Error::new(409, "project requires an owner"));
+    }
+    t.remove_member(&r.project, &r.subject)?;
+    audit(
+        t,
+        &r.project,
+        s,
+        "remove_member",
+        json!({"subject":r.subject}),
+    )?;
+    Ok(json!({"ok":true}))
+}
+pub(super) fn archive_project(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: Archive,
+) -> Result<Value> {
+    id(&r.project)?;
+    t.live_project(&r.project, true)?.ok_or_else(missing)?;
+    let (role, state) = manage(t, &r.project, s, policy, true)?;
+    let next = if r.archived { "archived" } else { "active" };
+    if state != next {
+        t.set_project_state(&r.project, next)?;
+        audit(
+            t,
+            &r.project,
+            s,
+            if r.archived {
+                "archive_project"
+            } else {
+                "unarchive_project"
+            },
+            json!({}),
+        )?;
+    }
+    project_json(t, &r.project, &role)
+}
+pub(super) fn delete_project(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: DeleteProject,
+) -> Result<Value> {
+    id(&r.project)?;
+    let row = t.live_project(&r.project, true)?.ok_or_else(missing)?;
+    manage(t, &r.project, s, policy, true)?;
+    if row.get::<_, String>(0usize)? != r.confirm_name {
+        return Err(Error::new(400, "confirm_name must equal the project name"));
+    }
+    t.set_project_state(&r.project, "deleted")?;
+    audit(t, &r.project, s, "delete_project", json!({}))?;
+    Ok(json!({"ok":true}))
+}
+pub(super) fn set_member(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: Member,
+) -> Result<Value> {
     // Serialize membership management with publication; consistent lock order.
     head(t, &r.project, true)?;
-    if membership(t, &r.project, s, true)? != "owner" {
-        return Err(missing());
-    }
+    manage(t, &r.project, s, policy, true)?;
     text(&r.subject, 128)?;
     if !["owner", "editor", "viewer"].contains(&r.role.as_str()) {
         return Err(bad());

@@ -1,0 +1,63 @@
+# Prometheus alerting rules for geoledger-server. Scrape /metrics with a bearer
+# token (see docs/production.md#指标) under job="geoledger"; adjust thresholds to
+# the measured baseline of your deployment.
+groups:
+  - name: geoledger
+    rules:
+      - alert: GeoLedgerDown
+        expr: up{job="geoledger"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "GeoLedger instance {{ $labels.instance }} is not scrapeable"
+      - alert: GeoLedgerInternalErrors
+        expr: increase(geoledger_internal_errors_total[5m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "GeoLedger returned internal errors; search logs for 'operation failed' by request_id"
+      - alert: GeoLedgerHighServerErrorRatio
+        expr: |
+          sum by (instance) (rate(geoledger_operations_total{status=~"5.."}[5m]))
+            / sum by (instance) (rate(geoledger_operations_total[5m])) > 0.05
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "More than 5% of GeoLedger operations fail with 5xx on {{ $labels.instance }}"
+      - alert: GeoLedgerBusy
+        expr: |
+          rate(geoledger_busy_total[5m]) / rate(geoledger_requests_total[5m]) > 0.05
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Over 5% of requests answered 429 busy; raise GL_MAX_CONCURRENCY or add capacity"
+      - alert: GeoLedgerExecutionSlotsExhausted
+        expr: geoledger_execution_slots_available == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "All execution slots on {{ $labels.instance }} have been busy for 5 minutes"
+      - alert: GeoLedgerSlowOperations
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, instance, operation) (rate(geoledger_operation_duration_seconds_bucket[5m]))) > 2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 of {{ $labels.operation }} above 2 s on {{ $labels.instance }}"
+      - alert: GeoLedgerDatabasePoolWaitTimeouts
+        expr: increase(geoledger_db_pool_wait_timeouts_total[10m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Requests timed out waiting for a PostgreSQL connection; check GL_DB_POOL_SIZE and the database"
+      - alert: GeoLedgerAuthFailureSpike
+        expr: rate(geoledger_auth_failures_total[5m]) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Sustained authentication failures on {{ $labels.instance }} (expired credentials or probing)"
+      - alert: GeoLedgerStuckDraining
+        expr: geoledger_draining == 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }} has been draining for 10 minutes"

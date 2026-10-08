@@ -34,15 +34,17 @@
 
 | 方法 | 返回字段顺序 |
 |---|---|
-| member_role | role:text |
+| member_role | role:text, state:text（排除已移除成员与已删除项目） |
 | project_head | head:i64 |
 | workspace_state | base_revision:i64, version:i64, status:text |
 | feature_page | feature_id:text, properties:text, geometry:text? |
 | feature_at | properties:text?, geometry:text? |
 | dataset_exists / commit_exists | 存在时返回单行标记 |
 | advance_workspace | version:i64 |
-| list_projects | project:text, name:text, head:i64 |
-| project_info | name:text, head:i64 |
+| list_projects | project:text, name:text, head:i64, state:text, role:text |
+| project_info / live_project | name:text, head:i64, state:text |
+| list_members | subject:text, role:text（仅有效成员，按 subject 排序） |
+| owned_projects | count:i64（subject 为有效 owner 且未删除的项目数） |
 | owner_summary | owner_count:i64, target_is_owner:i64（0/1） |
 | list_datasets | dataset:text, name:text |
 | list_workspaces | workspace:text, base_revision:i64, version:i64, status:text |
@@ -65,7 +67,7 @@ SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读�
 
 PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。几何的规范 GeoJSON 与属性 JSON 文本保留跨后端一致性，PostGIS 在 `ST_GeomFromGeoJSON(geom)` 上创建 GiST 表达式索引；bbox 使用 PostGIS 空间查询。几何合法性在共同应用层校验。
 
-当前格式为 5，正式要素与历史快照统一读取 `gl_history`。部署时初始化当前格式的新数据库，已有数据通过显式导出、导入和校验接入。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，数据迁移通过显式导出、导入与校验完成。
+当前格式为 6，正式要素与历史快照统一读取 `gl_history`。新库执行基础结构与 [migrations](../crates/engine/src/migrations) 中的全部迁移；已有库仅在运维执行 `geoledger-server migrate` 时按顺序应用迁移，启动时只校验格式。新后端通过覆盖 `StorageBackend::upgrade` 提供迁移，默认实现返回 409。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
 
 ## 新后端验收
 

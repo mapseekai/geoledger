@@ -1,6 +1,6 @@
 //! Exercise error contracts over real HTTP/2 with a bounded metadata budget.
 use geoledger_rpc::v1 as pb;
-use geoledger_server::{Application, Authentication, Service, Storage, Tokens};
+use geoledger_server::{Application, Authentication, Authenticator, Service, Storage, Tokens};
 use prost::Message;
 use serde_json::json;
 use tonic::{Request, transport::Endpoint};
@@ -55,7 +55,7 @@ async fn large_conflicts_fit_trailers_and_keep_paginated_details() -> TestResult
     let tokens = Tokens::from_json(
         br#"[{"subject":"review","token":"test-only-credential-not-for-deployment-123456789"}]"#,
     )?;
-    let service = Service::new(app, Authentication::Tokens(tokens));
+    let service = Service::new(app, Authentication::new(Authenticator::Tokens(tokens)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}", listener.local_addr()?);
     let mut servers = tokio::task::JoinSet::new();

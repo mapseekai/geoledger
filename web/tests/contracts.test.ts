@@ -109,6 +109,23 @@ test("invalid actions, extra upstream addresses, missing delete values and unsaf
     }).success,
   );
 });
+test("membership and lifecycle requests are validated", () => {
+  for (const value of [
+    { action: "members", project: "p", limit: 20 },
+    { action: "removeMember", project: "p", subject: "alice" },
+    { action: "archiveProject", project: "p", archived: true },
+    { action: "deleteProject", project: "p", confirmName: "roads" },
+  ])
+    assert(requestSchema.safeParse(value).success, JSON.stringify(value));
+  for (const value of [
+    { action: "members", project: "p", limit: 1000 },
+    { action: "removeMember", project: "p" },
+    { action: "archiveProject", project: "p", archived: "yes" },
+    { action: "deleteProject", project: "p", confirmName: "" },
+    { action: "deleteProject", project: "p" },
+  ])
+    assert.equal(requestSchema.safeParse(value).success, false);
+});
 test("deployments require a secret and HTTPS for non-loopback production origins", () => {
   const saved = { ...process.env };
   try {

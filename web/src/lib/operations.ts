@@ -115,6 +115,16 @@ export async function execute(
     case "setMember":
       await client.setMember(r.project, r.subject, r.role);
       return { ok: true };
+    case "members":
+      return client.members(r.project, r);
+    case "removeMember":
+      await client.removeMember(r.project, r.subject);
+      return { ok: true };
+    case "archiveProject":
+      return client.archiveProject(r.project, r.archived);
+    case "deleteProject":
+      await client.deleteProject(r.project, r.confirmName);
+      return { ok: true };
   }
 }
 export function encode(value: unknown) {

@@ -110,6 +110,22 @@ func run() error {
 	if !errors.As(err, &own) || own.Code != "conflict" {
 		return fmt.Errorf("wrong duplicate error: %v", err)
 	}
-	fmt.Println("Go SDK: business API, exact integers, automatic versions, publish retry OK")
+	if err = client.SetMember(ctx, project.ID, "sdk-viewer", "viewer"); err != nil {
+		return err
+	}
+	members, err := client.Members(ctx, project.ID, gl.Page{})
+	if err != nil || len(members) != 2 {
+		return fmt.Errorf("members: %v %v", members, err)
+	}
+	if err = client.RemoveMember(ctx, project.ID, "sdk-viewer"); err != nil {
+		return err
+	}
+	if p, err := client.ArchiveProject(ctx, project.ID, true); err != nil || p.State != "archived" {
+		return fmt.Errorf("archive: %v %v", p, err)
+	}
+	if err = client.DeleteProject(ctx, project.ID, project.Name); err != nil {
+		return err
+	}
+	fmt.Println("Go SDK: business API, exact integers, automatic versions, publish retry, membership lifecycle OK")
 	return nil
 }

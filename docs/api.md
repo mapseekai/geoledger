@@ -20,6 +20,16 @@ Python 使用 RLock，TypeScript 进行同句柄并发校验。多个独立对�
 默认 SDK 地址 `http://127.0.0.1:7882`，控制台 HTTP 地址使用另一个端口。
 SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒，消息上限 4 MiB。
 
+`http://` 地址只用于回环主机（`127.0.0.1`、`::1`、`localhost`）。确需在隔离内网使用明文时，设置环境变量 `GL_ALLOW_INSECURE_TRANSPORT=true` 或使用各语言的显式选项：
+
+| 语言 | 明文选项 | 私有 CA |
+| --- | --- | --- |
+| Go | `DialWithOptions(endpoint, token, DialOptions{AllowInsecure: true})` | 系统信任库 |
+| Python | `Client(endpoint, token, allow_insecure=True)` | `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` |
+| Rust | `Client::connect_with(endpoint, token, ConnectOptions { allow_insecure: true, ..Default::default() })` | `ConnectOptions::ca_pem` |
+| TypeScript | `new Client(endpoint, token, timeoutMs, { allowInsecure: true })` | `NODE_EXTRA_CA_CERTS` 或系统信任库 |
+| CLI | `gl --allow-insecure` | `gl --ca-file ca.pem` |
+
 ## Python
 
 ```sh
@@ -72,7 +82,7 @@ let receipt = draft.publish("新增道路").await?;
 
 ## Go
 
-模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.23+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`token` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
+模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.25+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`token` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
 
 ```go
 client, err := geoledger.Dial(endpoint, token)
@@ -145,6 +155,7 @@ Python SDK 与 TS SDK 分别按上文安装和构建；统一安装与联调流�
 | 对象 | 业务方法（Python / Rust 命名；Go / TS 使用各自命名惯例） |
 |---|---|
 | Client | info、create_project、project、projects、set_member |
+| Client | members、remove_member、archive_project、delete_project |
 | Client | create_dataset、datasets、create_workspace、workspace、workspaces |
 | Client | features、history、commit、audit、restore |
 | Workspace | save、save_batch、delete、features、diff、conflicts |
@@ -203,11 +214,26 @@ SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布�
 |---|---|
 | 参数或几何非法 | 400 / 422 |
 | 身份验证失败 | 401 |
+| 项目创建策略或配额拒绝 | 403 |
 | 资源不存在或无权查看 | 404 |
-| 重复名称、版本、合并或幂等冲突 | 409 |
+| 重复名称、版本、合并或幂等冲突；写入已归档项目；移除最后一名 owner | 409 |
 | 大小超限 / 执行容量耗尽 | 413 / 429 |
 | 期限耗尽 | 504 |
 | 存储不可用 | 503 |
 
-Audit 仅项目 owner 可读。每页 1–1000 条、Feature 最大 16 KiB、最多 256 个属性；EPSG:4326，XY/XYZ。
+Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 最大 16 KiB、最多 256 个属性；EPSG:4326，XY/XYZ。
 标识采用有效文本字符，属性键和值使用 U+0000 以外的 JSON 文本；服务统一校验输入并返回业务错误。容量配置见 [生产运行](production.md)。
+
+## 兼容性与弃用
+
+`0.x` 预发布期间仍按以下规则演进，破坏性变化写在 [CHANGELOG](../CHANGELOG.md) 的 **Breaking** 小节并附迁移步骤。
+
+**gRPC `geoledger.v1`。** 同一主版本内只做向后兼容的增量变化：新增 RPC、新增可选字段、新增枚举值。已发布的字段编号与名称不复用、不改类型、不改语义；删除的字段编号以 `reserved` 保留。CI 的 `buf breaking` 将每个 Pull Request 的 `proto/` 与目标分支比较。无法兼容的变化发布为并行的 `geoledger.v2` 包，`v1` 在至少一个次版本周期内与 `v2` 同时提供。
+
+**弃用流程。** 要移除的 RPC、字段或 HTTP 方法先标记 `deprecated = true`，在 CHANGELOG 的 **Deprecated** 小节和本页说明替代方式，至少保留一个次版本（且不少于 3 个月）后才在新的主协议版本中移除。服务端对弃用调用照常执行。
+
+**HTTP `/api/v1`。** 方法名与 gRPC 一一对应，遵循相同的增量规则；响应可能增加字段，客户端应忽略未知字段。错误码与 HTTP 状态的对应关系（上表）属于兼容承诺。
+
+**SDK。** SDK 与服务端版本号一致。较新的服务端接受较旧 SDK 的请求；较新的 SDK 连接较旧服务端时，新增方法返回服务端的未知方法错误，其余方法照常工作。
+
+**存储格式。** 结构变化提升格式版本，并提供仅向前的迁移，由运维在备份后执行 `geoledger-server migrate`；服务启动从不修改已有库。跨版本或跨后端迁移使用与后端无关的 `export`/`import`，见 [备份与恢复](production.md#备份与恢复)。

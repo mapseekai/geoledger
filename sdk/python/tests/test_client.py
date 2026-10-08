@@ -16,6 +16,13 @@ class ContractTests(unittest.TestCase):
         client._stub = stub
         return client
 
+    def test_plaintext_to_remote_host_requires_opt_in(self):
+        with self.assertRaises(geoledger.GeoLedgerError) as raised:
+            geoledger.Client("http://geoledger.example:7882", "token")
+        self.assertEqual(raised.exception.code, "invalid_argument")
+        geoledger.Client("http://geoledger.example:7882", "token", allow_insecure=True).close()
+        geoledger.Client("http://127.0.0.1:7882", "token").close()
+
     def test_public_api_has_no_generated_transport(self):
         self.assertNotIn("pb", geoledger.__all__)
         client = self.client(SimpleNamespace())

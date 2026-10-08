@@ -11,6 +11,45 @@ pub trait StorageBackend: Send + Sync {
     fn initialize(&self, timeout: Duration) -> Result<()>;
     fn health(&self, timeout: Duration) -> Result<()>;
     fn begin(&self, read_only: bool, timeout: Duration) -> Result<Box<dyn RepositoryTransaction>>;
+    /// Connection pool occupancy for metrics; backends without a pool return None.
+    fn pool_stats(&self) -> Option<crate::PoolStats> {
+        None
+    }
+    /// Explicitly upgrade an existing database to the current format, returning
+    /// (stored version, current version). `dry_run` only reports.
+    fn upgrade(&self, dry_run: bool, timeout: Duration) -> Result<(i32, i32)> {
+        let _ = (dry_run, timeout);
+        Err(crate::Error::new(
+            409,
+            "this storage backend has no upgrade path",
+        ))
+    }
+    /// Write every table to `out` from one consistent snapshot (see `DataSummary`).
+    fn export(
+        &self,
+        out: &mut dyn std::io::Write,
+        timeout: Duration,
+    ) -> Result<crate::DataSummary> {
+        let _ = (out, timeout);
+        Err(crate::Error::new(409, "this storage backend has no export"))
+    }
+    /// Load a validated export into an initialized, empty database atomically.
+    fn import(
+        &self,
+        input: &mut dyn std::io::BufRead,
+        timeout: Duration,
+    ) -> Result<crate::DataSummary> {
+        let _ = (input, timeout);
+        Err(crate::Error::new(409, "this storage backend has no import"))
+    }
+    /// Online, consistent copy of the whole database into a new file.
+    fn backup(&self, target: &std::path::Path, timeout: Duration) -> Result<()> {
+        let _ = (target, timeout);
+        Err(crate::Error::new(
+            409,
+            "this storage backend has no built-in backup; use the database's own tools or export",
+        ))
+    }
 }
 #[derive(Clone)]
 pub struct FeatureQuery {
@@ -26,6 +65,7 @@ pub struct FeatureQuery {
 /// All methods are scoped by a validated project; authorization remains in Application.
 /// begin_merge/stage_merge are transaction-local staging, never durable publication.
 pub trait RepositoryTransaction: Send {
+    /// (role, project state) for an active member of a project that is not deleted.
     fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>>;
     fn project_head(&mut self, project: &str, lock: bool) -> Result<Option<Row>>;
     fn workspace_state(
@@ -55,8 +95,22 @@ pub trait RepositoryTransaction: Send {
     fn advance_workspace(&mut self, project: &str, workspace: &str, status: &str) -> Result<Row>;
     fn insert_project(&mut self, project: &str, name: &str) -> Result<()>;
     fn insert_owner(&mut self, project: &str, subject: &str) -> Result<()>;
+    /// (project, name, head, state, role) for active memberships of projects that are not deleted.
     fn list_projects(&mut self, subject: &str, after: &str, limit: i64) -> Result<Vec<Row>>;
+    /// (name, head, state).
     fn project_info(&mut self, project: &str) -> Result<Row>;
+    /// (name, head, state) of a project that is not deleted; `lock` serializes lifecycle changes.
+    fn live_project(&mut self, project: &str, lock: bool) -> Result<Option<Row>>;
+    /// (subject, role) of active members ordered by subject.
+    fn list_members(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>>;
+    /// Deactivate a membership; history and audit rows keep referencing it.
+    fn remove_member(&mut self, project: &str, subject: &str) -> Result<()>;
+    /// One of active, archived, deleted.
+    fn set_project_state(&mut self, project: &str, state: &str) -> Result<()>;
+    /// Count of projects that are not deleted where `subject` is an active owner.
+    fn owned_projects(&mut self, subject: &str) -> Result<Row>;
+    /// Ensure an (inactive, if new) member row exists so audit events can reference `subject`.
+    fn ensure_identity(&mut self, project: &str, subject: &str) -> Result<()>;
     fn owner_summary(&mut self, project: &str, subject: &str) -> Result<Row>;
     fn set_member(&mut self, project: &str, subject: &str, role: &str) -> Result<()>;
     fn insert_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()>;

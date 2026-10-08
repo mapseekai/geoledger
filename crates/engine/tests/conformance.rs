@@ -193,7 +193,7 @@ impl Fixture {
         let p = app.execute(
             &alice,
             "create_project",
-            json!({"name":"center integration"}),
+            json!({"name":"integration project"}),
         )?["project"]
             .as_str()
             .unwrap()
@@ -796,6 +796,208 @@ fn audit_pagination_is_owner_only_and_project_scoped() -> TestResult {
             .execute(&f.alice, "audit", json!({"project":other.p}))
             .unwrap_err()
             .status,
+        404
+    );
+    Ok(())
+}
+
+#[test]
+fn membership_removal_archive_and_delete() -> TestResult {
+    let f = Fixture::new()?;
+    let status =
+        |r: Result<Value, geoledger_engine::Error>| r.map(|_| 200).unwrap_or_else(|e| e.status);
+    let members = f.call(&f.viewer, "list_members", json!({}))?;
+    let mut listed: Vec<(String, String)> = members
+        .as_array()
+        .ok_or("members")?
+        .iter()
+        .map(|m| {
+            (
+                m["subject"].as_str().unwrap().into(),
+                m["role"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    listed.sort();
+    let mut expected = vec![
+        (f.alice.clone(), "owner".to_owned()),
+        (f.bob.clone(), "editor".to_owned()),
+        (f.viewer.clone(), "viewer".to_owned()),
+    ];
+    expected.sort();
+    assert_eq!(listed, expected);
+    assert_eq!(status(f.call("outsider", "list_members", json!({}))), 404);
+    // Only owners remove others; members may leave; the last owner stays.
+    assert_eq!(
+        status(f.call(&f.bob, "remove_member", json!({"subject":f.viewer}))),
+        404
+    );
+    f.call(&f.alice, "remove_member", json!({"subject":f.viewer}))?;
+    assert_eq!(status(f.call(&f.viewer, "get_project", json!({}))), 404);
+    assert_eq!(
+        status(f.call(&f.viewer, "features", json!({"dataset":f.d}))),
+        404
+    );
+    assert_eq!(
+        status(f.call(&f.alice, "remove_member", json!({"subject":f.viewer}))),
+        404
+    );
+    assert_eq!(
+        f.call(&f.alice, "list_members", json!({}))?
+            .as_array()
+            .ok_or("m")?
+            .len(),
+        2
+    );
+    f.call(
+        &f.alice,
+        "set_member",
+        json!({"subject":f.viewer,"role":"viewer"}),
+    )?;
+    assert_eq!(
+        f.call(&f.viewer, "get_project", json!({}))?["role"],
+        "viewer"
+    );
+    f.call(&f.viewer, "remove_member", json!({"subject":f.viewer}))?;
+    assert_eq!(status(f.call(&f.viewer, "get_project", json!({}))), 404);
+    assert_eq!(
+        status(f.call(&f.alice, "remove_member", json!({"subject":f.alice}))),
+        409
+    );
+    let audit = f.call(&f.alice, "audit", json!({"limit":1000}))?;
+    assert!(
+        audit["events"]
+            .as_array()
+            .ok_or("events")?
+            .iter()
+            .any(|e| e["action"] == "remove_member")
+    );
+    // Archived projects are read-only for data but stay readable.
+    let w = f.seed();
+    let archived = f.call(&f.alice, "archive_project", json!({"archived":true}))?;
+    assert_eq!(archived["state"], "archived");
+    assert_eq!(
+        status(f.call(&f.bob, "archive_project", json!({"archived":false}))),
+        404
+    );
+    assert_eq!(status(f.call(&f.bob, "create_workspace", json!({}))), 409);
+    assert_eq!(
+        status(f.save(&f.alice, &w, 2, json!({}), point(1., 1.))),
+        409
+    );
+    assert_eq!(f.get(&f.bob, None)["properties"]["a"], 1);
+    let projects = f.app.execute(&f.bob, "list_projects", json!({}))?;
+    let listed = projects
+        .as_array()
+        .ok_or("projects")?
+        .iter()
+        .find(|p| p["project"] == f.p.as_str())
+        .ok_or("listed")?
+        .clone();
+    assert_eq!(listed["state"], "archived");
+    assert_eq!(listed["role"], "editor");
+    f.call(&f.alice, "archive_project", json!({"archived":false}))?;
+    f.ws(&f.bob);
+    // Deletion needs the exact name, is owner-only and hides the project everywhere.
+    assert_eq!(
+        status(f.call(&f.alice, "delete_project", json!({"confirm_name":"wrong"}))),
+        400
+    );
+    assert_eq!(
+        status(f.call(
+            &f.bob,
+            "delete_project",
+            json!({"confirm_name":"integration project"})
+        )),
+        404
+    );
+    f.call(
+        &f.alice,
+        "delete_project",
+        json!({"confirm_name":"integration project"}),
+    )?;
+    for subject in [&f.alice, &f.bob] {
+        assert_eq!(status(f.call(subject, "get_project", json!({}))), 404);
+        assert_eq!(
+            status(f.call(subject, "features", json!({"dataset":f.d}))),
+            404
+        );
+        let projects = f.app.execute(subject, "list_projects", json!({}))?;
+        assert!(
+            projects
+                .as_array()
+                .ok_or("projects")?
+                .iter()
+                .all(|p| p["project"] != f.p.as_str())
+        );
+    }
+    assert_eq!(
+        status(f.call(
+            &f.alice,
+            "set_member",
+            json!({"subject":f.bob,"role":"owner"})
+        )),
+        404
+    );
+    Ok(())
+}
+
+#[test]
+fn platform_admins_creation_policy_and_quota() -> TestResult {
+    let f = Fixture::new()?;
+    let status =
+        |r: Result<Value, geoledger_engine::Error>| r.map(|_| 200).unwrap_or_else(|e| e.status);
+    let root = Uuid::new_v4().to_string();
+    let carol = Uuid::new_v4().to_string();
+    let restricted = f.app.clone().with_policy(geoledger_engine::Policy {
+        admins: [root.clone()].into(),
+        admin_only_project_creation: true,
+        max_owned_projects: Some(1),
+    });
+    assert_eq!(
+        status(restricted.execute(&carol, "create_project", json!({"name":"x"}))),
+        403
+    );
+    restricted.execute(&root, "create_project", json!({"name":"a"}))?;
+    restricted.execute(&root, "create_project", json!({"name":"b"}))?;
+    let quota = f.app.clone().with_policy(geoledger_engine::Policy {
+        max_owned_projects: Some(1),
+        ..Default::default()
+    });
+    quota.execute(&carol, "create_project", json!({"name":"first"}))?;
+    assert_eq!(
+        status(quota.execute(&carol, "create_project", json!({"name":"second"}))),
+        403
+    );
+    // Administrators manage any project but gain no data access by doing so.
+    let call = |op: &str, mut v: Value| {
+        v["project"] = json!(f.p);
+        restricted.execute(&root, op, v)
+    };
+    assert_eq!(call("get_project", json!({}))?["role"], "admin");
+    assert_eq!(
+        call("list_members", json!({}))?
+            .as_array()
+            .ok_or("m")?
+            .len(),
+        3
+    );
+    call("set_member", json!({"subject":carol,"role":"owner"}))?;
+    call("remove_member", json!({"subject":f.alice}))?;
+    assert_eq!(status(call("features", json!({"dataset":f.d}))), 404);
+    assert_eq!(status(call("create_workspace", json!({}))), 404);
+    assert_eq!(f.call(&carol, "get_project", json!({}))?["role"], "owner");
+    let audit = f.call(&carol, "audit", json!({"limit":1000}))?;
+    assert!(
+        audit["events"]
+            .as_array()
+            .ok_or("events")?
+            .iter()
+            .any(|e| e["action"] == "set_member" && e["subject"] == root.as_str())
+    );
+    // Without the policy the same subject is an outsider.
+    assert_eq!(
+        status(f.app.execute(&root, "get_project", json!({"project":f.p}))),
         404
     );
     Ok(())

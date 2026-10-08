@@ -1,4 +1,4 @@
-//! Center wire numbers: exact i64/u64 integers (including integral exponent
+//! GeoLedger wire numbers: exact i64/u64 integers (including integral exponent
 //! spellings), and finite binary64 nonintegral decimals with magnitude < 2^53.
 //! Nonzero underflow is rejected. Decimal fractions use binary64 rounding;
 //! integers are validated from their original digits before any conversion.
@@ -10,7 +10,11 @@ use std::io::{self, Write};
 
 pub(crate) fn stored<T: serde::de::DeserializeOwned>(source: &str) -> Result<T> {
     let value = parse(source.as_bytes()).map_err(|error| {
-        Error::new(500, "stored Center number or JSON violates codec contract").caused_by(error)
+        Error::new(
+            500,
+            "stored GeoLedger number or JSON violates codec contract",
+        )
+        .caused_by(error)
     })?;
     serde_json::from_value(value).map_err(Error::stored_json)
 }
@@ -177,7 +181,7 @@ fn number_grammar(token: &str) -> Result<()> {
 fn range() -> Error {
     Error::new(
         422,
-        "number outside Center exact integer / finite binary64 decimal range",
+        "number outside GeoLedger exact integer / finite binary64 decimal range",
     )
 }
 

@@ -7,11 +7,17 @@ struct Args {
     endpoint: String,
     #[arg(long, env = "GL_TOKEN", hide_env_values = true)]
     token: Option<String>,
-    /// Read one credential from a server token file; suitable for local administration.
+    /// Read one credential from a client credential file ([{subject, token}], mode 0600).
     #[arg(long, env = "GL_TOKEN_FILE")]
     token_file: Option<PathBuf>,
     #[arg(long, default_value = "admin")]
     subject: String,
+    /// Allow plaintext http:// to a non-loopback host (trusted networks only).
+    #[arg(long, env = "GL_ALLOW_INSECURE_TRANSPORT", default_value_t = false)]
+    allow_insecure: bool,
+    /// Extra PEM CA bundle for https:// endpoints signed by a private CA.
+    #[arg(long, env = "GL_CA_FILE")]
+    ca_file: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -27,6 +33,8 @@ enum Command {
     },
     /// List accessible projects.
     Projects,
+    /// List a project's active members.
+    Members { project: String },
     /// List a project's published revisions.
     History {
         project: String,
@@ -72,6 +80,10 @@ async fn run(a: Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (op, input) = match a.command {
         Command::Info => ("info".into(), serde_json::json!({})),
         Command::Projects => ("list_projects".into(), serde_json::json!({"limit":100})),
+        Command::Members { project } => (
+            "list_members".into(),
+            serde_json::json!({"project":project,"limit":1000}),
+        ),
         Command::History { project, after } => (
             "history".into(),
             serde_json::json!({"project":project,"after":after,"limit":100}),
@@ -90,7 +102,12 @@ async fn run(a: Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             (operation, serde_json::from_slice(&data)?)
         }
     };
-    let client = geoledger_client::Client::connect(a.endpoint, &token).await?;
+    let options = geoledger_client::ConnectOptions {
+        allow_insecure: a.allow_insecure,
+        ca_pem: a.ca_file.map(std::fs::read).transpose()?,
+        ..Default::default()
+    };
+    let client = geoledger_client::Client::connect_with(a.endpoint, &token, options).await?;
     let result = client.execute(&op, input).await?;
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())

@@ -46,6 +46,22 @@ export interface MemberRequest {
   role: string;
 }
 
+export interface MemberRefRequest {
+  project: string;
+  subject: string;
+}
+
+export interface ArchiveProjectRequest {
+  project: string;
+  archived: boolean;
+}
+
+export interface DeleteProjectRequest {
+  project: string;
+  /** Must equal the project name; guards against deleting the wrong project. */
+  confirmName: string;
+}
+
 export interface DatasetRequest {
   project: string;
   name: string;
@@ -147,10 +163,21 @@ export interface ProjectReply {
   name: string;
   head: string;
   role: string;
+  /** active, archived (read-only) or deleted. */
+  state: string;
 }
 
 export interface ProjectsReply {
   projects: ProjectReply[];
+}
+
+export interface MemberInfo {
+  subject: string;
+  role: string;
+}
+
+export interface MembersReply {
+  members: MemberInfo[];
 }
 
 export interface OkReply {
@@ -675,6 +702,238 @@ export const MemberRequest: MessageFns<MemberRequest> = {
     message.project = object.project ?? "";
     message.subject = object.subject ?? "";
     message.role = object.role ?? "";
+    return message;
+  },
+};
+
+function createBaseMemberRefRequest(): MemberRefRequest {
+  return { project: "", subject: "" };
+}
+
+export const MemberRefRequest: MessageFns<MemberRefRequest> = {
+  encode(message: MemberRefRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.project !== "") {
+      writer.uint32(10).string(message.project);
+    }
+    if (message.subject !== "") {
+      writer.uint32(18).string(message.subject);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MemberRefRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMemberRefRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.project = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.subject = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MemberRefRequest {
+    return {
+      project: isSet(object.project) ? globalThis.String(object.project) : "",
+      subject: isSet(object.subject) ? globalThis.String(object.subject) : "",
+    };
+  },
+
+  toJSON(message: MemberRefRequest): unknown {
+    const obj: any = {};
+    if (message.project !== "") {
+      obj.project = message.project;
+    }
+    if (message.subject !== "") {
+      obj.subject = message.subject;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MemberRefRequest>, I>>(base?: I): MemberRefRequest {
+    return MemberRefRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MemberRefRequest>, I>>(object: I): MemberRefRequest {
+    const message = createBaseMemberRefRequest();
+    message.project = object.project ?? "";
+    message.subject = object.subject ?? "";
+    return message;
+  },
+};
+
+function createBaseArchiveProjectRequest(): ArchiveProjectRequest {
+  return { project: "", archived: false };
+}
+
+export const ArchiveProjectRequest: MessageFns<ArchiveProjectRequest> = {
+  encode(message: ArchiveProjectRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.project !== "") {
+      writer.uint32(10).string(message.project);
+    }
+    if (message.archived !== false) {
+      writer.uint32(16).bool(message.archived);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ArchiveProjectRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseArchiveProjectRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.project = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.archived = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ArchiveProjectRequest {
+    return {
+      project: isSet(object.project) ? globalThis.String(object.project) : "",
+      archived: isSet(object.archived) ? globalThis.Boolean(object.archived) : false,
+    };
+  },
+
+  toJSON(message: ArchiveProjectRequest): unknown {
+    const obj: any = {};
+    if (message.project !== "") {
+      obj.project = message.project;
+    }
+    if (message.archived !== false) {
+      obj.archived = message.archived;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ArchiveProjectRequest>, I>>(base?: I): ArchiveProjectRequest {
+    return ArchiveProjectRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ArchiveProjectRequest>, I>>(object: I): ArchiveProjectRequest {
+    const message = createBaseArchiveProjectRequest();
+    message.project = object.project ?? "";
+    message.archived = object.archived ?? false;
+    return message;
+  },
+};
+
+function createBaseDeleteProjectRequest(): DeleteProjectRequest {
+  return { project: "", confirmName: "" };
+}
+
+export const DeleteProjectRequest: MessageFns<DeleteProjectRequest> = {
+  encode(message: DeleteProjectRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.project !== "") {
+      writer.uint32(10).string(message.project);
+    }
+    if (message.confirmName !== "") {
+      writer.uint32(18).string(message.confirmName);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DeleteProjectRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDeleteProjectRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.project = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.confirmName = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): DeleteProjectRequest {
+    return {
+      project: isSet(object.project) ? globalThis.String(object.project) : "",
+      confirmName: isSet(object.confirmName)
+        ? globalThis.String(object.confirmName)
+        : isSet(object.confirm_name)
+        ? globalThis.String(object.confirm_name)
+        : "",
+    };
+  },
+
+  toJSON(message: DeleteProjectRequest): unknown {
+    const obj: any = {};
+    if (message.project !== "") {
+      obj.project = message.project;
+    }
+    if (message.confirmName !== "") {
+      obj.confirmName = message.confirmName;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<DeleteProjectRequest>, I>>(base?: I): DeleteProjectRequest {
+    return DeleteProjectRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DeleteProjectRequest>, I>>(object: I): DeleteProjectRequest {
+    const message = createBaseDeleteProjectRequest();
+    message.project = object.project ?? "";
+    message.confirmName = object.confirmName ?? "";
     return message;
   },
 };
@@ -2222,7 +2481,7 @@ export const InfoReply: MessageFns<InfoReply> = {
 };
 
 function createBaseProjectReply(): ProjectReply {
-  return { project: "", name: "", head: "0", role: "" };
+  return { project: "", name: "", head: "0", role: "", state: "" };
 }
 
 export const ProjectReply: MessageFns<ProjectReply> = {
@@ -2238,6 +2497,9 @@ export const ProjectReply: MessageFns<ProjectReply> = {
     }
     if (message.role !== "") {
       writer.uint32(34).string(message.role);
+    }
+    if (message.state !== "") {
+      writer.uint32(42).string(message.state);
     }
     return writer;
   },
@@ -2281,6 +2543,14 @@ export const ProjectReply: MessageFns<ProjectReply> = {
           message.role = reader.string();
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.state = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2296,6 +2566,7 @@ export const ProjectReply: MessageFns<ProjectReply> = {
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       head: isSet(object.head) ? globalThis.String(object.head) : "0",
       role: isSet(object.role) ? globalThis.String(object.role) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
     };
   },
 
@@ -2313,6 +2584,9 @@ export const ProjectReply: MessageFns<ProjectReply> = {
     if (message.role !== "") {
       obj.role = message.role;
     }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
     return obj;
   },
 
@@ -2325,6 +2599,7 @@ export const ProjectReply: MessageFns<ProjectReply> = {
     message.name = object.name ?? "";
     message.head = object.head ?? "0";
     message.role = object.role ?? "";
+    message.state = object.state ?? "";
     return message;
   },
 };
@@ -2387,6 +2662,142 @@ export const ProjectsReply: MessageFns<ProjectsReply> = {
   fromPartial<I extends Exact<DeepPartial<ProjectsReply>, I>>(object: I): ProjectsReply {
     const message = createBaseProjectsReply();
     message.projects = object.projects?.map((e) => ProjectReply.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseMemberInfo(): MemberInfo {
+  return { subject: "", role: "" };
+}
+
+export const MemberInfo: MessageFns<MemberInfo> = {
+  encode(message: MemberInfo, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.subject !== "") {
+      writer.uint32(10).string(message.subject);
+    }
+    if (message.role !== "") {
+      writer.uint32(18).string(message.role);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MemberInfo {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMemberInfo();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.subject = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.role = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MemberInfo {
+    return {
+      subject: isSet(object.subject) ? globalThis.String(object.subject) : "",
+      role: isSet(object.role) ? globalThis.String(object.role) : "",
+    };
+  },
+
+  toJSON(message: MemberInfo): unknown {
+    const obj: any = {};
+    if (message.subject !== "") {
+      obj.subject = message.subject;
+    }
+    if (message.role !== "") {
+      obj.role = message.role;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MemberInfo>, I>>(base?: I): MemberInfo {
+    return MemberInfo.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MemberInfo>, I>>(object: I): MemberInfo {
+    const message = createBaseMemberInfo();
+    message.subject = object.subject ?? "";
+    message.role = object.role ?? "";
+    return message;
+  },
+};
+
+function createBaseMembersReply(): MembersReply {
+  return { members: [] };
+}
+
+export const MembersReply: MessageFns<MembersReply> = {
+  encode(message: MembersReply, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.members) {
+      MemberInfo.encode(v!, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MembersReply {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMembersReply();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.members.push(MemberInfo.decode(reader, reader.uint32()));
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MembersReply {
+    return {
+      members: globalThis.Array.isArray(object?.members) ? object.members.map((e: any) => MemberInfo.fromJSON(e)) : [],
+    };
+  },
+
+  toJSON(message: MembersReply): unknown {
+    const obj: any = {};
+    if (message.members?.length) {
+      obj.members = message.members.map((e) => MemberInfo.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MembersReply>, I>>(base?: I): MembersReply {
+    return MembersReply.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MembersReply>, I>>(object: I): MembersReply {
+    const message = createBaseMembersReply();
+    message.members = object.members?.map((e) => MemberInfo.fromPartial(e)) || [];
     return message;
   },
 };
@@ -4922,6 +5333,43 @@ export const GeoLedgerService = {
     responseSerialize: (value: WorkspaceReply): Buffer => Buffer.from(WorkspaceReply.encode(value).finish()),
     responseDeserialize: (value: Buffer): WorkspaceReply => WorkspaceReply.decode(value),
   },
+  listMembers: {
+    path: "/geoledger.v1.GeoLedger/ListMembers",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: ProjectPageRequest): Buffer => Buffer.from(ProjectPageRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ProjectPageRequest => ProjectPageRequest.decode(value),
+    responseSerialize: (value: MembersReply): Buffer => Buffer.from(MembersReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): MembersReply => MembersReply.decode(value),
+  },
+  removeMember: {
+    path: "/geoledger.v1.GeoLedger/RemoveMember",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: MemberRefRequest): Buffer => Buffer.from(MemberRefRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): MemberRefRequest => MemberRefRequest.decode(value),
+    responseSerialize: (value: OkReply): Buffer => Buffer.from(OkReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): OkReply => OkReply.decode(value),
+  },
+  archiveProject: {
+    path: "/geoledger.v1.GeoLedger/ArchiveProject",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: ArchiveProjectRequest): Buffer =>
+      Buffer.from(ArchiveProjectRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ArchiveProjectRequest => ArchiveProjectRequest.decode(value),
+    responseSerialize: (value: ProjectReply): Buffer => Buffer.from(ProjectReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ProjectReply => ProjectReply.decode(value),
+  },
+  deleteProject: {
+    path: "/geoledger.v1.GeoLedger/DeleteProject",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: DeleteProjectRequest): Buffer => Buffer.from(DeleteProjectRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): DeleteProjectRequest => DeleteProjectRequest.decode(value),
+    responseSerialize: (value: OkReply): Buffer => Buffer.from(OkReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): OkReply => OkReply.decode(value),
+  },
 } as const;
 
 export interface GeoLedgerServer extends UntypedServiceImplementation {
@@ -4947,6 +5395,10 @@ export interface GeoLedgerServer extends UntypedServiceImplementation {
   resolve: handleUnaryCall<ResolveRequest, ResolveReply>;
   rebase: handleUnaryCall<ResolveRequest, RebaseReply>;
   restore: handleUnaryCall<RestoreRequest, WorkspaceReply>;
+  listMembers: handleUnaryCall<ProjectPageRequest, MembersReply>;
+  removeMember: handleUnaryCall<MemberRefRequest, OkReply>;
+  archiveProject: handleUnaryCall<ArchiveProjectRequest, ProjectReply>;
+  deleteProject: handleUnaryCall<DeleteProjectRequest, OkReply>;
 }
 
 export interface GeoLedgerClient extends Client {
@@ -5264,6 +5716,66 @@ export interface GeoLedgerClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: WorkspaceReply) => void,
+  ): ClientUnaryCall;
+  listMembers(
+    request: ProjectPageRequest,
+    callback: (error: ServiceError | null, response: MembersReply) => void,
+  ): ClientUnaryCall;
+  listMembers(
+    request: ProjectPageRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: MembersReply) => void,
+  ): ClientUnaryCall;
+  listMembers(
+    request: ProjectPageRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: MembersReply) => void,
+  ): ClientUnaryCall;
+  removeMember(
+    request: MemberRefRequest,
+    callback: (error: ServiceError | null, response: OkReply) => void,
+  ): ClientUnaryCall;
+  removeMember(
+    request: MemberRefRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: OkReply) => void,
+  ): ClientUnaryCall;
+  removeMember(
+    request: MemberRefRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: OkReply) => void,
+  ): ClientUnaryCall;
+  archiveProject(
+    request: ArchiveProjectRequest,
+    callback: (error: ServiceError | null, response: ProjectReply) => void,
+  ): ClientUnaryCall;
+  archiveProject(
+    request: ArchiveProjectRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ProjectReply) => void,
+  ): ClientUnaryCall;
+  archiveProject(
+    request: ArchiveProjectRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ProjectReply) => void,
+  ): ClientUnaryCall;
+  deleteProject(
+    request: DeleteProjectRequest,
+    callback: (error: ServiceError | null, response: OkReply) => void,
+  ): ClientUnaryCall;
+  deleteProject(
+    request: DeleteProjectRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: OkReply) => void,
+  ): ClientUnaryCall;
+  deleteProject(
+    request: DeleteProjectRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: OkReply) => void,
   ): ClientUnaryCall;
 }
 

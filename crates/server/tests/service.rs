@@ -83,9 +83,9 @@ fn http(
 async fn default_service_rpc_http_twenty_writers_restart_and_authentication() -> TestResult {
     let dir = tempfile::tempdir()?;
     let mut server = start(dir.path())?;
-    let token_path = dir.path().join("tokens.json");
+    let token_path = dir.path().join("admin-credentials.json");
     for _ in 0..100 {
-        if token_path.exists() {
+        if token_path.exists() && dir.path().join("tokens.json").exists() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(30)).await;
