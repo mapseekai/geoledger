@@ -6,7 +6,7 @@ name = "geoledger-client"
 version = "0.3.0a1"
 description = "GeoLedger business client"
 requires-python = ">=3.10"
-dependencies = ["grpcio>=1.78,<2", "protobuf>=6.33.5,<7"]
+dependencies = ["grpcio>=1.78,<2", "protobuf>=6.33.5,<8"]
 license = "MIT"
 [tool.setuptools.packages.find]
 include = ["geoledger*"]
