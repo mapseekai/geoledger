@@ -27,4 +27,4 @@ SOFTWARE.
 
 Inter and Newsreader are distributed under the SIL Open Font License 1.1.
 Their font packages include their respective copyright and license files.
-The PP Editorial Old commercial font is not included.
+Display typography uses the bundled open-source Newsreader font.

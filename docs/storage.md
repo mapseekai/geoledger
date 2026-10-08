@@ -11,24 +11,24 @@
 - `StorageBackend: Send + Sync`：名称、初始化、健康检查，以及按期限创建读/写事务。
 - `RepositoryTransaction: Send`：项目、成员、工作区、要素、历史、发布暂存区、幂等收据、审计和原子提交。
 
-通过 `Application::with_backend(Arc<dyn StorageBackend>)` 注入。接口接收项目、数据集、修订、游标等业务参数，没有 SQL 字符串、数据库连接或传输类型。可接入 SQL 或其他具备必要事务能力的存储；服务端配置工厂增加后端选择即可，SDK 与业务规则保持一致。
+通过 `Application::with_backend(Arc<dyn StorageBackend>)` 注入。接口接收项目、数据集、修订、游标等业务参数，由适配器封装 SQL、数据库连接和传输细节。可接入 SQL 或其他具备必要事务能力的存储；服务端配置工厂增加后端选择即可，SDK 与业务规则保持一致。
 
 ## 必须实现的保证
 
 1. 一次 Application 操作对应一个事务。读操作获得一致快照；事务对象未 commit 就被丢弃时回滚全部写入。
 2. `project_head(lock=true)` 将同项目发布串行化，并在获得锁后读取最新 HEAD；`workspace_state(write=true)` 串行化同工作区写入。成员授权在事务期间稳定。
-3. 正式要素、历史有效期、commit/change、HEAD、工作区状态、幂等收据、审计同事务提交。禁止将部分写入延迟到事务之外。
-4. `publication_receipt` 的键是 `(project, subject, request_id)`。已提交收据不可变；失败事务不得留下成功收据。提交后响应丢失可用原请求恢复结果。
+3. 正式要素、历史有效期、commit/change、HEAD、工作区状态、幂等收据、审计同事务提交。全部写入在事务内原子完成。
+4. `publication_receipt` 的键是 `(project, subject, request_id)`。已提交收据不可变；成功收据随事务提交，失败事务整体回滚。提交后响应丢失可用原请求恢复结果。
 5. 修订可见性为 `valid_from <= revision` 且 `valid_to` 为空或大于 revision；删除作为历史墓碑保留。
 6. 要素分页先剔除被草稿覆盖的基础要素，再做 bbox 过滤；移出范围和删除的草稿也会遮蔽原要素。游标按字节顺序稳定排序，严格大于 after。
-7. `begin_merge` 清空事务私有暂存区；stage 仅存放已验证的候选。append 方法原子消费同一份暂存区。它不属于公开历史。
-8. 所有等待、连接、查询和提交服从传入期限。结果未知时返回错误，保留客户端确认路径；后端不能假称事务失败或自动换库。
-9. 同项目 `append_audit` 必须按提交顺序分配 ID，保证 audit 游标不会越过未提交的事件；PostGIS 在分配 ID 前获取独立的项目级事务 advisory lock，不锁项目行，其他项目仍可独立提交。
-10. 返回页受条数与内存限制约束；新后端必须提供能定位游标的索引，不能用全库加载实现分页。
+7. `begin_merge` 清空事务私有暂存区；stage 仅存放已验证的候选。append 方法原子消费同一份暂存区。候选在发布提交后形成公开历史。
+8. 所有等待、连接、查询和提交服从传入期限。结果未知时返回错误，保留客户端确认路径；后端准确报告结果确定性，并保持指定存储配置。
+9. 同项目 `append_audit` 必须按提交顺序分配 ID，保证 audit 游标按已提交事件的顺序前进；PostGIS 在分配 ID 前获取独立的项目级事务 advisory lock，以独立审计锁协调顺序，其他项目仍可独立提交。
+10. 返回页受条数与内存限制约束；新后端必须提供能定位游标的索引，通过索引按页读取数据。
 
 ## 后端无关行类型
 
-接口以 `Row::new(Vec<Cell>)` 返回固定投影，Cell 为 Text、Integer(i64)、Real、Bool、Null。`Option<Row>` 的 None 表示记录不存在；单元格 Null 表示该字段为空。数据库类型不跨接口边界。下面是实现必须遵守的投影顺序（`?` 表示可空）：
+接口以 `Row::new(Vec<Cell>)` 返回固定投影，Cell 为 Text、Integer(i64)、Real、Bool、Null。`Option<Row>` 的 None 表示记录不存在；单元格 Null 表示该字段为空。数据库类型由适配器转换为统一 Cell。下面是实现必须遵守的投影顺序（`?` 表示可空）：
 
 | 方法 | 返回字段顺序 |
 |---|---|
@@ -37,7 +37,7 @@
 | workspace_state | base_revision:i64, version:i64, status:text |
 | feature_page | feature_id:text, properties:text, geometry:text? |
 | feature_at | properties:text?, geometry:text? |
-| dataset_exists / commit_exists | 存在时单行，内容不用读取 |
+| dataset_exists / commit_exists | 存在时返回单行标记 |
 | advance_workspace | version:i64 |
 | list_projects | project:text, name:text, head:i64 |
 | project_info | name:text, head:i64 |
@@ -55,7 +55,7 @@
 
 properties/detail/payload/result 为精确 JSON 文本，geometry 为规范化后的 GeoJSON geometry 文本，空几何使用 Null。stage 的 before/after 是序列化的 `{properties: object, geometry: string|null}`，整体 Null 表示删除。merge_page 每批最多 32 行。所有其他列表遵守传入 limit。
 
-要素属性的字符串值与对象键（包括嵌套对象和数组）不允许包含 U+0000；共同应用层在写入前统一返回 `invalid_argument`，避免 SQLite 与 PostGIS 的 JSON 表示能力不同。普通文本中的字面反斜杠序列 `\u0000` 可以保留，它与 JSON 解码后得到的 NUL 字符不同。
+要素属性的字符串值与对象键使用 U+0000 以外的 JSON 文本，包括嵌套对象和数组；共同应用层统一校验输入，含实际 U+0000 时返回 `invalid_argument`，保持 SQLite 与 PostGIS 的业务语义一致。普通文本中的字面反斜杠序列 `\u0000` 可以保留，它与 JSON 解码后得到的 NUL 字符不同。
 
 ## SQLite 与 PostGIS
 
@@ -63,7 +63,7 @@ SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读�
 
 PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。几何的规范 GeoJSON 与属性 JSON 文本保留跨后端一致性，PostGIS 在 `ST_GeomFromGeoJSON(geom)` 上创建 GiST 表达式索引；bbox 使用 PostGIS 空间查询。几何合法性在共同应用层校验。
 
-当前格式为 5，正式要素直接读取 `gl_history`，不再维护重复的 `gl_features` 表。格式 4 必须初始化新数据库，不提供自动升级。两个后端均有不可变 commit/change/audit/receipt 约束及历史只关闭有效期的保护。不同后端文件/数据库各自独立，配置切换不会自动搬运数据。
+当前格式为 5，正式要素与历史快照统一读取 `gl_history`。部署时初始化当前格式的新数据库，已有数据通过显式导出、导入和校验接入。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，数据迁移通过显式导出、导入与校验完成。
 
 ## 新后端验收
 

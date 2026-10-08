@@ -5,12 +5,12 @@
 ## SDK 的公开接口
 
 Go、Rust、TypeScript / Node.js、Python 提供普通业务方法和工作区对象。
-用户只需服务地址与访问令牌；无需导入生成类型、构造协议请求、设置 metadata 或解码底层错误。
+用户配置服务地址与访问令牌，即可通过业务方法完成资源管理、编辑与发布；SDK 封装协议请求、认证和业务错误。
 内部统一使用 tonic 服务的 gRPC 协议，浏览器控制台使用 HTTP。
 
 典型流程：创建项目 → 创建数据集 → 创建工作区 → 保存 GeoJSON → 发布。
-工作区对象维护草稿版本，发布时生成并保留请求 ID。修改失败时不自动覆盖版本；
-先查询冲突或刷新工作区，再决定是否重做修改。SDK 不自动重试写操作。
+工作区对象维护草稿版本，发布时生成并保留请求 ID。修改失败时保留原版本；
+先查询冲突或刷新工作区，再决定是否重做修改。写操作和重试由调用方明确发起。
 
 默认 SDK 地址 `http://127.0.0.1:7882`，控制台 HTTP 地址使用另一个端口。
 SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒，消息上限 4 MiB。
@@ -115,8 +115,8 @@ try {
 ```
 
 所有调用返回 Promise。版本与 64 位计数使用 `bigint`，普通 GeoJSON 属性中的安全数字保持 `number`，
-大整数读为 `bigint`。`parseJson` / `stringifyJson` 用于精确 JSON 读写，避免标准 `JSON.parse` 先舍入大整数。
-也可直接传原始 GeoJSON 文本。数值已被 JavaScript 舍入的对象会被拒绝，需改用 `bigint` 或原始文本。
+大整数读为 `bigint`。`parseJson` / `stringifyJson` 用于精确 JSON 读写，保持大整数的精确表示。
+也可直接传原始 GeoJSON 文本。对象中的大整数使用 `bigint`，也可通过原始文本保存精确数值。
 完整示例见 [TypeScript 示例](../sdk/ts/test/smoke.cjs)。此 SDK 面向 Node.js。
 
 ## 常用操作
@@ -130,29 +130,30 @@ try {
 | Workspace | publish、resolve、rebase、discard、refresh |
 
 `save` 直接接收带字符串 `id` 的完整 GeoJSON Feature。批量编辑使用 SDK 自身的 `Edit`，
-删除必须通过 `delete()` 或显式 `null` / `None`；省略要素字段会报参数错误。
+删除通过 `delete()` 或显式 `null` / `None` 表达，保存操作提供完整要素字段。
 正式要素分页固定首次返回的 revision，后续查询带该版本及 next_after；草稿分页需核对 workspace_version。
-JSON 对象键禁止使用 `$serde_json::private::RawValue` 和 `$serde_json::private::Number`，
-包括嵌套或转义写法；服务返回参数错误，避免底层编解码器把普通对象静默转换成其他值。
-普通字符串值可以包含这些文字。小数按 binary64 舍入，编解码不会额外改变已舍入的值。
+JSON 对象键通过递归校验，保护普通对象的编解码语义；
+`$serde_json::private::RawValue` 和 `$serde_json::private::Number` 为保留键，
+包含嵌套或转义写法的输入会获得 `invalid_argument` 校验结果。普通字符串值可以包含这些文字。
+小数按 binary64 舍入，编解码保持已舍入的值。
 
 ## 错误与发布恢复
 
 Python / TS 捕获 `GeoLedgerError`；Rust 使用 `Error`；Go 用 `errors.As` 获取 `*geoledger.Error`。
 它们提供业务 `code`、message、request_id / requestId、可选 conflicts，以及 `uncertain` / Uncertain。
 常见业务码包括 `invalid_argument`、`unauthenticated`、`not_found`、`conflict`、`timeout` 和 `unavailable`。
-调用方不需要导入任何底层状态码或 metadata 类型。
+调用方通过 SDK 的业务错误类型处理结果。
 
 当 `uncertain` 为真时，写入可能已经完成。对同一工作区再次 `publish` 并使用原说明即可重试原请求；
-期间工作区对象拒绝改动要素或更换发布说明。成功后再次调用也返回原发布结果。
+期间工作区对象保持原要素上下文和发布说明，以便确认原请求。成功后再次调用也返回原发布结果。
 发布被明确拒绝时释放待重试请求，保留草稿版本供查询、解决冲突。
 已有待确认请求在重试遇到身份验证失败、权限拒绝或资源不可见时仍然保留；
-这些错误不能确定先前发布的结果。恢复访问后继续使用原请求，不能生成新的请求 ID。
+先前发布的结果通过原请求确认。恢复访问后继续使用原请求及其请求 ID。
 
 工作区的 `pending_publication` / `PendingPublication()` / `pendingPublication` 暴露可持久化的业务发布意图，
 可在跨进程恢复时交给 `client.publish(intent)`。Python 使用 `dataclasses.asdict`，Rust / Go 使用 JSON 序列化，
-TS 使用 `stringifyJson`；恢复时用 `parseJson` 读取，并将 `expectedWorkspaceVersion` 转为 `BigInt`，以恢复版本字段的类型。句柄本身仅保存在客户端内存中，不构成本地仓库。
-同一工作区的多个独立句柄仍受服务端乐观版本检查约束，SDK 不会静默刷新并覆盖其他修改。
+TS 使用 `stringifyJson`；恢复时用 `parseJson` 读取，并将 `expectedWorkspaceVersion` 转为 `BigInt`，以恢复版本字段的类型。句柄在客户端内存中维护版本与请求状态，业务数据和历史由服务端持久化。
+同一工作区的多个独立句柄仍受服务端乐观版本检查约束，并发修改通过显式刷新和冲突处理协调。
 
 大量冲突时错误只含 head、version、total 等摘要，完整内容通过工作区 `conflicts()` 分页查询。
 
@@ -168,12 +169,12 @@ curl --fail-with-body http://127.0.0.1:7881/api/v1/create_project \
 
 业务服务 `GET /` 为 JSON 服务信息；管理界面由独立 Web 项目提供。`GET /health` 为存活检查；`GET /ready` 最多 2 秒检查存储；`GET /metrics` 要求同样的 Bearer 认证。默认同源，跨域授权需由部署网关明确配置。
 
-## 服务端协议与限制
+## 服务端协议与请求规格
 
 [geoledger.proto](../proto/geoledger/v1/geoledger.proto) 是内部统一协议定义。
 生成代码位于 SDK 的私有 / internal 目录，公开入口仅提供业务接口。
 HTTP 与 RPC 仍调用同一个 Application；用户身份只来自服务端验证的令牌。
-SDK 是本仓库源码包，推送 GitHub 与发布到包注册表是不同操作。
+SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布流程完成。
 
 | 情况 | HTTP |
 |---|---|
@@ -186,4 +187,4 @@ SDK 是本仓库源码包，推送 GitHub 与发布到包注册表是不同操�
 | 存储不可用 | 503 |
 
 Audit 仅项目 owner 可读。每页 1–1000 条、Feature 最大 16 KiB、最多 256 个属性；EPSG:4326，XY/XYZ。
-标识拒绝控制字符，属性键和值拒绝实际 U+0000。进一步边界见 [生产运行](production.md)。
+标识采用有效文本字符，属性键和值使用 U+0000 以外的 JSON 文本；服务统一校验输入并返回业务错误。容量配置见 [生产运行](production.md)。

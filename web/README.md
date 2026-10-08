@@ -1,7 +1,7 @@
 # GeoLedger Console
 
 独立的 Next.js 管理应用。浏览器通过 HTTP 访问此项目；Next.js 的 Node.js
-服务端使用 `@geoledger/client` 业务 SDK 连接 GeoLedger gRPC。Rust 服务不再嵌入页面。
+服务端使用 `@geoledger/client` 业务 SDK 连接 GeoLedger gRPC。Web 与业务服务可独立构建和部署。
 
 技术栈按 npm stable 锁定：Next.js 16.4、React 19.3、TypeScript 7、Tailwind CSS 4.3，
 shadcn/ui 源码组件（Radix）与 lucide 图标。以 `package-lock.json` 为可复现安装依据。
@@ -19,7 +19,7 @@ cp web/.env.example web/.env.local
 
 编辑 `.env.local`：设置 `GL_WEB_ENDPOINT` 为 GeoLedger 的 gRPC 地址；
 设置 `GL_WEB_ORIGIN` 为浏览器实际访问的完整 origin；生成并填入至少 32 字符的
-随机 `GL_WEB_SESSION_SECRET`（例如 `openssl rand -base64 48`）。不要提交凭证。
+随机 `GL_WEB_SESSION_SECRET`（例如 `openssl rand -base64 48`）。凭证保存在本地环境配置或秘密管理系统中。
 
 ```sh
 npm --prefix web run dev
@@ -48,27 +48,27 @@ docker build -f web/Dockerfile -t geoledger-console .
 docker compose --profile console up --build
 ```
 
-Web 与数据库无直接连接；切换 SQLite/PostGIS 只修改 GeoLedger 的存储配置。
+Web 通过统一业务服务访问数据；切换 SQLite/PostGIS 时在 GeoLedger 服务端配置存储后端。
 Web 镜像以非 root 用户运行，包含 standalone 产物、SDK 和本地字体/静态资源。
-密钥只在运行时传入；构建不需要密钥，也不读取数据库。
+构建使用源码和锁定依赖，运行时通过环境配置注入密钥和业务服务地址。
 
-## 开发边界
+## 开发结构
 
 - `src/app/api`：登录/退出与已认证浏览器业务接口。
 - `src/lib/operations.ts`：严格白名单请求到 SDK 业务方法的映射。
-- `src/components`：页面交互；禁止导入 Node SDK 的运行时代码。
+- `src/components`：浏览器页面交互，通过 HTTP 调用服务端业务接口。
 - `src/components/ui`：shadcn/ui 源组件，可维护和定制。
 - `src/app/globals.css`：Mistral 参考主题与响应式布局。
 
 UI 请求版本号使用十进制字符串，服务端转换为 SDK bigint。要素内容使用原始
-GeoJSON 文本，展示/补齐 ID 使用 lossless-json；不经原生 JSON 数字往返。
+GeoJSON 文本，展示/补齐 ID 使用 lossless-json；保持原始数字的精度。
 访问令牌放入加密、签名的 HttpOnly/SameSite=Strict Cookie，会话最多 8 小时，
 HTTPS 下启用 Secure。控制台令牌上限为 2000 个 ASCII 字符；较大的企业 JWT
 需由身份提供方精简 claims，或通过 SDK 使用。所有业务请求仍由 GeoLedger 检查权限与令牌有效性。
 
 待确认的发布意图（项目、工作区、版本、说明、请求 ID）暂存在本标签页的
-sessionStorage，不含令牌和要素内容。断线、刷新和会话过期后可原样重试；
-主动退出会清除此记录，退出前请先确认发布结果。不会自动重发写操作。
+sessionStorage，保存恢复发布所需的请求标识和版本信息。断线、刷新和会话过期后可原样重试；
+主动退出会清除此记录，退出前请先确认发布结果。写操作由用户明确发起，发布重试复用原请求。
 
 ## 验证
 
@@ -86,7 +86,7 @@ npm --prefix web run build
 参考 [Mistral DESIGN.md](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/mistral.ai/DESIGN.md)：
 暖白、奶油色、橙色强调、8px 按钮 / 12px 卡片、细边框、页底日落色带。
 橙色按钮采用深色文字以提高正文对比度；导航的橙色文字使用更深的色阶。
-使用本地打包的 Inter；商业字体 PP Editorial Old 不随本项目分发，显示字体
-回退为开源 Newsreader（中文衬线采用系统字体）。如持有授权，可自行配置展示字体。
-Logo 使用 [GeoLedger SVG 标志](public/logo.svg)，不使用 Mistral 商标。
+使用本地打包的开源 Inter 和 Newsreader（中文衬线采用系统字体）。
+展示字体可按持有的字体授权自行配置。
+Logo 使用自主的 [GeoLedger SVG 标志](public/logo.svg)。
 shadcn/ui 源码基于 MIT 许可，参见 [第三方说明](THIRD_PARTY_NOTICES.md)。
