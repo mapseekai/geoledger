@@ -160,6 +160,8 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 标签只使用固定的操作名与状态码集合，从不使用身份、项目、要素 ID 或请求 ID。建议告警：`internal_errors_total` 增速、`rate(busy_total)`、`db_pool_wait_timeouts_total` 增长、`/ready` 失败。
 
+[deploy/monitoring](../deploy/monitoring/prometheus-rules.yaml) 提供对应的 Prometheus 告警规则（实例不可达、内部错误、5xx 比例、繁忙比例、执行槽耗尽、p95 延迟、连接池等待超时、认证失败激增、排空卡住）及 `promtool test rules` 单元测试，[抓取示例](../deploy/monitoring/prometheus-scrape.example.yaml) 使用单独的监控令牌（不加入任何项目）。阈值按实测基线调整；磁盘使用率告警来自 node_exporter 等主机监控。
+
 ### 格式升级
 
 存储格式变化随版本说明公布。升级由运维显式执行，服务启动从不自动迁移：

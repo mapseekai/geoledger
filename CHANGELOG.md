@@ -37,6 +37,7 @@
 - 有界优雅停机：先让 `/ready` 返回 503，再在 `GL_SHUTDOWN_TIMEOUT_SECS` 内排空。
 - 部署参考：nginx/Caddy TLS 网关、`deploy/compose.production.yaml`（TLS PostGIS + 网关 + 控制台）、`scripts/make-test-certs.sh`。
 - 发布流程（多架构镜像与签名、二进制、SBOM、SDK 发布）与 CI 补丁，`SECURITY.md`、本变更记录与 API 兼容策略。
+- Prometheus 告警规则与抓取示例 `deploy/monitoring/`（含 promtool 规则测试）。
 - 测试：编解码与几何的 cargo-fuzz 目标、多实例并发发布、超时/429/鉴权失败路径集成用例、k6 负载脚本 `scripts/load-test.sh`。
 
 ### Changed

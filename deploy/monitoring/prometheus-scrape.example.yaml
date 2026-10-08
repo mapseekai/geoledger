@@ -1,0 +1,13 @@
+# Example scrape job. Store a dedicated monitoring credential (a GeoLedger token
+# with no project membership) in the file referenced below, readable only by Prometheus.
+scrape_configs:
+  - job_name: geoledger
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/geoledger-token
+    static_configs:
+      - targets: ["geoledger.internal:7881"]
+rule_files:
+  - /etc/prometheus/rules/geoledger.yaml
