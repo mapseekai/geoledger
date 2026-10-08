@@ -21,9 +21,10 @@
 4. `publication_receipt` 的键是 `(project, subject, request_id)`。已提交收据不可变；失败事务不得留下成功收据。提交后响应丢失可用原请求恢复结果。
 5. 修订可见性为 `valid_from <= revision` 且 `valid_to` 为空或大于 revision；删除作为历史墓碑保留。
 6. 要素分页先剔除被草稿覆盖的基础要素，再做 bbox 过滤；移出范围和删除的草稿也会遮蔽原要素。游标按字节顺序稳定排序，严格大于 after。
-7. `begin_merge` 清空事务私有暂存区；stage 仅存放已验证的候选。append/apply 方法原子消费同一份暂存区。它不属于公开历史。
+7. `begin_merge` 清空事务私有暂存区；stage 仅存放已验证的候选。append 方法原子消费同一份暂存区。它不属于公开历史。
 8. 所有等待、连接、查询和提交服从传入期限。结果未知时返回错误，保留客户端确认路径；后端不能假称事务失败或自动换库。
-9. 返回页受条数与内存限制约束；新后端必须提供能定位游标的索引，不能用全库加载实现分页。
+9. 同项目 `append_audit` 必须按提交顺序分配 ID，保证 audit 游标不会越过未提交的事件；PostGIS 在分配 ID 前获取独立的项目级事务 advisory lock，不锁项目行，其他项目仍可独立提交。
+10. 返回页受条数与内存限制约束；新后端必须提供能定位游标的索引，不能用全库加载实现分页。
 
 ## 后端无关行类型
 
@@ -49,10 +50,10 @@
 | history_page | revision:i64, subject:text, message:text, created_at:text |
 | commit_page | dataset:text, key:text, before_properties:text?, before_geometry:text?, after_properties:text?, after_geometry:text? |
 | audit_page | id:i64, subject:text, action:text, detail:text, created_at:text |
-| merge_page | dataset:text, key:text, draft_properties:text?, draft_geometry:text?, resolved_head:i64?, resolution_stale:bool, base_properties:text?, base_geometry:text?, current_properties:text?, current_geometry:text?, draft_geojson:text?, base_geojson:text?, current_geojson:text? |
+| merge_page | dataset:text, key:text, draft_properties:text?, draft_geometry:text?, resolved_head:i64?, resolution_stale:bool, base_properties:text?, base_geometry:text?, current_properties:text?, current_geometry:text? |
 | publication_receipt | payload:text, result:text |
 
-properties/detail/payload/result 为精确 JSON 文本，geometry 为规范化后的 GeoJSON geometry 文本，空几何使用 Null。stage 的 before/after 是序列化的 `{properties: object, geometry: string|null}`，整体 Null 表示删除。merge_page 每批最多 32 行，当前格式 geometry 与对应 geojson 字段相同。所有其他列表遵守传入 limit。
+properties/detail/payload/result 为精确 JSON 文本，geometry 为规范化后的 GeoJSON geometry 文本，空几何使用 Null。stage 的 before/after 是序列化的 `{properties: object, geometry: string|null}`，整体 Null 表示删除。merge_page 每批最多 32 行。所有其他列表遵守传入 limit。
 
 要素属性的字符串值与对象键（包括嵌套对象和数组）不允许包含 U+0000；共同应用层在写入前统一返回 `invalid_argument`，避免 SQLite 与 PostGIS 的 JSON 表示能力不同。普通文本中的字面反斜杠序列 `\u0000` 可以保留，它与 JSON 解码后得到的 NUL 字符不同。
 
@@ -62,7 +63,7 @@ SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读�
 
 PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。几何的规范 GeoJSON 与属性 JSON 文本保留跨后端一致性，PostGIS 在 `ST_GeomFromGeoJSON(geom)` 上创建 GiST 表达式索引；bbox 使用 PostGIS 空间查询。几何合法性在共同应用层校验。
 
-当前格式为 4，两个后端均有不可变 commit/change/audit/receipt 约束及历史只关闭有效期的保护。不同后端文件/数据库各自独立，配置切换不会自动搬运数据。
+当前格式为 5，正式要素直接读取 `gl_history`，不再维护重复的 `gl_features` 表。格式 4 必须初始化新数据库，不提供自动升级。两个后端均有不可变 commit/change/audit/receipt 约束及历史只关闭有效期的保护。不同后端文件/数据库各自独立，配置切换不会自动搬运数据。
 
 ## 新后端验收
 

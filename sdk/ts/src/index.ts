@@ -594,6 +594,7 @@ export class Workspace {
   }
   publish(message: string): Promise<model.PublicationResult> {
     return this.#exclusive(async () => {
+      const wasPending = this.#pending !== undefined;
       if (!this.#pending) {
         this.#editable();
         this.#pending = Object.freeze({
@@ -610,7 +611,12 @@ export class Workspace {
       try {
         return this.#update(await this.client.publish(this.#pending));
       } catch (e) {
-        if (e instanceof GeoLedgerError && !e.uncertain)
+        if (
+          e instanceof GeoLedgerError &&
+          !e.uncertain &&
+          (!wasPending ||
+            !["unauthenticated", "permission_denied", "not_found"].includes(e.code))
+        )
           this.#pending = undefined;
         throw e;
       }

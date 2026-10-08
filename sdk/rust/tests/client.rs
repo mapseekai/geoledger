@@ -130,6 +130,17 @@ impl wire::geo_ledger_server::GeoLedger for Service {
         if requests.len() == 1 {
             return Err(Status::unavailable("response lost after publication"));
         }
+        match requests.len() {
+            2 => return Err(Status::unauthenticated("expired token")),
+            3 => return Err(Status::permission_denied("access denied")),
+            4 => return Err(Status::not_found("hidden project")),
+            6 => return Err(Status::unavailable("lost response")),
+            7 => return Err(Status::aborted("conflict")),
+            8 => return Err(Status::unauthenticated("expired token")),
+            9 => return Err(Status::permission_denied("access denied")),
+            10 => return Err(Status::not_found("hidden project")),
+            _ => {}
+        }
         Ok(Response::new(wire::PublishReply {
             workspace: "workspace".into(),
             revision: 2,
@@ -183,13 +194,44 @@ async fn unknown_outcome_preserves_original_publication()
     assert!(draft.delete("dataset", "one").await.is_err());
     assert_eq!(draft.info().version, 4);
     let original = draft.pending_publication().ok_or("lost intent")?.clone();
+    for code in ["unauthenticated", "permission_denied", "not_found"] {
+        let error = draft
+            .publish("roads updated")
+            .await
+            .err()
+            .ok_or("expected rejection")?;
+        assert_eq!(error.code, code);
+        assert!(!error.uncertain);
+        assert_eq!(draft.pending_publication(), Some(&original));
+        assert!(draft.publish("changed").await.is_err());
+    }
     assert_eq!(draft.publish("roads updated").await?.revision, 2);
     assert_eq!(draft.pending_publication(), Some(&original));
-    let seen = requests.lock().map_err(|_| "lock")?;
-    assert_eq!(seen.len(), 2);
-    assert_eq!(seen[0], seen[1]);
+    {
+        let seen = requests.lock().map_err(|_| "lock")?;
+        assert_eq!(seen.len(), 5);
+        assert!(seen.iter().all(|request| request == &seen[0]));
+    }
     assert_eq!(draft.info().status, "published");
     assert_eq!(draft.info().version, 5);
+    let mut rejected = client.create_workspace("project").await?;
+    assert!(rejected.publish("original").await.is_err());
+    assert!(rejected.pending_publication().is_some());
+    for code in [
+        "conflict",
+        "unauthenticated",
+        "permission_denied",
+        "not_found",
+    ] {
+        let error = rejected
+            .publish("original")
+            .await
+            .err()
+            .ok_or("expected rejection")?;
+        assert_eq!(error.code, code);
+        assert!(rejected.pending_publication().is_none());
+        assert_eq!(rejected.info().version, 4);
+    }
     server.abort();
     Ok(())
 }

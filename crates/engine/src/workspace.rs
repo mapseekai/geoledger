@@ -269,10 +269,7 @@ pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
         if !seen.insert((e.dataset.clone(), e.feature_id.clone())) {
             return Err(bad());
         }
-        let value = e
-            .feature
-            .map(|f| normalize(t, f, &e.feature_id))
-            .transpose()?;
+        let value = e.feature.map(|f| normalize(f, &e.feature_id)).transpose()?;
         let was_resolved: bool = t
             .has_resolution(&r.project, &r.workspace, &e.dataset, &e.feature_id)?
             .get(0usize)?;

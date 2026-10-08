@@ -1,5 +1,5 @@
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=4));
-INSERT INTO gl_format VALUES(true,4);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=5));
+INSERT INTO gl_format VALUES(true,5);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0));
 CREATE TABLE gl_project_members (
@@ -23,10 +23,6 @@ CREATE TABLE gl_commits (
  project text NOT NULL REFERENCES gl_projects(id), revision INTEGER NOT NULL CHECK(revision>0),
  workspace text NOT NULL, subject text NOT NULL, message text NOT NULL, created_at text NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
  PRIMARY KEY(project,revision), FOREIGN KEY(project,subject) REFERENCES gl_project_members(project,subject), FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id));
-CREATE TABLE gl_features (
- project text NOT NULL, dataset text NOT NULL, feature_id text COLLATE BINARY NOT NULL, properties text NOT NULL CHECK(json_type(properties)='object'),
- geom text, PRIMARY KEY(project,dataset,feature_id),
- FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id));
 CREATE TABLE gl_history (
  project text NOT NULL, dataset text NOT NULL, feature_id text COLLATE BINARY NOT NULL, valid_from INTEGER NOT NULL, valid_to INTEGER,
  properties text, geom text,

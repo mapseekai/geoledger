@@ -2,7 +2,7 @@
 //! spellings), and finite binary64 nonintegral decimals with magnitude < 2^53.
 //! Nonzero underflow is rejected. Decimal fractions use binary64 rounding;
 //! integers are validated from their original digits before any conversion.
-//! No shared codec flags or local object encodings change.
+//! Serde's two private marker object keys are rejected before Value conversion.
 use crate::{Error, MAX_BYTES, Result, bad};
 use serde::Serialize;
 use serde_json::Value;
@@ -38,6 +38,19 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Value> {
                 }
             }
             normalized.push_str(&source[start..i]);
+            // Value deserialization interprets these keys as special scalars
+            // when serde_json features are unified by another workspace crate.
+            // Inspect decoded keys before serde can discard or reinterpret them.
+            if bytes[i..].iter().find(|b| !b.is_ascii_whitespace()) == Some(&b':') {
+                let key: String =
+                    serde_json::from_str(&source[start - 1..i]).map_err(Error::invalid_json)?;
+                if matches!(
+                    key.as_str(),
+                    "$serde_json::private::RawValue" | "$serde_json::private::Number"
+                ) {
+                    return Err(Error::new(400, "reserved JSON object key"));
+                }
+            }
         } else if b == b'"' {
             quoted = true;
             normalized.push('"');
@@ -221,6 +234,39 @@ pub(crate) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn decimal_roundtrip_matches_binary64() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for token in ["30.384158368805974", "7.93377316861183e-76"] {
+            let expected: f64 = token.parse()?;
+            assert_eq!(
+                parse(token.as_bytes())?.as_f64().map(f64::to_bits),
+                Some(expected.to_bits())
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn reserved_serde_keys_are_rejected_before_value_conversion()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for key in [
+            "$serde_json::private::RawValue",
+            "$serde_json::private::Number",
+            r"\u0024serde_json::private::RawValue",
+            r"$serde_json::private::\u004eumber",
+        ] {
+            for source in [
+                format!(r#"{{"{key}":"123"}}"#),
+                format!(r#"{{"ordinary":[{{"a":1,"{key}" :"123"}}]}}"#),
+                format!(r#"{{"{key}":"123","{key}":0}}"#),
+            ] {
+                assert_eq!(parse(source.as_bytes()).err().map(|e| e.status), Some(400));
+                assert_eq!(stored::<Value>(&source).err().map(|e| e.status), Some(500));
+            }
+        }
+        let source = br#"{"ordinary":["$serde_json::private::RawValue","$serde_json::private::Number"],"$serde_json::private::Other":1}"#;
+        assert_eq!(parse(source)?, serde_json::from_slice::<Value>(source)?);
+        Ok(())
+    }
     #[test]
     fn exact_numeric_tokens_before_value_conversion() {
         for token in [

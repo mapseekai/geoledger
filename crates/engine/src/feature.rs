@@ -110,7 +110,7 @@ pub(super) fn coordinates(v: &Value) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn normalize(t: &mut Transaction, f: Feature, key: &str) -> Result<Stored> {
+pub(super) fn normalize(f: Feature, key: &str) -> Result<Stored> {
     text(key, 256)?;
     if f.kind != "Feature"
         || f.id != key
@@ -124,7 +124,6 @@ pub(super) fn normalize(t: &mut Transaction, f: Feature, key: &str) -> Result<St
         portable_property(value)?;
     }
     let geometry = crate::geometry::normalize(&f.geometry)?;
-    let _ = t;
     Ok(Stored {
         properties: f.properties,
         geometry,
@@ -157,10 +156,10 @@ fn portable_property(value: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn validate_candidate(t: &mut Transaction, key: &str, value: &Stored) -> Result<()> {
+pub(super) fn validate_candidate(key: &str, value: &Stored) -> Result<()> {
     // Merging individually valid property maps can exceed a Feature's bounds.
     if value.properties.len() > 256
-        || serde_json::to_vec(&geojson(t, key, Some(value))?)
+        || serde_json::to_vec(&geojson(key, Some(value))?)
             .map_err(|_| bad())?
             .len()
             > 16384
@@ -173,13 +172,12 @@ pub(super) fn validate_candidate(t: &mut Transaction, key: &str, value: &Stored)
     Ok(())
 }
 
-pub(super) fn geojson(t: &mut Transaction, key: &str, value: Option<&Stored>) -> Result<Value> {
+pub(super) fn geojson(key: &str, value: Option<&Stored>) -> Result<Value> {
     let Some(v) = value else {
         return Ok(Value::Null);
     };
     let geometry = match &v.geometry {
         None => Value::Null,
-        Some(g) if t.geometry_cache().contains_key(g) => t.geometry_cache()[g].clone(),
         Some(g) => serde_json::from_str::<Value>(g).map_err(Error::stored_json)?,
     };
     Ok(json!({"type":"Feature","id":key,"properties":v.properties,"geometry":geometry}))

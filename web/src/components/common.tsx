@@ -23,7 +23,7 @@ export function Empty({
         <Inbox />
       </span>
       <h3>{title}</h3>
-      <p>{children ?? "创建第一条记录，开始管理你的空间数据。"}</p>
+      {children && <p>{children}</p>}
     </div>
   );
 }

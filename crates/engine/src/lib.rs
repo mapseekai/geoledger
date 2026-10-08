@@ -28,7 +28,7 @@ use std::{
 use uuid::Uuid;
 
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
-pub const FORMAT_VERSION: i32 = 4;
+pub const FORMAT_VERSION: i32 = 5;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 fn bad() -> Error {
@@ -66,29 +66,7 @@ pub enum Storage {
     Sqlite(std::path::PathBuf),
     Postgis(String),
 }
-struct Transaction {
-    inner: Box<dyn RepositoryTransaction>,
-    cache: std::collections::HashMap<String, Value>,
-}
-impl std::ops::Deref for Transaction {
-    type Target = dyn RepositoryTransaction;
-    fn deref(&self) -> &Self::Target {
-        &*self.inner
-    }
-}
-impl std::ops::DerefMut for Transaction {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.inner
-    }
-}
-impl Transaction {
-    fn geometry_cache(&mut self) -> &mut std::collections::HashMap<String, Value> {
-        &mut self.cache
-    }
-    fn commit(self) -> Result<()> {
-        self.inner.commit()
-    }
-}
+type Transaction = Box<dyn RepositoryTransaction>;
 impl Application {
     pub fn new(storage: Storage) -> Self {
         Self::with_backend(std::sync::Arc::new(session::SqlStorage {
@@ -142,10 +120,7 @@ impl Application {
                 | "audit"
                 | "commit"
         );
-        let mut t = Transaction {
-            inner: self.storage.begin(read_only, self.timeout)?,
-            cache: Default::default(),
-        };
+        let mut t = self.storage.begin(read_only, self.timeout)?;
         let result = match command {
             Command::CreateProject(r) => create_project(&mut t, subject, r),
             Command::ListProjects(r) => list_projects(&mut t, subject, r),

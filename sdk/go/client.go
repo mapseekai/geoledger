@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"math"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -121,54 +122,14 @@ func DialWithTimeout(endpoint, token string, timeout time.Duration) (*Client, er
 	return &Client{rpc: pb.NewGeoLedgerClient(conn), conn: conn}, nil
 }
 func (c *Client) Close() error { c.closed.Store(true); return c.conn.Close() }
-func (c *Client) call(ctx context.Context, operation string, input any, output any) error {
+func call[Request any, Reply proto.Message](c *Client, ctx context.Context, rpc func(context.Context, *Request, ...grpc.CallOption) (Reply, error), request *Request, output any) error {
 	if ctx == nil {
 		return invalid("context is required")
 	}
 	if c.closed.Load() {
 		return invalid("client is closed")
 	}
-	raw, err := json.Marshal(input)
-	if err != nil {
-		return invalid("invalid JSON request")
-	}
-	if operation == "Save" || operation == "Resolve" || operation == "Rebase" {
-		var obj map[string]json.RawMessage
-		if err = json.Unmarshal(raw, &obj); err != nil {
-			return invalid("invalid request")
-		}
-		key := "edits"
-		if operation != "Save" {
-			key = "resolutions"
-		}
-		var edits []Edit
-		if err = json.Unmarshal(obj[key], &edits); err != nil {
-			return invalid("invalid edits")
-		}
-		converted := make([]map[string]any, 0, len(edits))
-		for _, e := range edits {
-			if len(e.Feature) == 0 {
-				return invalid("edit requires an explicit feature; use null for deletion")
-			}
-			if !json.Valid(e.Feature) {
-				return invalid("invalid GeoJSON")
-			}
-			var feature any
-			if string(e.Feature) != "null" {
-				feature = map[string]string{"geojson": string(e.Feature)}
-			}
-			converted = append(converted, map[string]any{"dataset": e.Dataset, "feature_id": e.FeatureID, "feature": feature})
-		}
-		obj[key], err = json.Marshal(converted)
-		if err != nil {
-			return invalid("invalid edits")
-		}
-		raw, err = json.Marshal(obj)
-		if err != nil {
-			return invalid("invalid request")
-		}
-	}
-	reply, err := c.invoke(ctx, operation, raw)
+	reply, err := rpc(ctx, request)
 	if err != nil {
 		return failure(err)
 	}
@@ -176,6 +137,23 @@ func (c *Client) call(ctx context.Context, operation string, input any, output a
 		return &Error{Code: "invalid_response", Message: "invalid data received from server", Uncertain: true}
 	}
 	return nil
+}
+func wireEdits(edits []Edit) ([]*pb.Edit, error) {
+	result := make([]*pb.Edit, 0, len(edits))
+	for _, edit := range edits {
+		if len(edit.Feature) == 0 {
+			return nil, invalid("edit requires an explicit feature; use null for deletion")
+		}
+		if !json.Valid(edit.Feature) {
+			return nil, invalid("invalid GeoJSON")
+		}
+		var feature *pb.Feature
+		if strings.TrimSpace(string(edit.Feature)) != "null" {
+			feature = &pb.Feature{Geojson: string(edit.Feature)}
+		}
+		result = append(result, &pb.Edit{Dataset: edit.Dataset, FeatureId: edit.FeatureID, Feature: feature})
+	}
+	return result, nil
 }
 func decode(reply proto.Message, out any) error {
 	raw, err := json.Marshal(reply)
@@ -267,40 +245,40 @@ func decode(reply proto.Message, out any) error {
 }
 func (c *Client) Info(ctx context.Context) (ServerInfo, error) {
 	var r ServerInfo
-	e := c.call(ctx, "Info", struct{}{}, &r)
+	e := call(c, ctx, c.rpc.Info, &pb.Empty{}, &r)
 	return r, e
 }
 func (c *Client) CreateProject(ctx context.Context, name string) (Project, error) {
 	var r Project
-	e := c.call(ctx, "CreateProject", map[string]any{"name": name}, &r)
+	e := call(c, ctx, c.rpc.CreateProject, &pb.NameRequest{Name: name}, &r)
 	return r, e
 }
 func (c *Client) Project(ctx context.Context, id string) (Project, error) {
 	var r Project
-	e := c.call(ctx, "GetProject", map[string]any{"project": id}, &r)
+	e := call(c, ctx, c.rpc.GetProject, &pb.ProjectRequest{Project: id}, &r)
 	return r, e
 }
 func (c *Client) Projects(ctx context.Context, page Page) ([]Project, error) {
 	var r struct {
 		Projects []Project `json:"projects"`
 	}
-	e := c.call(ctx, "ListProjects", page, &r)
+	e := call(c, ctx, c.rpc.ListProjects, &pb.PageRequest{After: page.After, Limit: limit(page.Limit)}, &r)
 	return r.Projects, e
 }
 func (c *Client) SetMember(ctx context.Context, project, subject, role string) error {
 	var r struct{ OK bool }
-	return c.call(ctx, "SetMember", map[string]any{"project": project, "subject": subject, "role": role}, &r)
+	return call(c, ctx, c.rpc.SetMember, &pb.MemberRequest{Project: project, Subject: subject, Role: role}, &r)
 }
 func (c *Client) CreateDataset(ctx context.Context, project, name string) (Dataset, error) {
 	var r Dataset
-	e := c.call(ctx, "CreateDataset", map[string]any{"project": project, "name": name}, &r)
+	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name}, &r)
 	return r, e
 }
 func (c *Client) Datasets(ctx context.Context, project string, page Page) ([]Dataset, error) {
 	var r struct {
 		Datasets []Dataset `json:"datasets"`
 	}
-	e := c.call(ctx, "ListDatasets", map[string]any{"project": project, "after": page.After, "limit": limit(page.Limit)}, &r)
+	e := call(c, ctx, c.rpc.ListDatasets, &pb.ProjectPageRequest{Project: project, After: page.After, Limit: limit(page.Limit)}, &r)
 	return r.Datasets, e
 }
 func limit(n int64) *int64 {
@@ -311,14 +289,14 @@ func limit(n int64) *int64 {
 }
 func (c *Client) CreateWorkspace(ctx context.Context, project string) (*Workspace, error) {
 	var info WorkspaceInfo
-	if err := c.call(ctx, "CreateWorkspace", map[string]any{"project": project}, &info); err != nil {
+	if err := call(c, ctx, c.rpc.CreateWorkspace, &pb.ProjectRequest{Project: project}, &info); err != nil {
 		return nil, err
 	}
 	return &Workspace{client: c, project: project, info: info}, nil
 }
 func (c *Client) Workspace(ctx context.Context, project, id string) (*Workspace, error) {
 	var info WorkspaceInfo
-	if err := c.call(ctx, "GetWorkspace", map[string]any{"project": project, "workspace": id}, &info); err != nil {
+	if err := call(c, ctx, c.rpc.GetWorkspace, &pb.WorkspaceRequest{Project: project, Workspace: id}, &info); err != nil {
 		return nil, err
 	}
 	return &Workspace{client: c, project: project, info: info}, nil
@@ -327,44 +305,44 @@ func (c *Client) Workspaces(ctx context.Context, project string, page Page) ([]W
 	var r struct {
 		Workspaces []WorkspaceInfo `json:"workspaces"`
 	}
-	e := c.call(ctx, "ListWorkspaces", map[string]any{"project": project, "after": page.After, "limit": limit(page.Limit)}, &r)
+	e := call(c, ctx, c.rpc.ListWorkspaces, &pb.ProjectPageRequest{Project: project, After: page.After, Limit: limit(page.Limit)}, &r)
 	return r.Workspaces, e
 }
 func (c *Client) Features(ctx context.Context, project, dataset string, query FeatureQuery) (FeaturePage, error) {
 	var r FeaturePage
-	input := struct {
-		Project string `json:"project"`
-		Dataset string `json:"dataset"`
-		FeatureQuery
-	}{project, dataset, query}
-	e := c.call(ctx, "Features", input, &r)
+	for _, value := range query.Bbox {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return r, invalid("invalid JSON request")
+		}
+	}
+	e := call(c, ctx, c.rpc.Features, &pb.FeaturesRequest{Project: project, Dataset: dataset, Workspace: query.Workspace, Revision: query.Revision, FeatureId: query.FeatureID, Bbox: query.Bbox, After: query.After, Limit: limit(query.Limit)}, &r)
 	return r, e
 }
 func (c *Client) History(ctx context.Context, project string, after int64, n int64) ([]Commit, error) {
 	var r struct {
 		Commits []Commit `json:"commits"`
 	}
-	e := c.call(ctx, "History", map[string]any{"project": project, "after": after, "limit": limit(n)}, &r)
+	e := call(c, ctx, c.rpc.History, &pb.HistoryRequest{Project: project, After: after, Limit: limit(n)}, &r)
 	return r.Commits, e
 }
 func (c *Client) Commit(ctx context.Context, project string, revision int64, page Page) (CommitChanges, error) {
 	var r CommitChanges
-	e := c.call(ctx, "Commit", map[string]any{"project": project, "revision": revision, "after": page.After, "limit": limit(page.Limit)}, &r)
+	e := call(c, ctx, c.rpc.Commit, &pb.CommitRequest{Project: project, Revision: revision, After: page.After, Limit: limit(page.Limit)}, &r)
 	return r, e
 }
 func (c *Client) Audit(ctx context.Context, project string, after, n int64) (AuditPage, error) {
 	var r AuditPage
-	e := c.call(ctx, "Audit", map[string]any{"project": project, "after": after, "limit": limit(n)}, &r)
+	e := call(c, ctx, c.rpc.Audit, &pb.HistoryRequest{Project: project, After: after, Limit: limit(n)}, &r)
 	return r, e
 }
 func (c *Client) Publish(ctx context.Context, intent Publication) (PublicationResult, error) {
 	var r PublicationResult
-	e := c.call(ctx, "Publish", intent, &r)
+	e := call(c, ctx, c.rpc.Publish, &pb.PublishRequest{Project: intent.Project, Workspace: intent.Workspace, ExpectedWorkspaceVersion: intent.ExpectedWorkspaceVersion, RequestId: intent.RequestID, Message: intent.Message}, &r)
 	return r, e
 }
 func (c *Client) Restore(ctx context.Context, project string, revision int64) (*Workspace, error) {
 	var info WorkspaceInfo
-	if err := c.call(ctx, "Restore", map[string]any{"project": project, "revision": revision}, &info); err != nil {
+	if err := call(c, ctx, c.rpc.Restore, &pb.RestoreRequest{Project: project, Revision: revision}, &info); err != nil {
 		return nil, err
 	}
 	return &Workspace{client: c, project: project, info: info}, nil

@@ -78,13 +78,51 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(workspace.info.version, 5)
         self.assertEqual(workspace.info.status, "published")
 
+    def test_retry_access_failures_preserve_original_intent(self):
+        for code in ("unauthenticated", "permission_denied", "not_found"):
+            with self.subTest(code=code):
+                sent = []
+                def publish(intent):
+                    sent.append(asdict(intent))
+                    if len(sent) == 1:
+                        raise GeoLedgerError("unavailable", "lost", uncertain=True)
+                    if len(sent) == 2:
+                        raise GeoLedgerError(code, "access denied")
+                    return {"revision": 2, "version": 5, "status": "published"}
+                workspace = Workspace(SimpleNamespace(publish=publish), "project",
+                                      WorkspaceInfo("draft", 1, 4, "open"))
+                for _ in range(2):
+                    with self.assertRaises(GeoLedgerError):
+                        workspace.publish("original")
+                self.assertEqual(asdict(workspace.pending_publication), sent[0])
+                with self.assertRaises(GeoLedgerError):
+                    workspace.publish("changed")
+                workspace.publish("original")
+                self.assertEqual(sent, [sent[0]] * 3)
+
+    def test_first_access_failure_releases_intent(self):
+        for code in ("unauthenticated", "permission_denied", "not_found"):
+            def publish(intent):
+                raise GeoLedgerError(code, "access denied")
+            workspace = Workspace(SimpleNamespace(publish=publish), "project",
+                                  WorkspaceInfo("draft", 1, 4, "open"))
+            with self.assertRaises(GeoLedgerError):
+                workspace.publish("original")
+            self.assertIsNone(workspace.pending_publication)
+
     def test_definite_conflict_releases_publication_intent(self):
+        attempts = 0
         def publish(intent):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise GeoLedgerError("unavailable", "lost", uncertain=True)
             raise GeoLedgerError("conflict", "merge conflicts")
         workspace = Workspace(SimpleNamespace(publish=publish), "project",
                               WorkspaceInfo("draft", 1, 4, "open"))
-        with self.assertRaises(GeoLedgerError):
-            workspace.publish("roads updated")
+        for _ in range(2):
+            with self.assertRaises(GeoLedgerError):
+                workspace.publish("roads updated")
         self.assertIsNone(workspace.pending_publication)
         self.assertEqual(workspace.info.version, 4)
 

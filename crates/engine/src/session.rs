@@ -3,8 +3,9 @@ pub(crate) mod postgres;
 use crate::repository::{RepositoryTransaction, StorageBackend};
 use crate::{Error, FORMAT_VERSION, Result, Storage};
 use rusqlite::functions::FunctionFlags;
-use serde_json::Value;
+use serde_json::value::RawValue;
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -148,13 +149,20 @@ impl Client {
                     let Some(source) = source else {
                         return Ok(None::<String>);
                     };
-                    let v: Value = serde_json::from_str(&source)
+                    // Borrow JSON fragments: large property arrays need no Value tree or reserialization.
+                    let fields: Option<HashMap<String, &RawValue>> = serde_json::from_str(&source)
                         .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
-                    Ok(match &v[&key] {
-                        Value::Null => None,
-                        Value::String(s) => Some(s.clone()),
-                        v => Some(v.to_string()),
-                    })
+                    let raw = fields
+                        .as_ref()
+                        .and_then(|fields| fields.get(&key))
+                        .map(|v| v.get());
+                    match raw {
+                        None | Some("null") => Ok(None),
+                        Some(raw) if raw.starts_with('"') => serde_json::from_str::<String>(raw)
+                            .map(Some)
+                            .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e))),
+                        Some(raw) => Ok(Some(raw.to_owned())),
+                    }
                 })
                 .map_err(sqlite_error)?;
                 c.create_scalar_function("gl_intersects", 5, flags, |ctx| {
@@ -552,6 +560,13 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         action: &str,
         detail: &str,
     ) -> Result<()> {
+        if matches!(self.0.backend, Backend::Postgis(_)) {
+            // Hold through commit so project cursors cannot skip a lower, uncommitted ID.
+            self.query_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1,7882))::text",
+                &[&project],
+            )?;
+        }
         self.execute(
             "INSERT INTO gl_audit_events(project,subject,action,detail) VALUES($1,$2,$3,$4)",
             &[&project, &subject, &action, &detail],
@@ -700,7 +715,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         after_dataset: &str,
         after_key: &str,
     ) -> Result<Vec<Row>> {
-        self.query("WITH batch AS MATERIALIZED (SELECT * FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT 32) SELECT c.dataset,c.feature_id,c.properties,c.geom,c.resolved_head,c.resolution_stale,b.properties,b.geom,o.properties,o.geom,c.geom,b.geom,o.geom FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &current, &after_dataset, &after_key])
+        self.query("WITH batch AS MATERIALIZED (SELECT * FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT 32) SELECT c.dataset,c.feature_id,c.properties,c.geom,c.resolved_head,c.resolution_stale,b.properties,b.geom,o.properties,o.geom FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &current, &after_dataset, &after_key])
     }
     fn stage_merge(
         &mut self,
@@ -740,12 +755,6 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
         self.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM center_merge", &[&project, &revision])
-    }
-    fn apply_merged_features(&mut self, project: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_features SELECT $1,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM center_merge WHERE after_value IS NOT NULL ON CONFLICT(project,dataset,feature_id) DO UPDATE SET properties=excluded.properties,geom=excluded.geom", &[&project])
-    }
-    fn apply_merged_deletions(&mut self, project: &str) -> Result<()> {
-        self.execute("DELETE FROM gl_features WHERE project=$1 AND (dataset,feature_id) IN (SELECT dataset,feature_id FROM center_merge WHERE after_value IS NULL)", &[&project])
     }
     fn advance_head(&mut self, project: &str, revision: i64) -> Result<()> {
         self.execute(
@@ -839,5 +848,128 @@ impl StorageBackend for SqlStorage {
         Ok(Box::new(
             Client::open(&self.storage, &self.pool, timeout)?.transaction(read_only)?,
         ))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_json_field_preserves_raw_json_and_unquotes_strings() -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Client::open(
+            &Storage::Sqlite(dir.path().join("json.db")),
+            &Arc::new(postgres::Pool::default()),
+            Duration::from_secs(5),
+        )?;
+        for (source, key, expected) in [
+            (
+                r#"{"properties":{"n":1.2300,"nested":{"$serde_json::private::Number":"123"}}}"#,
+                "properties",
+                Some(r#"{"n":1.2300,"nested":{"$serde_json::private::Number":"123"}}"#),
+            ),
+            (
+                r#"{"geometry":"{\"type\":\"Point\",\"coordinates\":[1,2]}"}"#,
+                "geometry",
+                Some(r#"{"type":"Point","coordinates":[1,2]}"#),
+            ),
+            (r#"{"geometry":null}"#, "geometry", None),
+            (r#"{}"#, "missing", None),
+            ("null", "properties", None),
+        ] {
+            assert_eq!(
+                client
+                    .query_one("SELECT gl_json_field($1,$2)", &[&source, &key])?
+                    .get::<_, Option<String>>(0usize)?
+                    .as_deref(),
+                expected
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires isolated geoledger_test PostGIS database"]
+    fn postgis_audit_cursor_follows_commit_order_without_blocking_other_projects() -> Result<()> {
+        let storage = Storage::Postgis(std::env::var("GL_TEST_DATABASE_URL").unwrap());
+        let pool = Arc::new(postgres::Pool::default());
+        let timeout = Duration::from_secs(10);
+        let mut monitor = Client::open(&storage, &pool, timeout)?;
+        assert_eq!(
+            monitor
+                .query_one("SELECT current_database()::text", &[])?
+                .get::<_, String>(0usize)?,
+            "geoledger_test"
+        );
+        Client::open(&storage, &pool, timeout)?.migrate()?;
+        let project = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        let mut setup = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+        for p in [&project, &other] {
+            setup.insert_project(p, "audit ordering")?;
+            setup.insert_owner(p, "alice")?;
+        }
+        setup.commit()?;
+        let mut first = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+        first.append_audit(&project, "alice", "first", "{}")?;
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (appended_tx, appended_rx) = std::sync::mpsc::channel();
+        let (commit_tx, commit_rx) = std::sync::mpsc::channel();
+        let worker_storage = storage.clone();
+        let worker_pool = pool.clone();
+        let worker_project = project.clone();
+        let worker = std::thread::spawn(move || -> Result<()> {
+            let mut second =
+                Client::open(&worker_storage, &worker_pool, timeout)?.transaction(false)?;
+            let pid = second
+                .query_one("SELECT pg_backend_pid()", &[])?
+                .get::<_, i32>(0usize)?;
+            started_tx.send(pid).unwrap();
+            second.append_audit(&worker_project, "alice", "second", "{}")?;
+            appended_tx.send(()).unwrap();
+            commit_rx.recv().unwrap();
+            second.commit()
+        });
+        let pid = started_rx.recv_timeout(timeout).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let blocked = loop {
+            if monitor
+                .query_one(
+                    "SELECT cardinality(pg_blocking_pids($1::bigint::integer)) > 0",
+                    &[&pid],
+                )?
+                .get::<_, bool>(0usize)?
+            {
+                break true;
+            }
+            if appended_rx.try_recv().is_ok() || Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let mut independent = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+        independent.append_audit(&other, "alice", "independent", "{}")?;
+        independent.commit()?;
+        first.commit()?;
+        if !blocked {
+            commit_tx.send(()).unwrap();
+            worker.join().unwrap()?;
+            panic!("same-project audit allocation overtook an uncommitted audit event");
+        }
+        appended_rx.recv_timeout(timeout).unwrap();
+        let mut reader = Client::open(&storage, &pool, timeout)?.transaction(true)?;
+        let page = reader.audit_page(&project, 0, 10)?;
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].get::<_, String>(2usize)?, "first");
+        let after = page[0].get::<_, i64>(0usize)?;
+        reader.commit()?;
+        commit_tx.send(()).unwrap();
+        worker.join().unwrap()?;
+        let mut reader = Client::open(&storage, &pool, timeout)?.transaction(true)?;
+        let page = reader.audit_page(&project, after, 10)?;
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].get::<_, String>(2usize)?, "second");
+        Ok(())
     }
 }

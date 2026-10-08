@@ -157,3 +157,35 @@ test("definite conflict permits resolution with the unchanged draft version", as
   assert.equal(workspace.pendingPublication, undefined);
   assert.equal(workspace.info.version, 4n);
 });
+
+for (const code of ["unauthenticated", "permission_denied", "not_found"]) {
+  test(`retry ${code} preserves original publication`, async () => {
+    const sent = [];
+    const workspace = new Workspace({publish: async (intent) => {
+      sent.push({...intent});
+      if (sent.length === 1) throw new GeoLedgerError("unavailable", "lost", undefined, undefined, true);
+      if (sent.length === 2) throw new GeoLedgerError(code, "access denied");
+      return {revision: 2n, version: 5n, status: "published"};
+    }}, "project", {id: "draft", baseRevision: 1n, version: 4n, status: "open"});
+    await assert.rejects(workspace.publish("original"));
+    await assert.rejects(workspace.publish("original"));
+    assert.deepEqual(workspace.pendingPublication, sent[0]);
+    await assert.rejects(workspace.publish("changed"));
+    await workspace.publish("original");
+    assert.deepEqual(sent, [sent[0], sent[0], sent[0]]);
+  });
+}
+
+test("first access failure and retry conflict release intent", async () => {
+  for (const code of ["unauthenticated", "permission_denied", "not_found", "conflict"]) {
+    let calls = 0;
+    const workspace = new Workspace({publish: async () => {
+      if (code === "conflict" && calls++ === 0)
+        throw new GeoLedgerError("unavailable", "lost", undefined, undefined, true);
+      throw new GeoLedgerError(code, "rejected");
+    }}, "project", {id: "draft", baseRevision: 1n, version: 4n, status: "open"});
+    if (code === "conflict") await assert.rejects(workspace.publish("original"));
+    await assert.rejects(workspace.publish("original"));
+    assert.equal(workspace.pendingPublication, undefined);
+  }
+});

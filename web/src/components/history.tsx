@@ -129,7 +129,7 @@ export function HistoryPanel({
       {restore && (
         <Modal
           title={`撤销版本 r${restore.revision} 的更改`}
-          description="创建一个反向编辑工作区，仅撤销此版本涉及的更改，保留其他版本的变化。检查并发布后生效；这不是恢复整个历史快照。"
+          description="创建撤销工作区，仅反向修改此版本的更改；检查并发布后生效。"
           close={task.busy ? () => {} : () => setRestore(undefined)}
         >
           {created ? (

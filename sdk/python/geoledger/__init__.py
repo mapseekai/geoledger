@@ -282,6 +282,7 @@ class Workspace:
 
     def publish(self, message: str) -> dict[str, Any]:
         with self._lock:
+            was_pending = self._pending is not None
             if self._pending is None:
                 self._editable()
                 self._pending = Publication(self._project, self.id, self.info.version, str(uuid4()), message)
@@ -290,7 +291,7 @@ class Workspace:
             try:
                 return self._update(self._client.publish(self._pending))
             except GeoLedgerError as e:
-                if not e.uncertain:
+                if not e.uncertain and (not was_pending or e.code not in ("unauthenticated", "permission_denied", "not_found")):
                     self._pending = None
                 raise
 

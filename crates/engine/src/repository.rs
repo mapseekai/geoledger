@@ -44,6 +44,7 @@ pub trait RepositoryTransaction: Send {
         revision: i64,
     ) -> Result<Option<Row>>;
     fn dataset_exists(&mut self, project: &str, dataset: &str) -> Result<Option<Row>>;
+    /// Assign IDs in project commit order so audit cursors never skip a pending event.
     fn append_audit(
         &mut self,
         project: &str,
@@ -153,8 +154,6 @@ pub trait RepositoryTransaction: Send {
     fn append_changes(&mut self, project: &str, revision: i64) -> Result<()>;
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()>;
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()>;
-    fn apply_merged_features(&mut self, project: &str) -> Result<()>;
-    fn apply_merged_deletions(&mut self, project: &str) -> Result<()>;
     fn advance_head(&mut self, project: &str, revision: i64) -> Result<()>;
     fn save_receipt(
         &mut self,

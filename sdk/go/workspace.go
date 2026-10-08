@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	pb "github.com/mapseekai/geoledger/sdk/go/internal/geoledgerv1"
 	"sync"
 )
 
@@ -41,7 +42,7 @@ func (w *Workspace) Refresh(ctx context.Context) (WorkspaceInfo, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var info WorkspaceInfo
-	if err := w.client.call(ctx, "GetWorkspace", map[string]any{"project": w.project, "workspace": w.info.ID}, &info); err != nil {
+	if err := call(w.client, ctx, w.client.rpc.GetWorkspace, &pb.WorkspaceRequest{Project: w.project, Workspace: w.info.ID}, &info); err != nil {
 		return w.info, err
 	}
 	w.info = info
@@ -64,10 +65,9 @@ func (w *Workspace) Delete(ctx context.Context, dataset, id string) (SaveResult,
 	return w.SaveBatch(ctx, []Edit{{Dataset: dataset, FeatureID: id, Feature: json.RawMessage("null")}})
 }
 func (w *Workspace) SaveBatch(ctx context.Context, edits []Edit) (SaveResult, error) {
-	for _, edit := range edits {
-		if len(edit.Feature) == 0 {
-			return SaveResult{}, invalid("edit requires an explicit feature; use null for deletion")
-		}
+	converted, err := wireEdits(edits)
+	if err != nil {
+		return SaveResult{}, err
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -75,7 +75,7 @@ func (w *Workspace) SaveBatch(ctx context.Context, edits []Edit) (SaveResult, er
 	if err := w.editable(); err != nil {
 		return r, err
 	}
-	err := w.client.call(ctx, "Save", map[string]any{"project": w.project, "workspace": w.info.ID, "expected_workspace_version": w.info.Version, "edits": edits}, &r)
+	err = call(w.client, ctx, w.client.rpc.Save, &pb.SaveRequest{Project: w.project, Workspace: w.info.ID, ExpectedWorkspaceVersion: w.info.Version, Edits: converted}, &r)
 	if err == nil {
 		w.info.Version = r.Version
 	}
@@ -95,20 +95,21 @@ func (w *Workspace) Diff(ctx context.Context, page Page) (Diff, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var r Diff
-	err := w.client.call(ctx, "Diff", map[string]any{"project": w.project, "workspace": w.info.ID, "after": page.After, "limit": limit(page.Limit)}, &r)
+	err := call(w.client, ctx, w.client.rpc.Diff, &pb.DiffRequest{Project: w.project, Workspace: w.info.ID, After: page.After, Limit: limit(page.Limit)}, &r)
 	return r, err
 }
 func (w *Workspace) Conflicts(ctx context.Context, page Page) (Conflicts, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var r Conflicts
-	err := w.client.call(ctx, "Conflicts", map[string]any{"project": w.project, "workspace": w.info.ID, "after": page.After, "limit": limit(page.Limit)}, &r)
+	err := call(w.client, ctx, w.client.rpc.Conflicts, &pb.DiffRequest{Project: w.project, Workspace: w.info.ID, After: page.After, Limit: limit(page.Limit)}, &r)
 	return r, err
 }
 func (w *Workspace) Publish(ctx context.Context, message string) (PublicationResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var r PublicationResult
+	wasPending := w.pending != nil
 	if w.pending == nil {
 		if err := w.editable(); err != nil {
 			return r, err
@@ -127,16 +128,15 @@ func (w *Workspace) Publish(ctx context.Context, message string) (PublicationRes
 	if err == nil {
 		w.info.Version = r.Version
 		w.info.Status = r.Status
-	} else if e, ok := err.(*Error); ok && !e.Uncertain {
+	} else if e, ok := err.(*Error); ok && !e.Uncertain && (!wasPending || (e.Code != "unauthenticated" && e.Code != "permission_denied" && e.Code != "not_found")) {
 		w.pending = nil
 	}
 	return r, err
 }
 func (w *Workspace) Resolve(ctx context.Context, head int64, edits []Edit) (ResolutionResult, error) {
-	for _, edit := range edits {
-		if len(edit.Feature) == 0 {
-			return ResolutionResult{}, invalid("edit requires an explicit feature; use null for deletion")
-		}
+	converted, err := wireEdits(edits)
+	if err != nil {
+		return ResolutionResult{}, err
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -144,17 +144,16 @@ func (w *Workspace) Resolve(ctx context.Context, head int64, edits []Edit) (Reso
 	if err := w.editable(); err != nil {
 		return r, err
 	}
-	err := w.client.call(ctx, "Resolve", map[string]any{"project": w.project, "workspace": w.info.ID, "expected_workspace_version": w.info.Version, "expected_head": head, "resolutions": edits}, &r)
+	err = call(w.client, ctx, w.client.rpc.Resolve, &pb.ResolveRequest{Project: w.project, Workspace: w.info.ID, ExpectedWorkspaceVersion: w.info.Version, ExpectedHead: head, Resolutions: converted}, &r)
 	if err == nil {
 		w.info.Version = r.Version
 	}
 	return r, err
 }
 func (w *Workspace) Rebase(ctx context.Context, head int64, edits []Edit) (RebaseResult, error) {
-	for _, edit := range edits {
-		if len(edit.Feature) == 0 {
-			return RebaseResult{}, invalid("edit requires an explicit feature; use null for deletion")
-		}
+	converted, err := wireEdits(edits)
+	if err != nil {
+		return RebaseResult{}, err
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -162,7 +161,7 @@ func (w *Workspace) Rebase(ctx context.Context, head int64, edits []Edit) (Rebas
 	if err := w.editable(); err != nil {
 		return r, err
 	}
-	err := w.client.call(ctx, "Rebase", map[string]any{"project": w.project, "workspace": w.info.ID, "expected_workspace_version": w.info.Version, "expected_head": head, "resolutions": edits}, &r)
+	err = call(w.client, ctx, w.client.rpc.Rebase, &pb.ResolveRequest{Project: w.project, Workspace: w.info.ID, ExpectedWorkspaceVersion: w.info.Version, ExpectedHead: head, Resolutions: converted}, &r)
 	if err == nil {
 		w.info.Version = r.Version
 		w.info.BaseRevision = r.BaseRevision
@@ -176,7 +175,7 @@ func (w *Workspace) Discard(ctx context.Context) (DiscardResult, error) {
 	if err := w.editable(); err != nil {
 		return r, err
 	}
-	err := w.client.call(ctx, "Discard", map[string]any{"project": w.project, "workspace": w.info.ID, "expected_workspace_version": w.info.Version}, &r)
+	err := call(w.client, ctx, w.client.rpc.Discard, &pb.VersionRequest{Project: w.project, Workspace: w.info.ID, ExpectedWorkspaceVersion: w.info.Version}, &r)
 	if err == nil {
 		w.info.Version = r.Version
 		w.info.Status = r.Status

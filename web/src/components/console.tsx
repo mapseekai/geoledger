@@ -32,43 +32,36 @@ const sections = [
     id: "projects",
     title: "项目",
     icon: LayoutGrid,
-    description: "组织你的空间数据，让协作从这里开始。",
   },
   {
     id: "datasets",
     title: "数据集",
     icon: Database,
-    description: "浏览要素，在工作区中编辑并发布变化。",
   },
   {
     id: "workspaces",
     title: "工作区",
     icon: GitBranch,
-    description: "让每次编辑独立进行，在准备好时发布。",
   },
   {
     id: "history",
     title: "版本历史",
     icon: History,
-    description: "查看已发布的变化，回溯每一个版本。",
   },
   {
     id: "access",
     title: "访问权限",
     icon: Shield,
-    description: "通过成员身份，为项目分配合适的权限。",
   },
   {
     id: "audit",
     title: "审计日志",
     icon: Terminal,
-    description: "追踪项目操作，了解谁在何时做了什么。",
   },
   {
     id: "service",
     title: "服务信息",
     icon: Server,
-    description: "查看当前连接的服务版本与存储配置。",
   },
 ];
 export function Console({
@@ -208,7 +201,6 @@ export function Console({
           <ChevronRight size={13} />
           <span>{meta.title}</span>
           <div className="topbar-end">
-            <span className="environment-label">空间数据版本控制</span>
             <Badge variant="outline">
               {info ? `v${info.version}` : "CONSOLE"}
             </Badge>
@@ -216,14 +208,7 @@ export function Console({
         </header>
         <main className="main-content">
           <div className="page-heading">
-            <div>
-              <span className="eyebrow">YOUR DATA, WITH HISTORY.</span>
-              <h1>{meta.title}</h1>
-              <p>{meta.description}</p>
-            </div>
-            <span className="page-index">
-              0{sections.indexOf(meta) + 1} / 07
-            </span>
+            <h1>{meta.title}</h1>
           </div>
           <ErrorBox message={error} />
           {section === "projects" ? (
@@ -265,10 +250,6 @@ export function Console({
             </>
           )}
         </main>
-        <footer className="console-footer">
-          <span>GeoLedger / 每一次改变，都有迹可循。</span>
-          <span>空间数据 · 版本 · 协作</span>
-        </footer>
         <Sunset />
       </div>
     </div>

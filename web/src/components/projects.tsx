@@ -2,8 +2,6 @@
 import { call, type Dataset, type Info, type Project } from "@/lib/browser-api";
 import {
   ArrowRight,
-  Box,
-  ChevronRight,
   Database,
   Folder,
   Plus,
@@ -40,22 +38,6 @@ export function Projects() {
   );
   return (
     <>
-      <div className="intro-banner">
-        <div className="icon-tile">
-          <Box size={25} />
-        </div>
-        <div>
-          <h2>为数据留一份完整的历史。</h2>
-          <p>组织数据集，在工作区编辑，然后将变化发布为新的版本。</p>
-        </div>
-        <div className="workflow">
-          <span>01 项目</span>
-          <ChevronRight />
-          <span>02 编辑</span>
-          <ChevronRight />
-          <span>03 发布</span>
-        </div>
-      </div>
       <Panel
         toolbar={
           <>
@@ -181,7 +163,6 @@ export function Datasets({
           <>
             <div>
               <strong>项目数据集</strong>
-              <span className="toolbar-hint">将同类空间要素组织在一起</span>
             </div>
             <Button disabled={!writable} onClick={() => setCreate(true)}>
               <Plus />
@@ -270,18 +251,6 @@ export function ServiceInfo({ info }: { info?: Info }) {
           ))}
         </dl>
       </Panel>
-      <div className="cream-card">
-        <span className="eyebrow">BUILT FOR COLLABORATION</span>
-        <h2>
-          一个服务，
-          <br />
-          完整的数据历史。
-        </h2>
-        <p>
-          项目隔离数据与访问权限。工作区保留编辑中的变化；发布后，每个版本都可以再次查询。
-        </p>
-        <p>备份与恢复请由服务管理员在部署环境中操作。</p>
-      </div>
     </div>
   ) : (
     <Loading />

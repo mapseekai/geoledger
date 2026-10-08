@@ -21,7 +21,7 @@ cargo build --locked --workspace --bins --examples
 ./scripts/check.sh
 ```
 
-常规检查包括文档链接、fmt、Clippy、Rust 单元、SQLite 一致性、事务失败与真实服务测试。DB 测试仅使用隔离的 `geoledger_test` 数据库；设置 `GL_TEST_DATABASE_URL` 后会追加 PostGIS 的相同 conformance 套件。
+常规检查包括文档链接、fmt、Clippy、Rust 单元、SQLite 一致性、事务失败与真实服务测试。引擎单元测试还会独立运行，避免 Rust SDK 启用的 serde_json 特性掩盖默认配置问题。DB 测试仅使用隔离的 `geoledger_test` 数据库；设置 `GL_TEST_DATABASE_URL` 后会追加 PostGIS 的相同 conformance 套件、审计提交顺序并发测试和存储测试。
 
 ## 生成 SDK
 
@@ -54,6 +54,12 @@ SDK 示例与测试会写入新的测试项目，请使用专用测试服务。C
 新后端接入必须保持 [存储语义](storage.md)，运行同样的 conformance 测试；禁止通过删除场景规避后端差异。单独测试存储期限、提交失败、持久化重启和发布幂等。
 
 容量测试需要显式启用并记录环境、数据规模、几何类型、索引、请求模型和耗时分位数。SQL 直接播种与经公共接口导入属于不同验证范围；不要将正确性回归时间或某次小样本测量当作生产 SLA。
+
+### 2026-10-08 格式 5 修复验证
+
+本地 macOS arm64、Rust 1.95 nightly、Node.js 22、Python 3.12 环境完成带隔离 PostGIS 库的 `scripts/check.sh`：SQLite/PostGIS 各 15 个一致性用例通过，包括每条含 7,000 个数组元素的 1,000 条要素发布及冲突分页。原有超时和测试规模保持不变；审计提交顺序、事务回滚、服务重启和存储契约检查通过。
+
+四语言 SDK 的单元测试及 `test-sdks.sh` 在两个后端通过。Web 单元测试、类型检查、格式检查和生产构建通过；真实浏览器验证覆盖登录、项目创建、弹窗关闭与重新打开、表格筛选和退出。另用独立 Rust crate 验证默认、`raw_value`、`arbitrary_precision` 特性组合下的数字与保留键行为。本次没有重跑百万要素容量测试或完整 `test-console.py` 浏览器套件，这些结果不构成生产延迟承诺。
 
 ## 控制台浏览器验证
 

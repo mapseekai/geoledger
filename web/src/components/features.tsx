@@ -320,7 +320,7 @@ export function FeatureList({
       {inspect && (
         <Modal
           title={`要素 ${inspect.id}`}
-          description="完整 GeoJSON，保留原始数值精度。"
+          description="GeoJSON"
           close={() => setInspect(undefined)}
         >
           <pre className="json-view">{pretty(inspect.geojson)}</pre>
@@ -421,7 +421,7 @@ export function FeatureEditor({
   return (
     <Modal
       title={feature === "new" ? "添加要素" : "编辑要素"}
-      description="输入标准 GeoJSON Feature。要素只保存到当前工作区，发布后才生成正式版本。"
+      description="输入 GeoJSON Feature，发布后生效。"
       close={task.busy ? () => {} : close}
     >
       <form
@@ -501,7 +501,7 @@ export function PublishDialog({
   return (
     <Modal
       title={result ? "发布完成" : "发布新版本"}
-      description="发布将合并当前工作区的变化。若有冲突，请先在工作区页面解决。"
+      description="合并工作区更改；有冲突时需先解决。"
       close={task.busy ? () => {} : close}
     >
       {result ? (

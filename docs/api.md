@@ -132,6 +132,9 @@ try {
 `save` 直接接收带字符串 `id` 的完整 GeoJSON Feature。批量编辑使用 SDK 自身的 `Edit`，
 删除必须通过 `delete()` 或显式 `null` / `None`；省略要素字段会报参数错误。
 正式要素分页固定首次返回的 revision，后续查询带该版本及 next_after；草稿分页需核对 workspace_version。
+JSON 对象键禁止使用 `$serde_json::private::RawValue` 和 `$serde_json::private::Number`，
+包括嵌套或转义写法；服务返回参数错误，避免底层编解码器把普通对象静默转换成其他值。
+普通字符串值可以包含这些文字。小数按 binary64 舍入，编解码不会额外改变已舍入的值。
 
 ## 错误与发布恢复
 
@@ -143,6 +146,8 @@ Python / TS 捕获 `GeoLedgerError`；Rust 使用 `Error`；Go 用 `errors.As` �
 当 `uncertain` 为真时，写入可能已经完成。对同一工作区再次 `publish` 并使用原说明即可重试原请求；
 期间工作区对象拒绝改动要素或更换发布说明。成功后再次调用也返回原发布结果。
 发布被明确拒绝时释放待重试请求，保留草稿版本供查询、解决冲突。
+已有待确认请求在重试遇到身份验证失败、权限拒绝或资源不可见时仍然保留；
+这些错误不能确定先前发布的结果。恢复访问后继续使用原请求，不能生成新的请求 ID。
 
 工作区的 `pending_publication` / `PendingPublication()` / `pendingPublication` 暴露可持久化的业务发布意图，
 可在跨进程恢复时交给 `client.publish(intent)`。Python 使用 `dataclasses.asdict`，Rust / Go 使用 JSON 序列化，

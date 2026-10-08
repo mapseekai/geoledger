@@ -53,7 +53,6 @@ fn sqlite_commit_failure_preserves_atomic_history_and_original_request_can_retry
     for table in [
         "gl_commits",
         "gl_commit_changes",
-        "gl_features",
         "gl_history",
         "gl_idempotency",
     ] {

@@ -32,4 +32,4 @@ cargo build --release --locked --bins
 | [SDK 审查记录](docs/sdk-review.md) | 公开接口调整、独立审查发现、修复与回归 |
 | [重构验证记录](docs/production-review.md) | 本轮实现范围、验证与容量边界 |
 
-当前版本 `0.3.0-alpha.1`；存储格式 4，面向新建库部署。采用 [MIT 许可证](LICENSE)。
+当前版本 `0.3.0-alpha.1`；存储格式 5，面向新建库部署。采用 [MIT 许可证](LICENSE)。

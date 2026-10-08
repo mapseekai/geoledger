@@ -6,6 +6,41 @@ use uuid::Uuid;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn codec_rejects_reserved_keys_and_preserves_binary64_properties() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    for key in [
+        "$serde_json::private::RawValue",
+        "$serde_json::private::Number",
+    ] {
+        let mut request = json!({"workspace":w,"expected_workspace_version":0,"edits":[f.edit("one",json!({}),Value::Null)]});
+        // Insert directly: constructing the request through to_value can itself
+        // interpret serde's private marker keys when features are unified.
+        let marker = Value::Object(
+            [(key.to_owned(), Value::String("123".into()))]
+                .into_iter()
+                .collect(),
+        );
+        request["edits"][0]["feature"]["properties"]["nested"] = Value::Array(vec![marker]);
+        assert_eq!(f.call(&f.alice, "save", request).unwrap_err().status, 400);
+        assert_eq!(
+            f.call(&f.alice, "get_workspace", json!({"workspace":w}))?["version"],
+            0
+        );
+    }
+    let properties = json!({"decimal":30.384158368805974,"tiny":7.93377316861183e-76,"marker":"$serde_json::private::RawValue"});
+    f.save(&f.alice, &w, 0, properties.clone(), Value::Null)?;
+    assert_eq!(f.get(&f.alice, Some(&w))["properties"], properties);
+    f.publish(&f.alice, &w, 1)?;
+    assert_eq!(f.get(&f.alice, None)["properties"], properties);
+    assert_eq!(
+        f.call(&f.alice, "commit", json!({"revision":1}))?["changes"][0]["after"]["properties"],
+        properties
+    );
+    Ok(())
+}
+
+#[test]
 fn thousand_large_features_publish_and_page_conflicts_without_full_materialization() -> TestResult {
     let mut f = Fixture::new()?;
     // This is a large debug-build correctness/memory workload, not the

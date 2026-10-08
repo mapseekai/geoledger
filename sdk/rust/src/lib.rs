@@ -598,6 +598,7 @@ impl Workspace {
         decode(self.client.execute("conflicts",json!({"project":self.project,"workspace":self.info.id,"after":page.after,"limit":page.limit})).await?)
     }
     pub async fn publish(&mut self, message: &str) -> Result<PublicationResult, Error> {
+        let was_pending = self.pending.is_some();
         if let Some(p) = &self.pending {
             if p.message != message {
                 return Err(Error::invalid(
@@ -625,7 +626,13 @@ impl Workspace {
                 Ok(result)
             }
             Err(e) => {
-                if !e.uncertain {
+                if !e.uncertain
+                    && (!was_pending
+                        || !matches!(
+                            e.code.as_str(),
+                            "unauthenticated" | "permission_denied" | "not_found"
+                        ))
+                {
                     self.pending = None
                 }
                 Err(e)

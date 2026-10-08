@@ -35,18 +35,7 @@ pub(super) fn merge_plan(
         if rows.is_empty() {
             break;
         }
-        t.geometry_cache().clear();
-        let mut staged = Vec::new();
         for row in rows {
-            for (hex, geo) in [(3usize, 10usize), (7usize, 11usize), (9usize, 12usize)] {
-                if let (Some(hex), Some(geo)) = (
-                    row.get::<_, Option<String>>(hex)?,
-                    row.get::<_, Option<String>>(geo)?,
-                ) {
-                    t.geometry_cache()
-                        .insert(hex, serde_json::from_str(&geo).map_err(Error::stored_json)?);
-                }
-            }
             let d = Delta {
                 dataset: row.get(0usize)?,
                 key: row.get(1usize)?,
@@ -77,12 +66,24 @@ pub(super) fn merge_plan(
             match merged {
                 Ok(value) => {
                     if let Some(v) = &value {
-                        validate_candidate(t, &d.key, v)?;
+                        validate_candidate(&d.key, v)?;
                     }
                     if value != o {
                         plan.change_count += 1;
                         if stage {
-                            staged.push(json!({"dataset":d.dataset,"feature_id":d.key,"before_value":o,"after_value":value}));
+                            t.stage_merge(
+                                &d.dataset,
+                                &d.key,
+                                &o.as_ref()
+                                    .map(serde_json::to_string)
+                                    .transpose()
+                                    .map_err(Error::stored_json)?,
+                                &value
+                                    .as_ref()
+                                    .map(serde_json::to_string)
+                                    .transpose()
+                                    .map_err(Error::stored_json)?,
+                            )?;
                         }
                     }
                 }
@@ -96,7 +97,7 @@ pub(super) fn merge_plan(
                             plan.truncated = true;
                             continue;
                         }
-                        let mut item = json!({"cursor":after,"dataset":d.dataset,"feature_id":d.key,"fields":fields,"base":geojson(t,&d.key,b.as_ref())?,"current":geojson(t,&d.key,o.as_ref())?,"draft":geojson(t,&d.key,d.value.as_ref())?});
+                        let mut item = json!({"cursor":after,"dataset":d.dataset,"feature_id":d.key,"fields":fields,"base":geojson(&d.key,b.as_ref())?,"current":geojson(&d.key,o.as_ref())?,"draft":geojson(&d.key,d.value.as_ref())?});
                         if stale_resolution {
                             item["reason"] = json!("stale_resolution");
                             item["resolved_against_revision"] = json!(d.resolved_head);
@@ -116,20 +117,7 @@ pub(super) fn merge_plan(
                 }
             }
         }
-        for item in staged {
-            let before =
-                (!item["before_value"].is_null()).then(|| item["before_value"].to_string());
-            let after_value =
-                (!item["after_value"].is_null()).then(|| item["after_value"].to_string());
-            t.stage_merge(
-                item["dataset"].as_str().ok_or_else(bad)?,
-                item["feature_id"].as_str().ok_or_else(bad)?,
-                &before,
-                &after_value,
-            )?;
-        }
     }
-    t.geometry_cache().clear();
     Ok(plan)
 }
 pub(super) fn conflicts(head: i64, version: i64, plan: MergePlan) -> Error {
@@ -214,8 +202,6 @@ pub(super) fn publish(t: &mut Transaction, s: &str, r: Publish) -> Result<Value>
     t.append_changes(&r.project, revision)?;
     t.close_history(&r.project, revision)?;
     t.append_history(&r.project, revision)?;
-    t.apply_merged_features(&r.project)?;
-    t.apply_merged_deletions(&r.project)?;
     t.advance_head(&r.project, revision)?;
     let v = bump(t, &r.project, &r.workspace, "published")?;
     let result = json!({"revision":revision,"workspace":r.workspace,"version":v,"status":"published","changes":plan.change_count});
@@ -262,10 +248,7 @@ pub(super) fn resolve(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> 
                 "resolution must identify a current conflict exactly once",
             ));
         }
-        let value = e
-            .feature
-            .map(|f| normalize(t, f, &e.feature_id))
-            .transpose()?;
+        let value = e.feature.map(|f| normalize(f, &e.feature_id)).transpose()?;
         put_delta(
             t,
             &r.project,
@@ -313,10 +296,7 @@ pub(super) fn rebase(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> {
         if !required.remove(&(e.dataset.clone(), e.feature_id.clone())) {
             return Err(Error::new(409, "resolutions must match conflicts exactly"));
         }
-        let value = e
-            .feature
-            .map(|f| normalize(t, f, &e.feature_id))
-            .transpose()?;
+        let value = e.feature.map(|f| normalize(f, &e.feature_id)).transpose()?;
         if value != at_revision(t, &r.project, &e.dataset, &e.feature_id, current)? {
             t.stage_resolution(
                 &e.dataset,

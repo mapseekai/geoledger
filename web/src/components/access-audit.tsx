@@ -51,6 +51,7 @@ export function Access({ project }: { project: Project }) {
             placeholder="令牌或身份提供方中的 subject"
             maxLength={128}
           />
+          <p className="field-help">成员需先由管理员配置身份或令牌。</p>
           <label htmlFor="member-role">项目角色</label>
           <select id="member-role" name="role">
             <option value="viewer">只读 · 浏览与查询</option>
@@ -71,18 +72,6 @@ export function Access({ project }: { project: Project }) {
           )}
         </form>
       </Panel>
-      <div className="cream-card">
-        <span className="eyebrow">THE RIGHT ACCESS</span>
-        <h2>
-          让每个人，
-          <br />
-          各得其所。
-        </h2>
-        <p>
-          权限绑定成员身份，而非浏览器或设备。请先由服务管理员为成员配置身份或访问令牌，再在这里授予项目权限。
-        </p>
-        <p>此处按身份设置权限。权限变更记录可在审计日志中查询。</p>
-      </div>
     </div>
   );
 }
