@@ -8,7 +8,7 @@
 
 SQLite 适合单机部署和较轻写入，写事务串行；本地可靠磁盘、持久化目录、WAL/FULL synchronous 是运行前提。活动 SQLite 数据目录使用本地可靠文件系统。PostGIS 适合更高并发写入、集中备份与数据库运维。20 个用户的业务目标需要结合实际几何、编辑量和磁盘性能验收。
 
-源码附 [Dockerfile](../Dockerfile)、[Compose](../compose.yaml) 和 [systemd 示例](../deploy/geoledger.service)。容器的 `/data` 必须挂载持久化卷。生产环境在可信网关后暴露端口；示例默认对本机开放。
+源码附 [Dockerfile](../Dockerfile)、[Compose](../compose.yaml)、[Compose 生产参考](../deploy/compose.production.yaml)（PostGIS + TLS 网关）和 [systemd 示例](../deploy/geoledger.service)。容器的 `/data` 必须挂载持久化卷。生产环境在可信网关后暴露端口；示例默认对本机开放。
 
 ## 本机与 systemd 部署
 
@@ -41,6 +41,35 @@ docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 ```
 
 控制台组合部署按 [Web 容器运行](../web/README.md#容器运行) 先设置会话密钥，再启用 console profile。`docker compose down` 停止组合服务，命名卷按数据保留策略管理。
+
+### Compose 生产参考
+
+[compose.production.yaml](../deploy/compose.production.yaml) 组合 PostGIS、GeoLedger、控制台和 [nginx TLS 网关](../deploy/gateway/nginx.conf)，只有网关发布 80/443 端口：
+
+- **PostGIS**：使用官方 `postgis/postgis` 镜像（固定 digest），开启 TLS（最低 TLS 1.2），[pg_hba.conf](../deploy/postgis/pg_hba.conf) 只接受 `hostssl` 加 scram-sha-256，明文连接被拒绝。
+- **GeoLedger**：以 `sslmode=verify-full` 和私有 CA 连接 PostGIS。根文件系统只读，只有 `/data` 卷可写。启用按身份和按 IP 的限流，并信任网关传入的 `X-Forwarded-For`。
+- **控制台**：经私有网络访问 gRPC。
+- **网关**：负责 TLS、HSTS、HTTP→HTTPS 跳转、请求 ID 透传和边缘限流。
+- **资源与健康检查**：每个服务都设置了 CPU/内存上限和健康检查，并按 `service_healthy` 顺序启动。
+
+```sh
+scripts/make-test-certs.sh deploy/tls        # 评估用私有 CA；生产放入同名的正式证书
+export GL_DB_PASSWORD=$(openssl rand -hex 32) GL_WEB_SESSION_SECRET=$(openssl rand -base64 48)
+docker compose -f deploy/compose.production.yaml up -d --build
+```
+
+上线前需要完成以下配置：
+
+- **域名**：把 `nginx.conf` 中的 `api/grpc/console.geoledger.example` 和 `GL_WEB_ORIGIN` 改为实际域名。`deploy/tls/` 中需要有以下文件：
+  - `ca.crt`：PostGIS 证书的签发 CA。
+  - `gateway.crt`/`gateway.key`：覆盖三个域名的网关证书。
+  - `postgis.crt`/`postgis.key`：SAN 为 `postgis` 的数据库证书。
+- **管理员凭证**：首次启动生成的管理员凭证在 `geoledger-data` 卷的 `/data/admin-credentials.json`，取出后从卷中删除。
+- **身份认证**：生产建议改用 JWT（`GL_JWKS_URL` 等），并设置 `GL_BOOTSTRAP_ADMIN=false`。
+- **端口**：`GL_GATEWAY_BIND`、`GL_GATEWAY_HTTPS_PORT`、`GL_GATEWAY_HTTP_PORT` 用于调整网关发布的地址和端口。
+- **备份**：PostGIS 按下文 [备份与恢复](#备份与恢复) 使用 `pg_dump` 或 WAL 归档。逻辑导出命令为 `docker compose -f deploy/compose.production.yaml exec geoledger geoledger-server export --output /data/export.jsonl`。
+
+该组合已在 Docker Engine 29 上实测：四个服务均通过健康检查；`gl` 经网关以 TLS 访问 gRPC；HTTPS API 返回 HSTS 和请求 ID；HTTP 跳转到 HTTPS；PostGIS 拒绝明文连接；只读容器内的导出与校验成功。
 
 ## 配置
 

@@ -1,0 +1,131 @@
+# Production reference: PostGIS (TLS enforced) + GeoLedger + console behind the
+# nginx TLS gateway (deploy/gateway/nginx.conf). Only the gateway publishes ports.
+#
+#   scripts/make-test-certs.sh deploy/tls        # or put real certificates there
+#   export GL_DB_PASSWORD=$(openssl rand -hex 32) GL_WEB_SESSION_SECRET=$(openssl rand -base64 48)
+#   docker compose -f deploy/compose.production.yaml up -d --build
+#
+# Edit the server_name values in deploy/gateway/nginx.conf and GL_WEB_ORIGIN for
+# your domains. See docs/production.md ("Compose 生产参考").
+name: geoledger
+services:
+  postgis:
+    image: postgis/postgis:17-3.5@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+    environment:
+      POSTGRES_USER: geoledger
+      POSTGRES_DB: geoledger
+      POSTGRES_PASSWORD: ${GL_DB_PASSWORD:?set GL_DB_PASSWORD}
+    # PostgreSQL requires its key to be owned by the server user: copy it, then
+    # start with TLS on and an hba file that only accepts hostssl connections.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        install -d -o postgres -m 0700 /run/geoledger-tls &&
+        install -o postgres -m 0600 /tls/postgis.key /run/geoledger-tls/server.key &&
+        install -o postgres -m 0644 /tls/postgis.crt /run/geoledger-tls/server.crt &&
+        exec docker-entrypoint.sh postgres
+        -c ssl=on
+        -c ssl_cert_file=/run/geoledger-tls/server.crt
+        -c ssl_key_file=/run/geoledger-tls/server.key
+        -c ssl_min_protocol_version=TLSv1.2
+        -c hba_file=/etc/geoledger/pg_hba.conf
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+      - ${GL_TLS_DIR:-./tls}:/tls:ro
+      - ./postgis/pg_hba.conf:/etc/geoledger/pg_hba.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geoledger -d geoledger"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    shm_size: 256m
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2g }
+    restart: unless-stopped
+    stop_grace_period: 60s
+  geoledger:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ${GL_IMAGE:-geoledger:local}
+    environment:
+      GL_STORAGE: postgis
+      GL_DATABASE_URL: postgresql://geoledger:${GL_DB_PASSWORD:?set GL_DB_PASSWORD}@postgis:5432/geoledger?sslmode=verify-full&sslrootcert=/etc/geoledger/tls/ca.crt
+      # Plaintext only between the gateway and this service on the private network.
+      GL_TRUST_FORWARDED_FOR: "true"
+      GL_RATE_LIMIT_SUBJECT_RPS: "20"
+      GL_RATE_LIMIT_IP_RPS: "50"
+      GL_SHUTDOWN_DRAIN_SECS: "5"
+      GL_SHUTDOWN_TIMEOUT_SECS: "40"
+      GL_ADMIN_SUBJECTS: ${GL_ADMIN_SUBJECTS:-}
+    volumes:
+      - geoledger-data:/data
+      - ${GL_TLS_DIR:-./tls}/ca.crt:/etc/geoledger/tls/ca.crt:ro
+    depends_on:
+      postgis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "geoledger-server", "probe"]
+      interval: 15s
+      timeout: 6s
+      start_period: 30s
+      retries: 3
+    read_only: true
+    tmpfs: [/tmp]
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1g }
+    restart: unless-stopped
+    stop_grace_period: 60s
+  console:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    image: ${GL_CONSOLE_IMAGE:-geoledger-console:local}
+    environment:
+      GL_WEB_ENDPOINT: http://geoledger:7882
+      GL_ALLOW_INSECURE_TRANSPORT: "true"
+      GL_WEB_ORIGIN: ${GL_WEB_ORIGIN:-https://console.geoledger.example}
+      GL_WEB_SESSION_SECRET: ${GL_WEB_SESSION_SECRET:?set GL_WEB_SESSION_SECRET}
+    depends_on:
+      geoledger:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 512m }
+    restart: unless-stopped
+  gateway:
+    image: nginx:1.30-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
+    ports:
+      - "${GL_GATEWAY_BIND:-0.0.0.0}:${GL_GATEWAY_HTTPS_PORT:-443}:443"
+      - "${GL_GATEWAY_BIND:-0.0.0.0}:${GL_GATEWAY_HTTP_PORT:-80}:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${GL_TLS_DIR:-./tls}/gateway.crt:/etc/geoledger/tls/gateway.crt:ro
+      - ${GL_TLS_DIR:-./tls}/gateway.key:/etc/geoledger/tls/gateway.key:ro
+    depends_on:
+      geoledger:
+        condition: service_healthy
+      console:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null --no-check-certificate https://127.0.0.1/ready --header 'Host: api.geoledger.example' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256m }
+    restart: unless-stopped
+volumes:
+  postgis-data:
+  geoledger-data:
