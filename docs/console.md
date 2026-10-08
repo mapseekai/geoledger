@@ -43,8 +43,8 @@ GeoJSON 原始数字在读取、展示、编辑与保存中保持精度，包括
 
 ## 设计与验证
 
-设计依据 [Mistral DESIGN.md](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/mistral.ai/DESIGN.md)，
-使用暖白、奶油色、橙色强调、细边框、页底日落色带。[GeoLedger 矢量标志](../web/public/logo.svg) 使用 G 与叠层轮廓；登录页、导航及浏览器图标共用 SVG，按比例完整显示。
+界面采用管理后台布局：深色侧边导航、顶部面包屑与服务状态、统计卡片与表格面板，
+中性灰白配色并以 GeoLedger 橙色作为强调色，详见 [Web 项目文档](../web/README.md#设计来源)。[GeoLedger 矢量标志](../web/public/logo.svg) 使用 G 与叠层轮廓；登录页、导航及浏览器图标共用 SVG，按比例完整显示。
 字体与图标随 Web 本地打包，资源由控制台直接提供；桌面与手机均可使用。
 字体授权与替代说明见 [Web 项目文档](../web/README.md#设计来源)。
 

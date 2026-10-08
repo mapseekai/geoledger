@@ -3,8 +3,9 @@ import { call, send, type Info, type Project } from "@/lib/browser-api";
 import {
   ArrowRight,
   ChevronRight,
+  ChevronsUpDown,
   Database,
-  Folder,
+  FolderOpen,
   GitBranch,
   History,
   LayoutGrid,
@@ -13,56 +14,74 @@ import {
   Server,
   Shield,
   Terminal,
+  UserRound,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Access, AuditPanel } from "./access-audit";
-import { Brand, Sunset } from "./brand";
+import { Brand } from "./brand";
 import { Empty, ErrorBox, Loading } from "./common";
 import { HistoryPanel } from "./history";
 import { Datasets, Projects, ServiceInfo } from "./projects";
-import { Panel, role, short, useAction } from "./resource-shared";
-import { Badge } from "./ui/badge";
+import { StatusBadge, role, short, useAction } from "./resource-shared";
 import { Button } from "./ui/button";
 import { Workspaces } from "./workspaces";
-const sections = [
+type Section = {
+  id: string;
+  title: string;
+  icon: LucideIcon;
+  scoped: boolean;
+};
+const sections: Section[] = [
   {
     id: "projects",
     title: "项目",
     icon: LayoutGrid,
+    scoped: false,
   },
   {
     id: "datasets",
     title: "数据集",
     icon: Database,
+    scoped: true,
   },
   {
     id: "workspaces",
     title: "工作区",
     icon: GitBranch,
+    scoped: true,
   },
   {
     id: "history",
     title: "版本历史",
     icon: History,
+    scoped: true,
   },
   {
     id: "access",
     title: "访问权限",
     icon: Shield,
+    scoped: true,
   },
   {
     id: "audit",
     title: "审计日志",
     icon: Terminal,
+    scoped: true,
   },
   {
     id: "service",
     title: "服务信息",
     icon: Server,
+    scoped: false,
   },
+];
+const groups = [
+  { label: "数据管理", ids: ["projects", "datasets", "workspaces", "history"] },
+  { label: "系统管理", ids: ["access", "audit", "service"] },
 ];
 export function Console({
   section,
@@ -100,69 +119,104 @@ export function Console({
   }, [projectId]);
   const meta = sections.find((s) => s.id === section)!;
   const writable = project?.role === "owner" || project?.role === "editor";
+  const query = projectId ? `?project=${encodeURIComponent(projectId)}` : "";
+  const status = info ? "online" : error ? "offline" : "pending";
+  const statusText = info
+    ? `${info.backend.toUpperCase()} · 已连接`
+    : error
+      ? "服务连接失败"
+      : "正在连接服务";
   return (
-    <div className="console-shell">
-      <aside className={`sidebar ${mobile ? "is-open" : ""}`}>
-        <Link href="/projects" aria-label="GeoLedger 项目">
-          <Brand />
-        </Link>
-        <Button
-          className="mobile-close"
-          variant="ghost"
-          size="icon"
-          onClick={() => setMobile(false)}
-          aria-label="关闭导航"
-        >
-          <X />
-        </Button>
-        <div className="nav-label">WORKSPACE</div>
-        <Link href="/projects" className="project-switch">
-          <span className="project-avatar">
-            {project?.name.slice(0, 1).toUpperCase() ?? "G"}
-          </span>
-          <span>
-            <strong>{project?.name ?? "所有项目"}</strong>
-            <small>{project ? role(project.role) : "选择一个项目开始"}</small>
-          </span>
-          <ChevronRight size={15} />
-        </Link>
-        <nav aria-label="主导航">
-          {sections.map((item, i) => (
-            <div key={item.id}>
-              {i === 4 && (
-                <div className="nav-label nav-divider">ADMINISTRATION</div>
+    <div className="app-shell">
+      <aside
+        className={`sidebar ${mobile ? "is-open" : ""}`}
+        aria-label="侧边导航"
+      >
+        <div className="sidebar-header">
+          <Link
+            href="/projects"
+            aria-label="GeoLedger 项目"
+            className="sidebar-brand"
+          >
+            <Brand caption="管理控制台" />
+          </Link>
+          <Button
+            className="mobile-close"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setMobile(false)}
+            aria-label="关闭导航"
+          >
+            <X />
+          </Button>
+        </div>
+        <div className="sidebar-body">
+          <div className="sidebar-label">当前项目</div>
+          <Link
+            href="/projects"
+            className="project-switch"
+            title="切换项目"
+            onClick={() => setMobile(false)}
+          >
+            <span className="project-avatar" aria-hidden="true">
+              {project?.name.slice(0, 1).toUpperCase() ?? (
+                <LayoutGrid size={15} />
               )}
-              <Link
-                className={section === item.id ? "active" : ""}
-                aria-current={section === item.id ? "page" : undefined}
-                href={`/${item.id}${projectId ? `?project=${encodeURIComponent(projectId)}` : ""}`}
-              >
-                <item.icon size={18} />
-                {item.title}
-                {section === item.id && <span className="nav-active-dot" />}
-              </Link>
-            </div>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="service-chip">
-            <span className={info ? "status-dot" : "status-dot offline"} />
-            <span>
-              {info ? `${info.backend.toUpperCase()} · 已连接` : "正在连接服务"}
+            </span>
+            <span className="project-switch-text">
+              <strong>{project?.name ?? "所有项目"}</strong>
+              {project && (
+                <small>{`${role(project.role)} · r${project.head}`}</small>
+              )}
+            </span>
+            <ChevronsUpDown size={15} aria-hidden="true" />
+          </Link>
+          <nav aria-label="主导航" className="sidebar-nav">
+            {groups.map((group) => (
+              <div className="nav-group" key={group.label}>
+                <div className="sidebar-label">{group.label}</div>
+                {group.ids.map((id) => {
+                  const item = sections.find((s) => s.id === id)!;
+                  const active = section === item.id;
+                  return (
+                    <Link
+                      key={item.id}
+                      className={`nav-item ${active ? "active" : ""} ${item.scoped && !projectId ? "is-idle" : ""}`}
+                      aria-current={active ? "page" : undefined}
+                      href={`/${item.id}${query}`}
+                      onClick={() => setMobile(false)}
+                    >
+                      <item.icon size={17} aria-hidden="true" />
+                      <span>{item.title}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+        </div>
+        <div className="sidebar-footer">
+          <div className="service-card">
+            <span className={`status-dot is-${status}`} aria-hidden="true" />
+            <span className="service-card-text">
+              <strong>{statusText}</strong>
+              <small>
+                {info ? `GeoLedger v${info.version}` : "GeoLedger 服务"}
+              </small>
             </span>
           </div>
           <div className="sidebar-account">
-            <span className="account-avatar">
-              <Shield size={17} />
+            <span className="account-avatar" aria-hidden="true">
+              <UserRound size={16} />
             </span>
             <div>
               <strong>当前会话</strong>
-              <small>GeoLedger Console</small>
             </div>
             <Button
               variant="ghost"
-              size="icon"
+              size="icon-sm"
               aria-label="退出登录"
+              title="退出登录"
               disabled={logout.busy}
               onClick={() =>
                 void logout.run(async () => {
@@ -173,7 +227,7 @@ export function Console({
                 })
               }
             >
-              <LogOut size={17} />
+              <LogOut />
             </Button>
           </div>
           <ErrorBox message={logout.error} />
@@ -190,52 +244,61 @@ export function Console({
         <header className="topbar">
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             className="mobile-menu"
             aria-label="打开导航"
             onClick={() => setMobile(true)}
           >
             <Menu />
           </Button>
-          <span>控制台</span>
-          <ChevronRight size={13} />
-          <span>{meta.title}</span>
+          <nav aria-label="面包屑" className="breadcrumbs">
+            <Link href="/projects">控制台</Link>
+            {project && meta.scoped && (
+              <>
+                <ChevronRight size={14} aria-hidden="true" />
+                <span className="breadcrumb-project" title={project.name}>
+                  {project.name}
+                </span>
+              </>
+            )}
+            <ChevronRight size={14} aria-hidden="true" />
+            <span aria-current="page">{meta.title}</span>
+          </nav>
           <div className="topbar-end">
-            <Badge variant="outline">
+            <span className={`status-pill is-${status}`}>
+              <span className={`status-dot is-${status}`} aria-hidden="true" />
+              {statusText}
+            </span>
+            <span className="version-tag">
               {info ? `v${info.version}` : "CONSOLE"}
-            </Badge>
+            </span>
           </div>
         </header>
         <main className="main-content">
-          <div className="page-heading">
+          <div className="page-header">
+            <span className="page-header-icon" aria-hidden="true">
+              <meta.icon />
+            </span>
             <h1>{meta.title}</h1>
           </div>
           <ErrorBox message={error} />
           {section === "projects" ? (
-            <Projects />
+            <Projects info={info} />
           ) : section === "service" ? (
-            <ServiceInfo info={info} />
+            !error && <ServiceInfo info={info} />
           ) : !projectId ? (
-            <Panel>
-              <Empty title="先选择一个项目">
+            <section className="panel">
+              <Empty icon={FolderOpen} title="先选择一个项目">
                 <Link href="/projects">
                   前往项目列表 <ArrowRight className="inline size-4" />
                 </Link>
               </Empty>
-            </Panel>
+            </section>
           ) : !project ? (
             !error && <Loading />
           ) : (
             <>
-              <div className="context-line">
-                <Folder size={16} />
-                <strong>{project.name}</strong>
-                <span className="mono">{short(project.id)}</span>
-                <Badge variant="secondary">{role(project.role)}</Badge>
-                <span className="context-revision">
-                  最新版本 r{project.head}
-                </span>
-              </div>
+              <ProjectContext project={project} />
               {section === "datasets" && (
                 <Datasets project={project} writable={writable} />
               )}
@@ -250,8 +313,36 @@ export function Console({
             </>
           )}
         </main>
-        <Sunset />
       </div>
     </div>
+  );
+}
+function ProjectContext({ project }: { project: Project }) {
+  return (
+    <section className="context-card" aria-label="当前项目">
+      <div className="context-main">
+        <span className="context-avatar" aria-hidden="true">
+          {project.name.slice(0, 1).toUpperCase()}
+        </span>
+        <div className="context-title">
+          <strong>{project.name}</strong>
+          <span className="mono" title={project.id}>
+            {short(project.id)}
+          </span>
+        </div>
+      </div>
+      <dl className="context-stats">
+        <div>
+          <dt>最新版本</dt>
+          <dd className="mono">r{project.head}</dd>
+        </div>
+        <div>
+          <dt>我的角色</dt>
+          <dd>
+            <StatusBadge value={project.role} />
+          </dd>
+        </div>
+      </dl>
+    </section>
   );
 }

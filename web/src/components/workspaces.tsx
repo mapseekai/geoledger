@@ -8,12 +8,35 @@ import {
 } from "@/lib/browser-api";
 import { pretty } from "@/lib/geojson";
 import { readPublication, type Publication } from "@/lib/publication";
-import { Plus } from "lucide-react";
+import {
+  Ellipsis,
+  FileDiff,
+  GitBranch,
+  GitMerge,
+  Plus,
+  RefreshCcw,
+  Search,
+  Trash2,
+  TriangleAlert,
+  Upload,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Empty, ErrorBox, Loading, Modal, listPage, usePage } from "./common";
 import { PublishDialog } from "./features";
-import { Panel, role, short, useAction } from "./resource-shared";
-import { Badge } from "./ui/badge";
+import {
+  Panel,
+  PanelTitle,
+  StatusBadge,
+  short,
+  useAction,
+} from "./resource-shared";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
@@ -53,7 +76,9 @@ export function Inspector({
           ))}
         </div>
       ) : (
-        <Empty title="没有变更记录">当前页面没有内容。</Empty>
+        <Empty icon={FileDiff} title="没有变更记录">
+          当前页面没有内容。
+        </Empty>
       )}
       {page.footer}
     </Modal>
@@ -105,10 +130,15 @@ export function Workspaces({
   return (
     <>
       {pending && (
-        <div className="notice">
-          有一笔待确认的发布：{short(pending.workspace)}。
+        <div className="notice is-warning">
+          <TriangleAlert aria-hidden="true" />
+          <span className="notice-text">
+            有一笔待确认的发布：
+            <span className="mono">{short(pending.workspace)}</span>。
+          </span>
           <Button
             variant="outline"
+            size="sm"
             onClick={() =>
               setPublish({
                 id: pending.workspace,
@@ -125,56 +155,62 @@ export function Workspaces({
       <Panel
         toolbar={
           <>
-            <form
-              className="lookup"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void task.run(async () =>
-                  setLookup(
-                    await call<Workspace>({
-                      action: "workspace",
-                      project: project.id,
-                      workspace: lookupId.trim(),
-                    }),
-                  ),
-                );
-              }}
-            >
-              <Input
-                aria-label="工作区标识"
-                value={lookupId}
-                onChange={(e) => setLookupId(e.target.value)}
-                placeholder="按工作区标识查找"
-                required
-              />
-              <Button variant="outline" disabled={task.busy}>
-                查找
-              </Button>
-              {lookup && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => setLookup(undefined)}
-                >
-                  重置
+            <PanelTitle title="工作区列表" />
+            <div className="toolbar-actions">
+              <form
+                className="lookup"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void task.run(async () =>
+                    setLookup(
+                      await call<Workspace>({
+                        action: "workspace",
+                        project: project.id,
+                        workspace: lookupId.trim(),
+                      }),
+                    ),
+                  );
+                }}
+              >
+                <div className="search">
+                  <Search size={15} aria-hidden="true" />
+                  <Input
+                    aria-label="工作区标识"
+                    value={lookupId}
+                    onChange={(e) => setLookupId(e.target.value)}
+                    placeholder="按工作区标识查找"
+                    required
+                  />
+                </div>
+                <Button variant="outline" disabled={task.busy}>
+                  查找
                 </Button>
-              )}
-            </form>
-            <Button
-              disabled={!writable || task.busy}
-              onClick={() =>
-                void task.run(async () => {
-                  await call({
-                    action: "createWorkspace",
-                    project: project.id,
-                  });
-                  update();
-                })
-              }
-            >
-              <Plus />
-              新建工作区
-            </Button>
+                {lookup && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setLookup(undefined)}
+                  >
+                    重置
+                  </Button>
+                )}
+              </form>
+              <Button
+                disabled={!writable || task.busy}
+                onClick={() =>
+                  void task.run(async () => {
+                    await call({
+                      action: "createWorkspace",
+                      project: project.id,
+                    });
+                    update();
+                  })
+                }
+              >
+                <Plus />
+                新建工作区
+              </Button>
+            </div>
           </>
         }
       >
@@ -188,34 +224,41 @@ export function Workspaces({
                 <TableHead>工作区</TableHead>
                 <TableHead>基准 / 编辑版本</TableHead>
                 <TableHead>状态</TableHead>
-                <TableHead>操作</TableHead>
+                <TableHead className="cell-actions">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.map((w) => (
                 <TableRow key={w.id}>
                   <TableCell>
-                    <span className="mono" title={w.id}>
-                      {short(w.id)}
+                    <span className="id-cell">
+                      <span className="row-icon is-branch" aria-hidden="true">
+                        <GitBranch size={15} />
+                      </span>
+                      <span className="mono" title={w.id}>
+                        {short(w.id)}
+                      </span>
+                      <button
+                        className="copy-id"
+                        onClick={() => setLookupId(w.id)}
+                        aria-label={`选择工作区 ${w.id}`}
+                      >
+                        选择
+                      </button>
                     </span>
-                    <button
-                      className="copy-id"
-                      onClick={() => setLookupId(w.id)}
-                      aria-label={`选择工作区 ${w.id}`}
-                    >
-                      选择
-                    </button>
                   </TableCell>
                   <TableCell className="mono">
-                    r{w.baseRevision} / v{w.version}
+                    <span className="revision-tag">r{w.baseRevision}</span>
+                    <span className="muted"> / </span>v{w.version}
                   </TableCell>
                   <TableCell>
-                    <Badge variant="secondary">{role(w.status)}</Badge>
+                    <StatusBadge value={w.status} />
                   </TableCell>
-                  <TableCell>
-                    <div className="workspace-actions">
+                  <TableCell className="cell-actions">
+                    <div className="row-actions">
                       <Button
                         variant="ghost"
+                        size="sm"
                         onClick={() =>
                           setInspect({ workspace: w, mode: "diff" })
                         }
@@ -224,6 +267,7 @@ export function Workspaces({
                       </Button>
                       <Button
                         variant="ghost"
+                        size="sm"
                         onClick={() =>
                           setInspect({ workspace: w, mode: "conflicts" })
                         }
@@ -234,34 +278,50 @@ export function Workspaces({
                         <>
                           <Button
                             variant="outline"
+                            size="sm"
                             onClick={() => setPublish(w)}
                           >
+                            <Upload />
                             发布
                           </Button>
-                          <details>
-                            <summary aria-label={`更多操作 ${w.id}`}>
-                              更多
-                            </summary>
-                            <div>
-                              <button
-                                onClick={() =>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={`更多操作 ${w.id}`}
+                                title="更多操作"
+                              >
+                                <Ellipsis />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="menu">
+                              <DropdownMenuItem
+                                onSelect={() =>
                                   setResolve({ workspace: w, mode: "resolve" })
                                 }
                               >
+                                <GitMerge />
                                 解决冲突
-                              </button>
-                              <button
-                                onClick={() =>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onSelect={() =>
                                   setResolve({ workspace: w, mode: "rebase" })
                                 }
                               >
+                                <RefreshCcw />
                                 更新基准
-                              </button>
-                              <button onClick={() => setDiscard(w)}>
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                variant="destructive"
+                                onSelect={() => setDiscard(w)}
+                              >
+                                <Trash2 />
                                 丢弃工作区
-                              </button>
-                            </div>
-                          </details>
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </>
                       )}
                     </div>
@@ -271,7 +331,7 @@ export function Workspaces({
             </TableBody>
           </Table>
         ) : (
-          <Empty title="还没有工作区" />
+          <Empty icon={GitBranch} title="还没有工作区" />
         )}
         {!lookup && page.footer}
       </Panel>
@@ -349,6 +409,7 @@ export function Workspaces({
               取消
             </Button>
             <Button
+              variant="destructive"
               disabled={task.busy}
               onClick={() =>
                 void task.run(async () => {

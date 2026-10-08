@@ -1,11 +1,10 @@
 "use client";
 import { call, type Audit, type Project } from "@/lib/browser-api";
 import { pretty } from "@/lib/geojson";
-import { Shield } from "lucide-react";
+import { CircleCheck, Lock, ScrollText } from "lucide-react";
 import { useState } from "react";
 import { Empty, ErrorBox, Loading, Modal, usePage } from "./common";
-import { Panel, time, useAction } from "./resource-shared";
-import { Badge } from "./ui/badge";
+import { Panel, PanelTitle, time, useAction } from "./resource-shared";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
@@ -19,13 +18,10 @@ import {
 export function Access({ project }: { project: Project }) {
   const task = useAction();
   const [success, setSuccess] = useState("");
+  const owner = project.role === "owner";
   return (
-    <div className="service-grid">
-      <Panel>
-        <div className="card-heading">
-          <Shield />
-          <h2>设置成员权限</h2>
-        </div>
+    <div className="form-grid">
+      <Panel toolbar={<PanelTitle title="设置成员权限" />}>
         <form
           className="card-form"
           onSubmit={(e) => {
@@ -43,33 +39,42 @@ export function Access({ project }: { project: Project }) {
             });
           }}
         >
-          <label htmlFor="subject">成员身份</label>
-          <Input
-            id="subject"
-            name="subject"
-            required
-            placeholder="令牌或身份提供方中的 subject"
-            maxLength={128}
-          />
-          <p className="field-help">成员需先由管理员配置身份或令牌。</p>
-          <label htmlFor="member-role">项目角色</label>
-          <select id="member-role" name="role">
-            <option value="viewer">只读 · 浏览与查询</option>
-            <option value="editor">编辑者 · 编辑与发布</option>
-            <option value="owner">所有者 · 管理项目与权限</option>
-          </select>
-          <ErrorBox message={task.error} />
-          {success && (
-            <div role="status" className="notice">
-              {success}
+          {!owner && (
+            <div className="notice is-muted">
+              <Lock aria-hidden="true" />
+              <span>只有项目所有者可以管理成员权限。</span>
             </div>
           )}
-          <Button disabled={project.role !== "owner" || task.busy}>
-            保存权限
-          </Button>
-          {project.role !== "owner" && (
-            <p className="field-help">只有项目所有者可以管理成员权限。</p>
+          <div className="field">
+            <label htmlFor="subject">成员身份</label>
+            <Input
+              id="subject"
+              name="subject"
+              required
+              placeholder="令牌或身份提供方中的 subject"
+              maxLength={128}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="member-role">项目角色</label>
+            <select id="member-role" name="role">
+              <option value="viewer">只读 · 浏览与查询</option>
+              <option value="editor">编辑者 · 编辑与发布</option>
+              <option value="owner">所有者 · 管理项目与权限</option>
+            </select>
+          </div>
+          <ErrorBox message={task.error} />
+          {success && (
+            <div role="status" className="notice is-success">
+              <CircleCheck aria-hidden="true" />
+              <span>{success}</span>
+            </div>
           )}
+          <div className="form-actions is-start">
+            <Button disabled={!owner || task.busy}>
+              {task.busy ? "正在保存…" : "保存权限"}
+            </Button>
+          </div>
         </form>
       </Panel>
     </div>
@@ -88,7 +93,7 @@ export function AuditPanel({ project }: { project: Project }) {
   }, 0);
   return (
     <>
-      <Panel toolbar={<strong>项目操作记录</strong>}>
+      <Panel toolbar={<PanelTitle title="项目操作记录" />}>
         <ErrorBox message={page.error} />
         {page.busy ? (
           <Loading />
@@ -100,20 +105,31 @@ export function AuditPanel({ project }: { project: Project }) {
                 <TableHead>操作</TableHead>
                 <TableHead>成员</TableHead>
                 <TableHead>时间</TableHead>
-                <TableHead>详情</TableHead>
+                <TableHead className="cell-actions">详情</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {page.rows.map((e) => (
                 <TableRow key={e.id}>
-                  <TableCell className="mono">#{e.id}</TableCell>
+                  <TableCell className="mono muted">#{e.id}</TableCell>
                   <TableCell>
-                    <Badge variant="secondary">{e.action}</Badge>
+                    <span className="code-tag">{e.action}</span>
                   </TableCell>
-                  <TableCell>{e.subject}</TableCell>
-                  <TableCell className="muted">{time(e.createdAt)}</TableCell>
                   <TableCell>
-                    <Button variant="ghost" onClick={() => setDetail(e)}>
+                    <span className="subject">
+                      <span className="subject-avatar" aria-hidden="true">
+                        {e.subject.slice(0, 1).toUpperCase()}
+                      </span>
+                      {e.subject}
+                    </span>
+                  </TableCell>
+                  <TableCell className="muted">{time(e.createdAt)}</TableCell>
+                  <TableCell className="cell-actions">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDetail(e)}
+                    >
                       查看
                     </Button>
                   </TableCell>
@@ -122,7 +138,7 @@ export function AuditPanel({ project }: { project: Project }) {
             </TableBody>
           </Table>
         ) : (
-          <Empty title="还没有审计记录" />
+          <Empty icon={ScrollText} title="还没有审计记录" />
         )}
         {page.footer}
       </Panel>

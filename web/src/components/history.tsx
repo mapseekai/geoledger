@@ -6,12 +6,16 @@ import {
   type Project,
   type Workspace,
 } from "@/lib/browser-api";
-import { ArrowDownToLine } from "lucide-react";
+import {
+  ArrowDownToLine,
+  CircleCheck,
+  FileSearch,
+  History,
+} from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { Empty, ErrorBox, Loading, Modal, usePage } from "./common";
-import { Panel, time, useAction } from "./resource-shared";
-import { Badge } from "./ui/badge";
+import { Panel, PanelTitle, time, useAction } from "./resource-shared";
 import { Button } from "./ui/button";
 import {
   Table,
@@ -50,8 +54,7 @@ export function HistoryPanel({
       <Panel
         toolbar={
           <>
-            <strong>已发布版本</strong>
-            <Badge variant="secondary">可追溯 · 可恢复</Badge>
+            <PanelTitle title="已发布版本" />
           </>
         }
       >
@@ -66,25 +69,38 @@ export function HistoryPanel({
                 <TableHead>说明</TableHead>
                 <TableHead>发布者</TableHead>
                 <TableHead>发布时间</TableHead>
-                <TableHead>操作</TableHead>
+                <TableHead className="cell-actions">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {page.rows.map((c) => (
                 <TableRow key={c.revision}>
                   <TableCell>
-                    <Badge variant="secondary">r{c.revision}</Badge>
+                    <span className="revision-tag">r{c.revision}</span>
                   </TableCell>
                   <TableCell className="message-cell">{c.message}</TableCell>
-                  <TableCell>{c.subject}</TableCell>
-                  <TableCell className="muted">{time(c.createdAt)}</TableCell>
                   <TableCell>
-                    <div className="toolbar-actions">
-                      <Button variant="ghost" onClick={() => setInspect(c)}>
+                    <span className="subject">
+                      <span className="subject-avatar" aria-hidden="true">
+                        {c.subject.slice(0, 1).toUpperCase()}
+                      </span>
+                      {c.subject}
+                    </span>
+                  </TableCell>
+                  <TableCell className="muted">{time(c.createdAt)}</TableCell>
+                  <TableCell className="cell-actions">
+                    <div className="row-actions">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setInspect(c)}
+                      >
+                        <FileSearch />
                         详情
                       </Button>
                       <Button
                         variant="ghost"
+                        size="sm"
                         disabled={!writable}
                         onClick={() => {
                           setCreated(undefined);
@@ -101,7 +117,7 @@ export function HistoryPanel({
             </TableBody>
           </Table>
         ) : (
-          <Empty title="还没有发布记录">工作区发布后，版本会出现在这里。</Empty>
+          <Empty icon={History} title="还没有发布记录" />
         )}
         {page.footer}
       </Panel>
@@ -133,13 +149,19 @@ export function HistoryPanel({
           close={task.busy ? () => {} : () => setRestore(undefined)}
         >
           {created ? (
-            <div className="notice">
-              工作区已创建：<span className="mono">{created.id}</span>
-              <p>
-                <Link href={`/workspaces?project=${project.id}`}>
-                  前往工作区查看
-                </Link>
-              </p>
+            <div className="notice is-success">
+              <CircleCheck aria-hidden="true" />
+              <div>
+                工作区已创建：<span className="mono">{created.id}</span>
+                <p>
+                  <Link
+                    className="text-link"
+                    href={`/workspaces?project=${project.id}`}
+                  >
+                    前往工作区查看
+                  </Link>
+                </p>
+              </div>
             </div>
           ) : (
             <>

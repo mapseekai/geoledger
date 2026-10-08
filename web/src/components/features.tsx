@@ -8,18 +8,25 @@ import {
   type Project,
   type Workspace,
 } from "@/lib/browser-api";
-import { featureText, pretty } from "@/lib/geojson";
+import { featureText, geometryType, pretty } from "@/lib/geojson";
 import {
   publication,
   readPublication,
   releasePublication,
   type Publication,
 } from "@/lib/publication";
-import { ArrowRight, Check, Plus } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Database,
+  MapPinned,
+  Plus,
+  TriangleAlert,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Empty, ErrorBox, Loading, Modal, usePage } from "./common";
-import { Panel, short, useAction } from "./resource-shared";
-import { Badge } from "./ui/badge";
+import { Panel, PanelTitle, short, useAction } from "./resource-shared";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
@@ -67,11 +74,22 @@ export function FeatureExplorer({
   }, [project.id, refresh, workspace]);
   return (
     <>
-      <div className="feature-heading">
-        <Button variant="outline" onClick={back}>
-          返回数据集
-        </Button>
-        <h2>{dataset.name}</h2>
+      <section className="feature-header">
+        <div className="feature-header-main">
+          <Button variant="outline" size="sm" onClick={back}>
+            <ArrowLeft />
+            返回数据集
+          </Button>
+          <span className="row-icon is-data" aria-hidden="true">
+            <Database size={16} />
+          </span>
+          <div className="feature-title">
+            <h2>{dataset.name}</h2>
+            <span className="mono" title={dataset.id}>
+              {short(dataset.id)}
+            </span>
+          </div>
+        </div>
         <div className="feature-source">
           <label htmlFor="workspace-select">查看</label>
           <select
@@ -107,45 +125,42 @@ export function FeatureExplorer({
             新建工作区
           </Button>
         </div>
-      </div>
-      <ErrorBox message={task.error || workspaceError} />
-      <details className="workspace-lookup">
-        <summary>选择其他工作区</summary>
-        <form
-          className="lookup"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const id = String(
-              new FormData(e.currentTarget).get("workspace"),
-            ).trim();
-            void task.run(async () => {
-              const w = await call<Workspace>({
-                action: "workspace",
-                project: project.id,
-                workspace: id,
+        <details className="workspace-lookup">
+          <summary>选择其他工作区</summary>
+          <form
+            className="lookup"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const id = String(
+                new FormData(e.currentTarget).get("workspace"),
+              ).trim();
+              void task.run(async () => {
+                const w = await call<Workspace>({
+                  action: "workspace",
+                  project: project.id,
+                  workspace: id,
+                });
+                setWorkspaces((rows) => [
+                  w,
+                  ...rows.filter((x) => x.id !== w.id),
+                ]);
+                setWorkspace(w.id);
               });
-              setWorkspaces((rows) => [
-                w,
-                ...rows.filter((x) => x.id !== w.id),
-              ]);
-              setWorkspace(w.id);
-            });
-          }}
-        >
-          <Input
-            name="workspace"
-            aria-label="指定工作区标识"
-            required
-            placeholder="输入工作区标识"
-          />
-          <Button variant="outline" disabled={task.busy}>
-            使用工作区
-          </Button>
-        </form>
-        <p className="subtle-note">
-          下拉列表显示前 100 个工作区，也可在这里输入完整标识。
-        </p>
-      </details>
+            }}
+          >
+            <Input
+              name="workspace"
+              aria-label="指定工作区标识"
+              required
+              placeholder="输入工作区标识"
+            />
+            <Button variant="outline" disabled={task.busy}>
+              使用工作区
+            </Button>
+          </form>
+        </details>
+      </section>
+      <ErrorBox message={task.error || workspaceError} />
       <FeatureList
         key={`${dataset.id}:${workspace}`}
         project={project}
@@ -227,12 +242,11 @@ export function FeatureList({
       <Panel
         toolbar={
           <>
-            <div>
-              <strong>{workspaceId ? "工作区要素" : "已发布要素"}</strong>
-              <Badge variant="secondary">
+            <PanelTitle title={workspaceId ? "工作区要素" : "已发布要素"}>
+              <span className="revision-tag">
                 {workspaceId ? `v${version ?? "…"}` : `r${snapshot ?? "…"}`}
-              </Badge>
-            </div>
+              </span>
+            </PanelTitle>
             <div className="toolbar-actions">
               <Button
                 variant="outline"
@@ -262,8 +276,11 @@ export function FeatureList({
       >
         <ErrorBox message={page.error || task.error} />
         {pending && (
-          <div className="notice">
-            有一笔待确认的发布请求。请到对应工作区重试原请求，再继续编辑。
+          <div className="notice is-warning">
+            <TriangleAlert aria-hidden="true" />
+            <span>
+              有一笔待确认的发布请求。请到对应工作区重试原请求，再继续编辑。
+            </span>
           </div>
         )}
         {page.busy ? (
@@ -273,8 +290,9 @@ export function FeatureList({
             <TableHeader>
               <TableRow>
                 <TableHead>要素标识</TableHead>
+                <TableHead>几何类型</TableHead>
                 <TableHead>内容</TableHead>
-                <TableHead>操作</TableHead>
+                <TableHead className="cell-actions">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -282,14 +300,20 @@ export function FeatureList({
                 <TableRow key={f.id}>
                   <TableCell className="mono">{f.id}</TableCell>
                   <TableCell>
+                    <span className="geometry-tag">
+                      {geometryType(f.geojson)}
+                    </span>
+                  </TableCell>
+                  <TableCell>
                     <button className="text-link" onClick={() => setInspect(f)}>
                       查看 GeoJSON
                     </button>
                   </TableCell>
-                  <TableCell>
-                    <div className="toolbar-actions">
+                  <TableCell className="cell-actions">
+                    <div className="row-actions">
                       <Button
                         variant="ghost"
+                        size="sm"
                         disabled={!canEdit}
                         onClick={() => setEdit(f)}
                       >
@@ -297,6 +321,8 @@ export function FeatureList({
                       </Button>
                       <Button
                         variant="ghost"
+                        size="sm"
+                        className="is-danger"
                         disabled={!canEdit}
                         onClick={() => setRemove(f)}
                       >
@@ -309,7 +335,7 @@ export function FeatureList({
             </TableBody>
           </Table>
         ) : (
-          <Empty title="这个视图下还没有要素">
+          <Empty icon={MapPinned} title="这个视图下还没有要素">
             {workspaceId
               ? "添加要素后，发布工作区以生成新版本。"
               : "新建工作区，在工作区中添加并发布要素。"}
@@ -318,11 +344,7 @@ export function FeatureList({
         {page.footer}
       </Panel>
       {inspect && (
-        <Modal
-          title={`要素 ${inspect.id}`}
-          description="GeoJSON"
-          close={() => setInspect(undefined)}
-        >
+        <Modal title={`要素 ${inspect.id}`} close={() => setInspect(undefined)}>
           <pre className="json-view">{pretty(inspect.geojson)}</pre>
         </Modal>
       )}
@@ -360,6 +382,7 @@ export function FeatureList({
               取消
             </Button>
             <Button
+              variant="destructive"
               disabled={task.busy}
               onClick={() =>
                 void task.run(async () => {

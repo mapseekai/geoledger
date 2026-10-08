@@ -58,7 +58,7 @@ Web 镜像以非 root 用户运行，包含 standalone 产物、SDK 和本地字
 - `src/lib/operations.ts`：严格白名单请求到 SDK 业务方法的映射。
 - `src/components`：浏览器页面交互，通过 HTTP 调用服务端业务接口。
 - `src/components/ui`：shadcn/ui 源组件，可维护和定制。
-- `src/app/globals.css`：Mistral 参考主题与响应式布局。
+- `src/app/globals.css`：管理后台主题与响应式布局。
 
 UI 请求版本号使用十进制字符串，服务端转换为 SDK bigint。要素内容使用原始
 GeoJSON 文本，展示/补齐 ID 使用 lossless-json；保持原始数字的精度。
@@ -83,10 +83,11 @@ npm --prefix web run build
 
 ## 设计来源
 
-参考 [Mistral DESIGN.md](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/mistral.ai/DESIGN.md)：
-暖白、奶油色、橙色强调、8px 按钮 / 12px 卡片、细边框、页底日落色带。
-橙色按钮采用深色文字以提高正文对比度；导航的橙色文字使用更深的色阶。
-使用本地打包的开源 Inter 和 Newsreader（中文衬线采用系统字体）。
-展示字体可按持有的字体授权自行配置。
-Logo 使用自主的 [GeoLedger SVG 标志](public/logo.svg)。
+管理后台布局：深色侧边导航（项目上下文、数据管理 / 系统管理分组、服务状态与会话），
+顶部面包屑与连接状态，内容区由页面标题、统计卡片、项目上下文卡片和表格面板组成。
+中性灰白界面，GeoLedger 橙色作为唯一强调色；文字与实心按钮使用深橙 `#cc3a05`
+以满足 WCAG AA 对比度，亮橙仅用于标志和指示元素。8px 控件 / 12px 卡片圆角、细边框、
+轻阴影；状态与角色使用带圆点的色彩徽标。1024px 以下侧边栏切换为抽屉，640px 以下工具栏与统计卡片紧凑排列。
+使用本地打包的 Inter；登录页标题使用开源 Newsreader（中文衬线采用系统字体）。
+Logo 使用 [GeoLedger SVG 标志](public/logo.svg)；深色背景中的标志主体跟随文字颜色。
 shadcn/ui 源码基于 MIT 许可，参见 [第三方说明](THIRD_PARTY_NOTICES.md)。

@@ -1,5 +1,12 @@
 "use client";
-import { ArrowLeft, ArrowRight, Inbox, RefreshCw } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CircleAlert,
+  Inbox,
+  RefreshCw,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "./ui/button";
 import {
@@ -12,26 +19,35 @@ import {
 import { Skeleton } from "./ui/skeleton";
 export function Empty({
   title = "这里还没有内容",
+  icon: Icon = Inbox,
   children,
+  action,
 }: {
   title?: string;
+  icon?: LucideIcon;
   children?: ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <div className="empty">
-      <span className="icon-tile">
-        <Inbox />
+      <span className="empty-icon">
+        <Icon />
       </span>
       <h3>{title}</h3>
       {children && <p>{children}</p>}
+      {action && <div className="empty-action">{action}</div>}
     </div>
   );
 }
-export function Loading() {
+export function Loading({ rows = 5 }: { rows?: number }) {
   return (
-    <div className="loading" aria-label="正在加载">
-      {[1, 2, 3, 4].map((i) => (
-        <Skeleton key={i} className="h-12 w-full" />
+    <div className="loading" role="status" aria-label="正在加载">
+      {Array.from({ length: rows }, (_, i) => (
+        <div className="loading-row" key={i}>
+          <Skeleton className="loading-avatar" />
+          <Skeleton className="loading-line" />
+          <Skeleton className="loading-line is-short" />
+        </div>
       ))}
     </div>
   );
@@ -39,7 +55,8 @@ export function Loading() {
 export function ErrorBox({ message }: { message: string }) {
   return message ? (
     <div role="alert" className="alert">
-      {message}
+      <CircleAlert aria-hidden="true" />
+      <span>{message}</span>
     </div>
   ) : null;
 }
@@ -50,7 +67,7 @@ export function Modal({
   close,
 }: {
   title: string;
-  description: string;
+  description?: string;
   children: ReactNode;
   close: () => void;
 }) {
@@ -61,10 +78,13 @@ export function Modal({
         if (!open) close();
       }}
     >
-      <DialogContent className="dialog-wide">
+      <DialogContent
+        className="dialog-wide"
+        {...(description ? {} : { "aria-describedby": undefined })}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
         {children}
       </DialogContent>
@@ -127,20 +147,23 @@ export function usePage<T>(
   };
   const footer = (
     <div className="pagination">
-      <span>
+      <span className="pagination-summary">
         第 {cursors.length} 页 · 本页 {rows.length} 项
       </span>
-      <div>
+      <div className="pagination-actions">
         <Button
           variant="ghost"
+          size="icon-sm"
           onClick={reset}
           disabled={busy}
           aria-label="刷新列表"
+          title="刷新列表"
         >
-          <RefreshCw />
+          <RefreshCw className={busy ? "spin" : undefined} />
         </Button>
         <Button
           variant="outline"
+          size="sm"
           disabled={busy || cursors.length === 1}
           onClick={() => setCursors((c) => c.slice(0, -1))}
         >
@@ -149,6 +172,7 @@ export function usePage<T>(
         </Button>
         <Button
           variant="outline"
+          size="sm"
           disabled={busy || !next}
           onClick={() => setCursors((c) => [...c, next!])}
         >

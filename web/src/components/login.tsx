@@ -2,9 +2,33 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { send } from "@/lib/browser-api";
-import { ArrowRight, Eye, EyeOff, LockKeyhole } from "lucide-react";
+import {
+  ArrowRight,
+  Eye,
+  EyeOff,
+  GitMerge,
+  History,
+  KeyRound,
+  LockKeyhole,
+  ShieldCheck,
+} from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Brand, Sunset } from "./brand";
+import { Brand } from "./brand";
+import { ErrorBox } from "./common";
+const highlights = [
+  {
+    icon: GitMerge,
+    title: "多人协作编辑",
+  },
+  {
+    icon: History,
+    title: "版本发布与撤销",
+  },
+  {
+    icon: ShieldCheck,
+    title: "权限与审计",
+  },
+];
 export function Login({ expired }: { expired: boolean }) {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -27,73 +51,71 @@ export function Login({ expired }: { expired: boolean }) {
   }
   return (
     <main className="login-page">
-      <section className="login-story">
-        <Brand />
+      <section className="login-story" aria-label="GeoLedger 简介">
+        <div className="login-map" aria-hidden="true" />
+        <Brand caption="管理控制台" />
         <div className="story-copy">
+          <span className="story-eyebrow">空间数据版本控制</span>
           <h1>
             每一次改变，
             <br />
             都有迹可循。
           </h1>
-        </div>
-        <div className="landscape" aria-hidden="true">
-          <div className="sun" />
-          <div className="ridge ridge-back" />
-          <div className="ridge ridge-front" />
-          <div className="grid-lines" />
-          <span className="map-coordinate">35° 00′ N &nbsp; 104° 00′ E</span>
-        </div>
-        <div className="story-foot">
-          <span>空间数据版本控制</span>
-          <span>GEОLEDGER CONSOLE</span>
+          <ul className="story-points">
+            {highlights.map((h) => (
+              <li key={h.title}>
+                <span className="story-icon" aria-hidden="true">
+                  <h.icon />
+                </span>
+                <strong>{h.title}</strong>
+              </li>
+            ))}
+          </ul>
         </div>
       </section>
       <section className="login-panel">
         <div className="mobile-brand">
-          <Brand />
+          <Brand caption="管理控制台" />
         </div>
-        <form onSubmit={login} className="login-form">
-          <div className="icon-tile">
-            <LockKeyhole size={23} />
-          </div>
-          <h2>登录控制台</h2>
-          <label htmlFor="token">访问令牌</label>
-          <div className="password-field">
-            <Input
-              id="token"
-              name="token"
-              type={show ? "text" : "password"}
-              autoComplete="off"
-              maxLength={2000}
-              required
-              placeholder="输入管理员或成员令牌"
-              disabled={busy}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={show ? "隐藏令牌" : "显示令牌"}
-              onClick={() => setShow(!show)}
-            >
-              {show ? <EyeOff /> : <Eye />}
-            </Button>
-          </div>
-          {error && (
-            <div role="alert" className="alert">
-              {error}
+        <div className="login-card">
+          <form onSubmit={login} className="login-form">
+            <span className="login-icon" aria-hidden="true">
+              <LockKeyhole />
+            </span>
+            <h2>登录控制台</h2>
+            <div className="field">
+              <label htmlFor="token">访问令牌</label>
+              <div className="password-field">
+                <KeyRound className="field-icon" aria-hidden="true" />
+                <Input
+                  id="token"
+                  name="token"
+                  type={show ? "text" : "password"}
+                  autoComplete="off"
+                  maxLength={2000}
+                  required
+                  placeholder="输入访问令牌"
+                  disabled={busy}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={show ? "隐藏令牌" : "显示令牌"}
+                  onClick={() => setShow(!show)}
+                >
+                  {show ? <EyeOff /> : <Eye />}
+                </Button>
+              </div>
             </div>
-          )}
-          <Button className="login-submit" disabled={busy} type="submit">
-            {busy ? "正在连接…" : "进入控制台"}
-            <ArrowRight />
-          </Button>
-        </form>
-        <p className="login-footer">
-          GeoLedger &nbsp; / &nbsp; 空间数据版本控制
-        </p>
+            <ErrorBox message={error} />
+            <Button className="login-submit" disabled={busy} type="submit">
+              {busy ? "正在连接…" : "进入控制台"}
+              <ArrowRight />
+            </Button>
+          </form>
+        </div>
       </section>
-      <Sunset />
     </main>
   );
 }

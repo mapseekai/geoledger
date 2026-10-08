@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@geoledger/client";
 import { execute, encode } from "../src/lib/operations";
-import { featureText, pretty } from "../src/lib/geojson";
+import { featureText, geometryType, pretty } from "../src/lib/geojson";
 import {
   publication,
   readPublication,
@@ -155,4 +155,14 @@ test("existing 256-byte feature identifiers remain editable through the web cont
     }).success,
     false,
   );
+});
+test("geometry type labels tolerate missing or invalid geometry", () => {
+  assert.equal(
+    geometryType(
+      '{"type":"Feature","properties":{"n":18446744073709551615},"geometry":{"type":"LineString","coordinates":[[0,0],[1,1]]}}',
+    ),
+    "LineString",
+  );
+  assert.equal(geometryType('{"type":"Feature","geometry":null}'), "无几何");
+  assert.equal(geometryType("not json"), "未知");
 });

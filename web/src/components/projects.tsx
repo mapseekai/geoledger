@@ -4,16 +4,30 @@ import {
   ArrowRight,
   Database,
   Folder,
+  FolderKanban,
+  FileJson,
+  FolderPlus,
+  Gauge,
+  GitCommitHorizontal,
+  HardDrive,
+  Layers,
   Plus,
   Search,
+  SearchX,
   Server,
+  type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { Empty, ErrorBox, Loading, listPage, usePage } from "./common";
 import { FeatureExplorer } from "./features";
-import { NameDialog, Panel, short } from "./resource-shared";
-import { Badge } from "./ui/badge";
+import {
+  NameDialog,
+  Panel,
+  PanelTitle,
+  StatusBadge,
+  short,
+} from "./resource-shared";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
@@ -24,7 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from "./ui/table";
-export function Projects() {
+export function Projects({ info }: { info?: Info }) {
   const [refresh, setRefresh] = useState(0),
     [create, setCreate] = useState(false),
     [query, setQuery] = useState("");
@@ -38,22 +52,54 @@ export function Projects() {
   );
   return (
     <>
+      <div className="stat-grid">
+        <Stat
+          icon={FolderKanban}
+          label="本页项目"
+          value={page.busy ? "…" : String(page.rows.length)}
+        />
+        <Stat
+          icon={GitCommitHorizontal}
+          label="本页版本合计"
+          value={
+            page.busy
+              ? "…"
+              : String(
+                  page.rows.reduce((sum, p) => sum + BigInt(p.head), BigInt(0)),
+                )
+          }
+        />
+        <Stat
+          icon={HardDrive}
+          label="存储后端"
+          value={info ? info.backend.toUpperCase() : "…"}
+          hint={info ? `存储格式 ${info.formatVersion}` : undefined}
+        />
+        <Stat
+          icon={Server}
+          label="服务版本"
+          value={info ? info.version : "…"}
+        />
+      </div>
       <Panel
         toolbar={
           <>
-            <div className="search">
-              <Search size={16} />
-              <Input
-                aria-label="筛选本页项目"
-                placeholder="筛选本页项目…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
+            <PanelTitle title="项目列表" />
+            <div className="toolbar-actions">
+              <div className="search">
+                <Search size={15} aria-hidden="true" />
+                <Input
+                  aria-label="筛选本页项目"
+                  placeholder="筛选本页项目…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+              <Button onClick={() => setCreate(true)}>
+                <Plus />
+                创建项目
+              </Button>
             </div>
-            <Button onClick={() => setCreate(true)}>
-              <Plus />
-              创建项目
-            </Button>
           </>
         }
       >
@@ -65,9 +111,10 @@ export function Projects() {
             <TableHeader>
               <TableRow>
                 <TableHead>项目名称</TableHead>
+                <TableHead>发布状态</TableHead>
                 <TableHead>最新版本</TableHead>
                 <TableHead>项目标识</TableHead>
-                <TableHead>
+                <TableHead className="cell-actions">
                   <span className="sr-only">操作</span>
                 </TableHead>
               </TableRow>
@@ -80,22 +127,30 @@ export function Projects() {
                       className="name-link"
                       href={`/datasets?project=${p.id}`}
                     >
-                      <span className="row-icon">
-                        <Folder size={18} />
+                      <span className="row-icon" aria-hidden="true">
+                        <Folder size={16} />
                       </span>
                       {p.name}
                     </Link>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="secondary">r{p.head}</Badge>
+                    <StatusBadge
+                      value={p.head === "0" ? "unpublished" : "published"}
+                    />
                   </TableCell>
-                  <TableCell className="mono muted">{short(p.id)}</TableCell>
                   <TableCell>
-                    <Button asChild variant="ghost" size="icon">
+                    <span className="revision-tag">r{p.head}</span>
+                  </TableCell>
+                  <TableCell className="mono muted" title={p.id}>
+                    {short(p.id)}
+                  </TableCell>
+                  <TableCell className="cell-actions">
+                    <Button asChild variant="ghost" size="sm">
                       <Link
                         aria-label={`打开 ${p.name}`}
                         href={`/datasets?project=${p.id}`}
                       >
+                        进入
                         <ArrowRight />
                       </Link>
                     </Button>
@@ -105,8 +160,11 @@ export function Projects() {
             </TableBody>
           </Table>
         ) : (
-          <Empty title={query ? "本页没有匹配的项目" : "创建你的第一个项目"} />
-        )}{" "}
+          <Empty
+            icon={query ? SearchX : FolderPlus}
+            title={query ? "本页没有匹配的项目" : "创建你的第一个项目"}
+          />
+        )}
         {page.footer}
       </Panel>
       {create && (
@@ -122,6 +180,30 @@ export function Projects() {
         />
       )}
     </>
+  );
+}
+function Stat({
+  icon: Icon,
+  label,
+  value,
+  hint,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div className="stat-card">
+      <div className="stat-card-head">
+        <span>{label}</span>
+        <span className="stat-icon" aria-hidden="true">
+          <Icon />
+        </span>
+      </div>
+      <strong className="stat-value">{value}</strong>
+      {hint && <small>{hint}</small>}
+    </div>
   );
 }
 export function Datasets({
@@ -161,9 +243,7 @@ export function Datasets({
       <Panel
         toolbar={
           <>
-            <div>
-              <strong>项目数据集</strong>
-            </div>
+            <PanelTitle title="项目数据集" />
             <Button disabled={!writable} onClick={() => setCreate(true)}>
               <Plus />
               创建数据集
@@ -180,7 +260,7 @@ export function Datasets({
               <TableRow>
                 <TableHead>数据集名称</TableHead>
                 <TableHead>数据集标识</TableHead>
-                <TableHead>操作</TableHead>
+                <TableHead className="cell-actions">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -191,15 +271,19 @@ export function Datasets({
                       className="name-link"
                       onClick={() => setSelected(d)}
                     >
-                      <span className="row-icon">
-                        <Database size={18} />
+                      <span className="row-icon is-data" aria-hidden="true">
+                        <Database size={16} />
                       </span>
                       {d.name}
                     </button>
                   </TableCell>
                   <TableCell className="mono muted">{d.id}</TableCell>
-                  <TableCell>
-                    <Button variant="ghost" onClick={() => setSelected(d)}>
+                  <TableCell className="cell-actions">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelected(d)}
+                    >
                       浏览要素
                       <ArrowRight />
                     </Button>
@@ -209,7 +293,7 @@ export function Datasets({
             </TableBody>
           </Table>
         ) : (
-          <Empty title="还没有数据集" />
+          <Empty icon={Layers} title="还没有数据集" />
         )}
         {page.footer}
       </Panel>
@@ -228,31 +312,33 @@ export function Datasets({
     </>
   );
 }
+const bytes = (n: number) =>
+  n >= 1024 * 1024
+    ? `${(n / 1024 / 1024).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} MiB`
+    : `${(n / 1024).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} KiB`;
 export function ServiceInfo({ info }: { info?: Info }) {
-  return info ? (
-    <div className="service-grid">
-      <Panel>
-        <div className="card-heading">
-          <Server />
-          <h2>连接信息</h2>
-        </div>
-        <dl className="details">
-          {[
-            ["服务版本", info.version],
-            ["存储后端", info.backend.toUpperCase()],
-            ["存储格式", String(info.formatVersion)],
-            ["单要素上限", `${info.maxFeatureBytes.toLocaleString()} bytes`],
-            ["单次请求上限", `${info.maxRequestBytes.toLocaleString()} bytes`],
-          ].map(([k, v]) => (
-            <div key={k}>
-              <dt>{k}</dt>
-              <dd className="mono">{v}</dd>
-            </div>
-          ))}
-        </dl>
-      </Panel>
+  if (!info) return <Loading rows={3} />;
+  return (
+    <div className="stat-grid">
+      <Stat icon={Server} label="服务版本" value={info.version} />
+      <Stat
+        icon={HardDrive}
+        label="存储后端"
+        value={info.backend.toUpperCase()}
+        hint={`存储格式 ${info.formatVersion}`}
+      />
+      <Stat
+        icon={FileJson}
+        label="单要素上限"
+        value={bytes(info.maxFeatureBytes)}
+        hint={`${info.maxFeatureBytes.toLocaleString()} bytes`}
+      />
+      <Stat
+        icon={Gauge}
+        label="单次请求上限"
+        value={bytes(info.maxRequestBytes)}
+        hint={`${info.maxRequestBytes.toLocaleString()} bytes`}
+      />
     </div>
-  ) : (
-    <Loading />
   );
 }

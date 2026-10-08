@@ -10,6 +10,7 @@ const labels: Record<string, string> = {
   open: "编辑中",
   published: "已发布",
   discarded: "已丢弃",
+  unpublished: "未发布",
 };
 export const role = (v: string) => labels[v] ?? v;
 export const short = (v: string) =>
@@ -36,15 +37,55 @@ export function useAction() {
 export function Panel({
   children,
   toolbar,
+  className,
 }: {
   children: ReactNode;
   toolbar?: ReactNode;
+  className?: string;
 }) {
   return (
-    <section className="panel">
+    <section className={className ? `panel ${className}` : "panel"}>
       {toolbar && <div className="panel-toolbar">{toolbar}</div>}
       {children}
     </section>
+  );
+}
+/** Card title block used at the start of a panel toolbar. */
+export function PanelTitle({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="panel-title">
+      <div className="panel-title-row">
+        <strong>{title}</strong>
+        {children}
+      </div>
+      {description && <span>{description}</span>}
+    </div>
+  );
+}
+const tones: Record<string, string> = {
+  owner: "tone-brand",
+  editor: "tone-info",
+  viewer: "tone-neutral",
+  open: "tone-info",
+  published: "tone-success",
+  discarded: "tone-neutral",
+  unpublished: "tone-neutral",
+};
+/** Colored pill for roles and workspace states; text comes from `role()`. */
+export function StatusBadge({ value }: { value: string }) {
+  return (
+    <span className={`status-badge ${tones[value] ?? "tone-neutral"}`}>
+      <span className="status-badge-dot" aria-hidden="true" />
+      {role(value)}
+    </span>
   );
 }
 export function NameDialog({
@@ -58,11 +99,7 @@ export function NameDialog({
 }) {
   const task = useAction();
   return (
-    <Modal
-      title={title}
-      description="使用简短、易于辨识的名称。"
-      close={task.busy ? () => {} : close}
-    >
+    <Modal title={title} close={task.busy ? () => {} : close}>
       <form
         onSubmit={(e) => {
           e.preventDefault();

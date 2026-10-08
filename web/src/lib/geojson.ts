@@ -20,3 +20,13 @@ export function featureText(raw: string, id: string): string {
   value.id = id;
   return stringify(value)!;
 }
+/** Geometry type for list display; reads with lossless-json and never throws. */
+export function geometryType(raw: string): string {
+  try {
+    const value = parse(raw) as { geometry?: { type?: unknown } | null } | null;
+    const type = value?.geometry?.type;
+    return typeof type === "string" ? type : "无几何";
+  } catch {
+    return "未知";
+  }
+}
