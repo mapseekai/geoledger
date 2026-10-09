@@ -1,6 +1,7 @@
 # Docker Hub 镜像发布
 
-独立的 `Publish Docker Hub images` Actions 任务从已有版本标签重新构建
+独立的 `Publish Docker Hub images` Actions 任务使用 Docker Cloud Builder
+`zwishing/mapseekai`（Buildx 0.38.0、cloud 驱动），从已有版本标签重新构建
 `geoledger` 和 `geoledger-console`，发布 Linux AMD64/ARM64 镜像、SBOM 和
 构建来源信息，不触发 SDK 发布。现有 GHCR 发布流程继续保留。
 
@@ -18,3 +19,6 @@
 
 任务不会发布或覆盖 latest。存储格式变化仍需遵循版本契约，更新镜像不会
 自动迁移旧数据库。工作流输入版本必须与标签下包版本一致。
+
+GitHub Actions 只负责编排，镜像构建实际运行在 Docker Cloud Builder。登录用户
+须有该 Builder 访问权限及目标镜像仓库写权限；当前登录用户名为 zwishing。
