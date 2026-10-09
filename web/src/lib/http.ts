@@ -26,7 +26,7 @@ export function guard(request: Request) {
 }
 export async function body(
   request: Request,
-  maxBytes = 4 * 1024 * 1024,
+  maxBytes = Infinity,
 ): Promise<unknown> {
   if (Number(request.headers.get("content-length")) > maxBytes)
     throw new HttpError(413, "请求过大。");

@@ -26,7 +26,7 @@ fn seed(app: &Application) -> Result<Seed, Box<dyn std::error::Error>> {
     let dataset = call(
         "alice",
         "create_dataset",
-        json!({"project":p,"name":"roads"}),
+        json!({"geometry_type":"point","project":p,"name":"roads"}),
     )?["dataset"]
         .as_str()
         .ok_or("dataset")?
@@ -275,7 +275,7 @@ fn damaged_exports_are_rejected_without_partial_writes() -> TestResult {
         .ok_or("row")?;
     lines.remove(dropped_row);
     let missing_row = lines.join("\n") + "\n";
-    let newer = text.replacen("\"format\":6", "\"format\":99", 1);
+    let newer = text.replacen("\"format\":7", "\"format\":99", 1);
     let target = Application::new(Storage::Sqlite(dir.path().join("target.sqlite3")));
     for (case, input, status) in [
         ("tampered", tampered.as_bytes(), 400),

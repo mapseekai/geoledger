@@ -179,11 +179,13 @@ export function Modal({
   description,
   children,
   close,
+  className,
 }: {
   title: string;
   description?: string;
   children: ReactNode;
   close: () => void;
+  className?: string;
 }) {
   return (
     <Dialog
@@ -193,8 +195,7 @@ export function Modal({
       }}
     >
       <DialogContent
-        className="dialog-wide"
-        {...(description ? {} : { "aria-describedby": undefined })}
+        className={`dialog-wide${className ? ` ${className}` : ""}`}
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
@@ -224,7 +225,7 @@ export function usePage<T>(
     identity?: string;
     accept?: () => void;
   }>,
-  refresh: number,
+  refresh: string | number,
 ) {
   const [cursors, setCursors] = useState([""]);
   const [rows, setRows] = useState<T[]>([]);
@@ -309,7 +310,14 @@ export function usePage<T>(
       </div>
     </div>
   );
-  return { rows, busy, error, footer, reset };
+  return {
+    rows,
+    busy,
+    error,
+    footer,
+    reset,
+    hasPrevious: cursors.length > 1,
+  };
 }
 export function listPage<T extends { id: string }>(rows: T[]) {
   return { rows, next: rows.length === 20 ? rows.at(-1)!.id : undefined };

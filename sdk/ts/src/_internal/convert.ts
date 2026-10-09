@@ -53,7 +53,13 @@ export function decodeMember(v: wire.MemberInfo): Member {
   return { subject: v.subject, role: v.role };
 }
 export function decodeDataset(v: wire.DatasetReply): Dataset {
-  return { id: v.dataset, name: v.name };
+  if (!["point", "line", "polygon"].includes(v.geometryType))
+    throw new Error("Invalid dataset geometry type");
+  return {
+    id: v.dataset,
+    name: v.name,
+    geometryType: v.geometryType as Dataset["geometryType"],
+  };
 }
 export function decodeWorkspaceInfo(v: wire.WorkspaceReply): WorkspaceInfo {
   return {
@@ -64,7 +70,11 @@ export function decodeWorkspaceInfo(v: wire.WorkspaceReply): WorkspaceInfo {
   };
 }
 export function decodeSaveResult(v: wire.SaveReply): SaveResult {
-  return { version: BigInt(v.version), changes: BigInt(v.changes) };
+  return {
+    version: BigInt(v.version),
+    changes: BigInt(v.changes),
+    warnings: v.warnings,
+  };
 }
 export function decodeDiscardResult(v: wire.DiscardReply): DiscardResult {
   return { version: BigInt(v.version), status: v.status };
@@ -128,6 +138,8 @@ export function decodeCommit(v: wire.CommitInfo): Commit {
     subject: v.subject,
     message: v.message,
     createdAt: v.createdAt,
+    sourceWorkspace: v.sourceWorkspace,
+    sourceBaseRevision: BigInt(v.sourceBaseRevision),
   };
 }
 export function decodeCommitChanges(v: wire.CommitReply): CommitChanges {

@@ -30,6 +30,7 @@ pub struct Member {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Dataset {
+    pub geometry_type: String,
     #[serde(rename = "dataset")]
     pub id: String,
     pub name: String,
@@ -46,6 +47,7 @@ pub struct WorkspaceInfo {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SaveResult {
+    pub warnings: Vec<String>,
     pub version: i64,
     pub changes: i64,
 }
@@ -111,8 +113,9 @@ pub struct Commit {
     pub subject: String,
     pub message: String,
     pub created_at: String,
+    pub source_workspace: String,
+    pub source_base_revision: i64,
 }
-
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CommitChanges {
     pub revision: i64,

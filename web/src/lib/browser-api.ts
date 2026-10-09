@@ -52,7 +52,8 @@ export type Project = {
   state: string;
 };
 export type Member = { subject: string; role: string };
-export type Dataset = { id: string; name: string };
+export type GeometryType = "point" | "line" | "polygon";
+export type Dataset = { id: string; name: string; geometryType: GeometryType };
 export type Workspace = {
   id: string;
   baseRevision: string;
@@ -78,6 +79,8 @@ export type Commit = {
   subject: string;
   message: string;
   createdAt: string;
+  sourceWorkspace: string;
+  sourceBaseRevision: string;
 };
 export type Audit = {
   id: string;
@@ -97,4 +100,5 @@ export type Conflicts = {
   version: string;
   total: string;
   nextAfter?: string;
+  truncated: boolean;
 };

@@ -3,10 +3,9 @@
 //! Nonzero underflow is rejected. Decimal fractions use binary64 rounding;
 //! integers are validated from their original digits before any conversion.
 //! Serde's two private marker object keys are rejected before Value conversion.
-use crate::{Error, MAX_BYTES, Result, bad};
+use crate::{Error, Result, bad};
 use serde::Serialize;
 use serde_json::Value;
-use std::io::{self, Write};
 
 pub(crate) fn stored<T: serde::de::DeserializeOwned>(source: &str) -> Result<T> {
     let value = parse(source.as_bytes()).map_err(|error| {
@@ -185,55 +184,8 @@ fn range() -> Error {
     )
 }
 
-pub(crate) struct Budget {
-    remaining: usize,
-}
-impl Budget {
-    pub fn new() -> Self {
-        Self {
-            remaining: MAX_BYTES / 2,
-        }
-    }
-    pub fn take(&mut self, value: &Value) -> Result<()> {
-        // Charge the expanded Value tree as well as its serialized representation.
-        fn cost(v: &Value) -> usize {
-            std::mem::size_of::<Value>()
-                + match v {
-                    Value::String(s) => s.capacity(),
-                    Value::Array(a) => {
-                        (a.capacity() - a.len()) * std::mem::size_of::<Value>()
-                            + a.iter().map(cost).sum::<usize>()
-                    }
-                    Value::Object(o) => o.iter().map(|(k, v)| k.capacity() + 64 + cost(v)).sum(),
-                    _ => 0,
-                }
-        }
-        let n = cost(value);
-        self.remaining = self
-            .remaining
-            .checked_sub(n)
-            .ok_or_else(|| Error::new(413, "response too large; use a smaller page"))?;
-        Ok(())
-    }
-}
-struct Bounded(Vec<u8>);
-impl Write for Bounded {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > MAX_BYTES - self.0.len() {
-            return Err(io::Error::other("response limit"));
-        }
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
 pub(crate) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
-    let mut writer = Bounded(Vec::new());
-    serde_json::to_writer(&mut writer, value)
-        .map_err(|_| Error::new(413, "response too large; use a smaller page"))?;
-    Ok(writer.0)
+    serde_json::to_vec(value).map_err(|_| Error::new(500, "response encoding failed"))
 }
 #[cfg(test)]
 mod tests {
@@ -325,12 +277,10 @@ mod tests {
         );
     }
     #[test]
-    fn bounded_encoding_and_expansion() {
-        assert!(encode(&"x".repeat(MAX_BYTES)).is_err());
-        assert!(
-            Budget::new()
-                .take(&serde_json::json!(vec![0; 100_000]))
-                .is_err()
-        );
+    fn large_encoding_and_parsing() -> Result<()> {
+        let value = "x".repeat(5 * 1024 * 1024);
+        let encoded = encode(&value)?;
+        assert_eq!(crate::parse_json(&encoded)?, value);
+        Ok(())
     }
 }

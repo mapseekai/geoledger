@@ -20,12 +20,14 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import {
   Table,
+  TableCaption,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from "./ui/table";
+import { ChangeSummary } from "./change-summary";
 import { Inspector } from "./workspaces";
 export function HistoryPanel({
   project,
@@ -63,13 +65,17 @@ export function HistoryPanel({
         {page.busy ? (
           <Loading />
         ) : page.rows.length ? (
-          <Table>
+          <Table aria-label="版本历史">
+            <TableCaption className="caption-top p-3 text-left font-medium">
+              版本历史与数据集变更
+            </TableCaption>
             <TableHeader>
               <TableRow>
                 <TableHead>版本</TableHead>
                 <TableHead>说明</TableHead>
                 <TableHead>发布者</TableHead>
                 <TableHead>发布时间</TableHead>
+                <TableHead>数据集 / 要素变更</TableHead>
                 <TableHead className="cell-actions">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -91,6 +97,13 @@ export function HistoryPanel({
                     </span>
                   </TableCell>
                   <TableCell className="muted">{time(c.createdAt)}</TableCell>
+                  <TableCell>
+                    <ChangeSummary
+                      project={project.id}
+                      revision={c.revision}
+                      compact
+                    />
+                  </TableCell>
                   <TableCell className="cell-actions">
                     <div className="row-actions">
                       <Button
@@ -128,6 +141,9 @@ export function HistoryPanel({
         <Inspector
           title={`版本 r${inspect.revision}`}
           description={inspect.message}
+          summary={
+            <ChangeSummary project={project.id} revision={inspect.revision} />
+          }
           close={() => setInspect(undefined)}
           load={async (after) => {
             const r = await call<Changes>({

@@ -29,7 +29,7 @@ async fn large_conflicts_fit_trailers_and_keep_paginated_details() -> TestResult
     let dataset = app.execute(
         "review",
         "create_dataset",
-        json!({"project":project,"name":"features"}),
+        json!({"geometry_type":"point","project":project,"name":"features"}),
     )?["dataset"]
         .as_str()
         .ok_or("dataset")?
@@ -150,6 +150,7 @@ async fn large_conflicts_fit_trailers_and_keep_paginated_details() -> TestResult
     );
     let duplicate = client
         .create_dataset(authenticated(pb::DatasetRequest {
+            geometry_type: "point".into(),
             project,
             name: "features".into(),
         })?)

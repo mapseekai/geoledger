@@ -1,14 +1,15 @@
 import type { Feature, Geometry } from "geojson";
-import { parse, stringify } from "lossless-json";
+import { stringify } from "lossless-json";
+import { parseLosslessJson } from "./conflicts";
 export function pretty(raw: string): string {
   try {
-    return stringify(parse(raw), undefined, 2) ?? raw;
+    return stringify(parseLosslessJson(raw), undefined, 2) ?? raw;
   } catch {
     return raw;
   }
 }
 export function featureText(raw: string, id: string): string {
-  const value = parse(raw) as Record<string, unknown> | null;
+  const value = parseLosslessJson(raw) as Record<string, unknown> | null;
   if (
     !value ||
     typeof value !== "object" ||
@@ -24,7 +25,9 @@ export function featureText(raw: string, id: string): string {
 /** Geometry type for list display; reads with lossless-json and never throws. */
 export function geometryType(raw: string): string {
   try {
-    const value = parse(raw) as { geometry?: { type?: unknown } | null } | null;
+    const value = parseLosslessJson(raw) as {
+      geometry?: { type?: unknown } | null;
+    } | null;
     const type = value?.geometry?.type;
     return typeof type === "string" ? type : "无几何";
   } catch {

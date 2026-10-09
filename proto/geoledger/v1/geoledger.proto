@@ -10,14 +10,21 @@ service GeoLedger {
  rpc ListProjects(PageRequest) returns (ProjectsReply);
  rpc GetProject(ProjectRequest) returns (ProjectReply);
  rpc SetMember(MemberRequest) returns (OkReply);
+ rpc RenameProject(RenameProjectRequest) returns (ProjectReply);
+ rpc RenameDataset(RenameDatasetRequest) returns (DatasetReply);
+ rpc DeleteDataset(DeleteDatasetRequest) returns (OkReply);
  rpc CreateDataset(DatasetRequest) returns (DatasetReply);
  rpc ListDatasets(ProjectPageRequest) returns (DatasetsReply);
  rpc CreateWorkspace(ProjectRequest) returns (WorkspaceReply);
  rpc ListWorkspaces(ProjectPageRequest) returns (WorkspacesReply);
  rpc GetWorkspace(WorkspaceRequest) returns (WorkspaceReply);
  rpc Save(SaveRequest) returns (SaveReply);
+ // Concatenated chunks encode one SaveRequest; apply atomically only after EOF.
+ rpc SaveStream(stream DataChunk) returns (SaveReply);
  rpc Discard(VersionRequest) returns (DiscardReply);
  rpc Features(FeaturesRequest) returns (FeaturesReply);
+ // Concatenated chunks encode one snapshot-consistent FeaturesReply.
+ rpc FeaturesStream(FeaturesRequest) returns (stream DataChunk);
  rpc Diff(DiffRequest) returns (DiffReply);
  rpc Conflicts(DiffRequest) returns (ConflictsReply);
  rpc History(HistoryRequest) returns (HistoryReply);
@@ -31,6 +38,11 @@ service GeoLedger {
  rpc RemoveMember(MemberRefRequest) returns (OkReply);
  rpc ArchiveProject(ArchiveProjectRequest) returns (ProjectReply);
  rpc DeleteProject(DeleteProjectRequest) returns (OkReply);
+}
+message DataChunk {
+ bytes data = 1;
+ // Required on the first chunk, zero on subsequent chunks. Detects truncated EOF.
+ uint64 total_bytes = 2;
 }
 message NameRequest {
  string name = 1;
@@ -68,6 +80,7 @@ message DeleteProjectRequest {
 message DatasetRequest {
  string project = 1;
  string name = 2;
+ string geometry_type = 3;
 }
 message WorkspaceRequest {
  string project = 1;
@@ -170,6 +183,7 @@ message OkReply {
 message DatasetReply {
  string dataset = 1;
  string name = 2;
+ string geometry_type = 3;
 }
 message DatasetsReply {
  repeated DatasetReply datasets = 1;
@@ -186,6 +200,8 @@ message WorkspacesReply {
 message SaveReply {
  int64 version = 1;
  int64 changes = 2;
+ // Topology diagnostics; coordinates are stored unchanged.
+ repeated string warnings = 3;
 }
 message DiscardReply {
  int64 version = 1;
@@ -235,6 +251,8 @@ message CommitInfo {
  string subject = 2;
  string message = 3;
  string created_at = 4;
+ string source_workspace = 5;
+ int64 source_base_revision = 6;
 }
 message HistoryReply {
  repeated CommitInfo commits = 1;
@@ -289,3 +307,7 @@ message ErrorAny {
  string type_url = 1;
  bytes value = 2;
 }
+
+message RenameProjectRequest { string project = 1; string name = 2; }
+message RenameDatasetRequest { string project = 1; string dataset = 2; string name = 3; }
+message DeleteDatasetRequest { string project = 1; string dataset = 2; string confirm_name = 3; }

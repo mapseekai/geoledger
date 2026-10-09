@@ -85,6 +85,8 @@ npm --prefix web run build
 
 生产构建输出至 `web/.next`；浏览器与真实服务联调入口见 [开发指南](../docs/development.md#控制台浏览器验证)。
 
+GeoJSON 文件上传专项浏览器验证：`python3 scripts/test-console-upload.py --url http://localhost:3000 --token-file target/console-test/admin-credentials.json --screenshots /tmp/geoledger-upload-shots`。使用隔离测试服务，验证大于 1 MiB 的文件、多批次导入、中断重试、精确数字和手机上传入口。 添加 `--feature-bytes 12582912` 可验证单个 12 MiB 要素经 Web/BFF/gRPC 流式上传、查询及发布；这是验证用例大小，不是产品上限。
+
 ### 生产运行
 
 完成构建并配置运行环境后执行：
@@ -132,3 +134,11 @@ Compose 启动业务服务和控制台，控制台默认使用 `http://localhost
 界面以中性灰白为底色，GeoLedger 橙色为强调色，文字与实心按钮使用深橙 `#cc3a05`。表格提供清晰的行分隔、悬停反馈和操作菜单；手机布局采用抽屉导航和自适应工具栏。
 
 Inter 与 Newsreader 字体本地打包，中文衬线采用系统字体。[GeoLedger SVG 标志](public/logo.svg) 用于登录页、导航和浏览器图标，深色背景中主体跟随文字颜色。相关主题实现见 `src/app/globals.css`，组件和字体许可见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+
+按数据集变更统计的浏览器验证使用 `scripts/test-console-changes.py`，参数与上传专项验证相同，覆盖多数据集、跨分页统计、工作区版本图表头、工作区表格和版本历史。
+
+数据类型和资源删除回归：在一次性服务环境运行 `scripts/test-console-lifecycle.py --url http://localhost:13001 --token-file <临时凭据文件> --chromium <浏览器路径> --geojson <EPSG:3857 的 15 要素行政边界文件>`。脚本通过真实界面验证坐标转换、点线面限制、重命名、删除和共享版本保留；不要对生产数据运行。
+
+控件交互回归：`python3 scripts/test-console-shadcn.py --url http://localhost:13001 --token-file <临时凭据文件> --chromium <浏览器路径>`。仅用于一次性测试服务，覆盖 Select 键盘操作及表单提交、Tabs 焦点与面板切换、Popover 关闭后的焦点恢复、冲突列表 Button 和手机布局。
+
+实际大文件验证：`python3 scripts/test-console-large-file.py --url http://localhost:13001 --token-file <临时凭据文件> --chromium <浏览器路径> --geojson <GeoJSON 文件路径> --report /tmp/geoledger-large-file-report.json`。仅用于一次性测试服务；会创建项目及面数据集、通过浏览器导入整份文件、逐批加载全部地图要素、验证搜索与选择、发布并分页查询，逐个比对原文件的几何与属性。报告记录文件大小、各阶段耗时、请求状态和拓扑警告数量，截图与报告放在同一位置。

@@ -36,11 +36,17 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<String>> {
     }
     structure(value)?;
     positions(value)?;
-    let g = geometry(value)?;
-    if !g.is_valid() {
-        return Err(Error::new(400, "invalid geometry topology"));
-    }
     Ok(Some(value.to_string()))
+}
+/// Topology is diagnostic: preserve source coordinates rather than repairing boundaries.
+pub(crate) fn topology_warning(value: &Value) -> Result<Option<String>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    Ok(geometry(value)?
+        .check_validation()
+        .err()
+        .map(|e| e.to_string()))
 }
 pub(crate) fn bounds(source: &str) -> Result<Option<geo::Rect<f64>>> {
     let v: Value = serde_json::from_str(source).map_err(Error::stored_json)?;
@@ -127,10 +133,15 @@ mod tests {
             json!({"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1]]]}),
             json!({"type":"LineString","coordinates":[[0,0],[1,1,2]]}),
             json!({"type":"Point","coordinates":[181,0]}),
-            json!({"type":"Polygon","coordinates":[[[0,0],[1,1],[0,1],[1,0],[0,0]]]}),
         ] {
             assert!(normalize(&g).is_err());
         }
+        let crossing = json!({"type":"Polygon","coordinates":[[[0,0],[1,1],[0,1],[1,0],[0,0]]]});
+        assert_eq!(
+            normalize(&crossing).ok().flatten(),
+            Some(crossing.to_string())
+        );
+        assert!(topology_warning(&crossing).ok().flatten().is_some());
         let xyz = json!({"type":"LineString","coordinates":[[0,0,3],[1,1,4]]});
         assert_eq!(normalize(&xyz).ok().flatten(), Some(xyz.to_string()));
     }

@@ -1,5 +1,6 @@
-import { Client, stringifyJson } from "@geoledger/client";
+import { Client, GeoLedgerError, stringifyJson } from "@geoledger/client";
 import { requestSchema } from "./requests";
+import { summarizeChanges, SummaryVersionError } from "./change-summary";
 /** The only bridge to the business SDK. No generated transport types or forwarding. */
 export async function execute(
   client: Client,
@@ -17,12 +18,58 @@ export async function execute(
       return client.createProject(r.name);
     case "datasets":
       return client.datasets(r.project, r);
+    case "renameProject":
+      return client.renameProject(r.project, r.name);
+    case "renameDataset":
+      return client.renameDataset(r.project, r.dataset, r.name);
+    case "deleteDataset":
+      await client.deleteDataset(r.project, r.dataset, r.confirmName);
+      return { ok: true };
     case "createDataset":
-      return client.createDataset(r.project, r.name);
+      return client.createDataset(r.project, r.name, r.geometryType);
     case "workspaces":
       return client.workspaces(r.project, r);
     case "workspace":
       return client.workspaceInfo(r.project, r.workspace);
+    case "workspaceSummary":
+    case "commitSummary": {
+      const names = new Map<string, string>();
+      let after = "";
+      for (;;) {
+        const datasets = await client.datasets(r.project, {
+          after,
+          limit: 100,
+        });
+        for (const dataset of datasets) names.set(dataset.id, dataset.name);
+        if (datasets.length < 100) break;
+        after = datasets.at(-1)!.id;
+      }
+      if (r.action === "commitSummary")
+        return summarizeChanges(
+          "commit",
+          (after, limit) =>
+            client.commit(r.project, BigInt(r.revision), { after, limit }),
+          names,
+        );
+      const workspace = await client.workspaceInfo(r.project, r.workspace);
+      const result = await summarizeChanges(
+        "workspace",
+        (after, limit) => client.diff(r.project, r.workspace, { after, limit }),
+        names,
+        workspace.version,
+      ).catch((error: unknown) => {
+        if (error instanceof SummaryVersionError)
+          throw new GeoLedgerError("conflict", error.message);
+        throw error;
+      });
+      const current = await client.workspaceInfo(r.project, r.workspace);
+      if (current.version !== workspace.version)
+        throw new GeoLedgerError(
+          "conflict",
+          "工作区已变化，请刷新后重新统计。",
+        );
+      return result;
+    }
     case "createWorkspace":
       return (await client.createWorkspace(r.project)).info;
     case "features": {

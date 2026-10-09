@@ -65,6 +65,7 @@ const TABLES: &[Table] = &[
             ("project", Text, false),
             ("id", Text, false),
             ("name", Text, false),
+            ("geometry_type", Text, false),
         ],
         key: 2,
     },

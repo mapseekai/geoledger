@@ -97,23 +97,52 @@ export function NameDialog({
   title,
   close,
   submit,
+  initialName = "",
+  children,
+  actionLabel = "创建",
+  description,
+  confirmName,
 }: {
   title: string;
+  initialName?: string;
+  children?: ReactNode;
+  actionLabel?: string;
+  description?: string;
+  confirmName?: string;
   close: () => void;
   submit: (name: string) => Promise<void>;
 }) {
   const task = useAction();
   return (
-    <Modal title={title} close={task.busy ? () => {} : close}>
+    <Modal
+      title={title}
+      description={description}
+      close={task.busy ? () => {} : close}
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          const name = String(new FormData(e.currentTarget).get("name")).trim();
-          void task.run(() => submit(name));
+          const entered = String(new FormData(e.currentTarget).get("name"));
+          const name = confirmName === undefined ? entered.trim() : entered;
+          void task.run(async () => {
+            if (confirmName !== undefined && name !== confirmName)
+              throw new Error("请输入完全一致的名称以确认删除。");
+            await submit(name);
+          });
         }}
       >
-        <Label htmlFor="name">名称</Label>
-        <Input id="name" name="name" autoFocus required maxLength={256} />
+        <Label htmlFor="name">
+          {confirmName === undefined ? "名称" : "输入名称确认删除"}
+        </Label>
+        <Input
+          id="name"
+          name="name"
+          defaultValue={initialName}
+          autoFocus
+          required
+          maxLength={256}
+        />
+        {children}
         <ErrorBox message={task.error} />
         <div className="form-actions">
           <Button
@@ -125,7 +154,7 @@ export function NameDialog({
             取消
           </Button>
           <Button type="submit" disabled={task.busy}>
-            {task.busy ? "正在创建…" : "创建"}
+            {task.busy ? "正在处理…" : actionLabel}
           </Button>
         </div>
       </form>

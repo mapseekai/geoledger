@@ -6,6 +6,14 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class DataChunk(_message.Message):
+    __slots__ = ("data", "total_bytes")
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
+    data: bytes
+    total_bytes: int
+    def __init__(self, data: _Optional[bytes] = ..., total_bytes: _Optional[int] = ...) -> None: ...
+
 class NameRequest(_message.Message):
     __slots__ = ("name",)
     NAME_FIELD_NUMBER: _ClassVar[int]
@@ -71,12 +79,14 @@ class DeleteProjectRequest(_message.Message):
     def __init__(self, project: _Optional[str] = ..., confirm_name: _Optional[str] = ...) -> None: ...
 
 class DatasetRequest(_message.Message):
-    __slots__ = ("project", "name")
+    __slots__ = ("project", "name", "geometry_type")
     PROJECT_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
+    GEOMETRY_TYPE_FIELD_NUMBER: _ClassVar[int]
     project: str
     name: str
-    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
+    geometry_type: str
+    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ...) -> None: ...
 
 class WorkspaceRequest(_message.Message):
     __slots__ = ("project", "workspace")
@@ -273,12 +283,14 @@ class OkReply(_message.Message):
     def __init__(self, ok: bool = ...) -> None: ...
 
 class DatasetReply(_message.Message):
-    __slots__ = ("dataset", "name")
+    __slots__ = ("dataset", "name", "geometry_type")
     DATASET_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
+    GEOMETRY_TYPE_FIELD_NUMBER: _ClassVar[int]
     dataset: str
     name: str
-    def __init__(self, dataset: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
+    geometry_type: str
+    def __init__(self, dataset: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ...) -> None: ...
 
 class DatasetsReply(_message.Message):
     __slots__ = ("datasets",)
@@ -305,12 +317,14 @@ class WorkspacesReply(_message.Message):
     def __init__(self, workspaces: _Optional[_Iterable[_Union[WorkspaceReply, _Mapping]]] = ...) -> None: ...
 
 class SaveReply(_message.Message):
-    __slots__ = ("version", "changes")
+    __slots__ = ("version", "changes", "warnings")
     VERSION_FIELD_NUMBER: _ClassVar[int]
     CHANGES_FIELD_NUMBER: _ClassVar[int]
+    WARNINGS_FIELD_NUMBER: _ClassVar[int]
     version: int
     changes: int
-    def __init__(self, version: _Optional[int] = ..., changes: _Optional[int] = ...) -> None: ...
+    warnings: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, version: _Optional[int] = ..., changes: _Optional[int] = ..., warnings: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class DiscardReply(_message.Message):
     __slots__ = ("version", "status")
@@ -399,16 +413,20 @@ class ConflictsReply(_message.Message):
     def __init__(self, head: _Optional[int] = ..., version: _Optional[int] = ..., total: _Optional[int] = ..., next_after: _Optional[str] = ..., truncated: bool = ..., conflicts: _Optional[_Iterable[_Union[Conflict, _Mapping]]] = ...) -> None: ...
 
 class CommitInfo(_message.Message):
-    __slots__ = ("revision", "subject", "message", "created_at")
+    __slots__ = ("revision", "subject", "message", "created_at", "source_workspace", "source_base_revision")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     SUBJECT_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_WORKSPACE_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_BASE_REVISION_FIELD_NUMBER: _ClassVar[int]
     revision: int
     subject: str
     message: str
     created_at: str
-    def __init__(self, revision: _Optional[int] = ..., subject: _Optional[str] = ..., message: _Optional[str] = ..., created_at: _Optional[str] = ...) -> None: ...
+    source_workspace: str
+    source_base_revision: int
+    def __init__(self, revision: _Optional[int] = ..., subject: _Optional[str] = ..., message: _Optional[str] = ..., created_at: _Optional[str] = ..., source_workspace: _Optional[str] = ..., source_base_revision: _Optional[int] = ...) -> None: ...
 
 class HistoryReply(_message.Message):
     __slots__ = ("commits",)
@@ -509,3 +527,31 @@ class ErrorAny(_message.Message):
     type_url: str
     value: bytes
     def __init__(self, type_url: _Optional[str] = ..., value: _Optional[bytes] = ...) -> None: ...
+
+class RenameProjectRequest(_message.Message):
+    __slots__ = ("project", "name")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    name: str
+    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
+
+class RenameDatasetRequest(_message.Message):
+    __slots__ = ("project", "dataset", "name")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    DATASET_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    dataset: str
+    name: str
+    def __init__(self, project: _Optional[str] = ..., dataset: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
+
+class DeleteDatasetRequest(_message.Message):
+    __slots__ = ("project", "dataset", "confirm_name")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    DATASET_FIELD_NUMBER: _ClassVar[int]
+    CONFIRM_NAME_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    dataset: str
+    confirm_name: str
+    def __init__(self, project: _Optional[str] = ..., dataset: _Optional[str] = ..., confirm_name: _Optional[str] = ...) -> None: ...

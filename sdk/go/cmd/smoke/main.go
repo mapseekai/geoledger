@@ -46,7 +46,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	dataset, err := client.CreateDataset(ctx, project.ID, "places")
+	dataset, err := client.CreateDataset(ctx, project.ID, "places", "point")
 	if err != nil {
 		return err
 	}
@@ -100,13 +100,17 @@ func run() error {
 	if len(rows.Features) != 1 || !bytes.Contains(rows.Features[0], []byte("18446744073709551615")) || !bytes.Contains(rows.Features[0], []byte(`"geojson":"hello"`)) {
 		return fmt.Errorf("feature roundtrip failed")
 	}
+	history, err := client.History(ctx, project.ID, 0, 100)
+	if err != nil || len(history) != 1 || history[0].SourceWorkspace != receipt.Workspace || history[0].SourceBaseRevision != 0 {
+		return fmt.Errorf("history source workspace/base: %v %v", history, err)
+	}
 	changed := *draft.PendingPublication()
 	changed.Message = "different"
 	_, err = client.Publish(ctx, changed)
 	if !errors.As(err, &own) || own.Code != "conflict" || own.Uncertain {
 		return fmt.Errorf("wrong error: %v", err)
 	}
-	_, err = client.CreateDataset(ctx, project.ID, "places")
+	_, err = client.CreateDataset(ctx, project.ID, "places", "point")
 	if !errors.As(err, &own) || own.Code != "conflict" {
 		return fmt.Errorf("wrong duplicate error: %v", err)
 	}

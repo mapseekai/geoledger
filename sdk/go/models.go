@@ -26,8 +26,9 @@ type Member struct {
 }
 
 type Dataset struct {
-	ID   string `json:"dataset"`
-	Name string `json:"name"`
+	GeometryType string `json:"geometry_type"`
+	ID           string `json:"dataset"`
+	Name         string `json:"name"`
 }
 
 type WorkspaceInfo struct {
@@ -38,8 +39,9 @@ type WorkspaceInfo struct {
 }
 
 type SaveResult struct {
-	Version int64 `json:"version"`
-	Changes int64 `json:"changes"`
+	Warnings []string `json:"warnings"`
+	Version  int64    `json:"version"`
+	Changes  int64    `json:"changes"`
 }
 
 type DiscardResult struct {
@@ -92,12 +94,13 @@ type Conflicts struct {
 }
 
 type Commit struct {
-	Revision  int64  `json:"revision"`
-	Subject   string `json:"subject"`
-	Message   string `json:"message"`
-	CreatedAt string `json:"created_at"`
+	Revision           int64  `json:"revision"`
+	Subject            string `json:"subject"`
+	Message            string `json:"message"`
+	CreatedAt          string `json:"created_at"`
+	SourceWorkspace    string `json:"source_workspace"`
+	SourceBaseRevision int64  `json:"source_base_revision"`
 }
-
 type CommitChanges struct {
 	Revision int64    `json:"revision"`
 	Changes  []Change `json:"changes"`

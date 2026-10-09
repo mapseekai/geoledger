@@ -8,6 +8,19 @@ struct Service {
 }
 #[tonic::async_trait]
 impl wire::geo_ledger_server::GeoLedger for Service {
+    type FeaturesStreamStream = tokio_stream::Empty<Result<wire::DataChunk, Status>>;
+    async fn save_stream(
+        &self,
+        _request: Request<tonic::Streaming<wire::DataChunk>>,
+    ) -> Result<Response<wire::SaveReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn features_stream(
+        &self,
+        _request: Request<wire::FeaturesRequest>,
+    ) -> Result<Response<Self::FeaturesStreamStream>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
     async fn info(
         &self,
         _request: Request<wire::Empty>,
@@ -35,6 +48,24 @@ impl wire::geo_ledger_server::GeoLedger for Service {
     async fn set_member(
         &self,
         _request: Request<wire::MemberRequest>,
+    ) -> Result<Response<wire::OkReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn rename_project(
+        &self,
+        _request: Request<wire::RenameProjectRequest>,
+    ) -> Result<Response<wire::ProjectReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn rename_dataset(
+        &self,
+        _request: Request<wire::RenameDatasetRequest>,
+    ) -> Result<Response<wire::DatasetReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn delete_dataset(
+        &self,
+        _request: Request<wire::DeleteDatasetRequest>,
     ) -> Result<Response<wire::OkReply>, Status> {
         Err(Status::unimplemented("unused"))
     }

@@ -20,22 +20,27 @@ const version = { ...workspace, version: revision };
 const edit = z.strictObject({
   dataset: id,
   featureId,
-  feature: z
-    .string()
-    .min(1)
-    .max(64 * 1024)
-    .nullable(),
+  feature: z.string().min(1).nullable(),
 });
 const variants = {
   info: {},
   projects: page,
   project,
   createProject: { name: text(256) },
+  renameProject: { ...project, name: text(256) },
+  renameDataset: { ...project, dataset: id, name: text(256) },
+  deleteDataset: { ...project, dataset: id, confirmName: text(256) },
   datasets: { ...project, ...page },
-  createDataset: { ...project, name: text(256) },
+  createDataset: {
+    ...project,
+    name: text(256),
+    geometryType: z.enum(["point", "line", "polygon"]),
+  },
   workspaces: { ...project, ...page },
   createWorkspace: project,
   workspace,
+  workspaceSummary: workspace,
+  commitSummary: { ...project, revision },
   features: {
     ...project,
     dataset: id,
@@ -66,6 +71,19 @@ const variants = {
   deleteProject: { ...project, confirmName: text(256) },
 };
 export const requestSchema = z.discriminatedUnion("action", [
+  z.strictObject({
+    action: z.literal("renameProject"),
+    ...variants.renameProject,
+  }),
+  z.strictObject({
+    action: z.literal("renameDataset"),
+    ...variants.renameDataset,
+  }),
+  z.strictObject({
+    action: z.literal("deleteDataset"),
+    ...variants.deleteDataset,
+  }),
+
   z.strictObject({ action: z.literal("info"), ...variants.info }),
   z.strictObject({ action: z.literal("projects"), ...variants.projects }),
   z.strictObject({ action: z.literal("project"), ...variants.project }),
@@ -84,6 +102,14 @@ export const requestSchema = z.discriminatedUnion("action", [
     ...variants.createWorkspace,
   }),
   z.strictObject({ action: z.literal("workspace"), ...variants.workspace }),
+  z.strictObject({
+    action: z.literal("workspaceSummary"),
+    ...variants.workspaceSummary,
+  }),
+  z.strictObject({
+    action: z.literal("commitSummary"),
+    ...variants.commitSummary,
+  }),
   z.strictObject({ action: z.literal("features"), ...variants.features }),
   z.strictObject({ action: z.literal("save"), ...variants.save }),
   z.strictObject({ action: z.literal("publish"), ...variants.publish }),

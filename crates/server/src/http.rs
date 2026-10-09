@@ -87,12 +87,12 @@ async fn handle(s: &Service, call: &mut Call, op: &str, request: Request) -> Res
     let permit = s.admit(call, request.headers())?;
     let body = match tokio::time::timeout(
         s.limits.request_timeout,
-        axum::body::to_bytes(request.into_body(), MAX_BYTES),
+        axum::body::to_bytes(request.into_body(), usize::MAX),
     )
     .await
     {
         Err(_) => return Err(Error::new(408, "request body timeout")),
-        Ok(Err(_)) => return Err(Error::new(413, "request body too large")),
+        Ok(Err(_)) => return Err(Error::new(400, "failed to read request body")),
         Ok(Ok(b)) => b,
     };
     let input = geoledger_engine::parse_json(&body)?;

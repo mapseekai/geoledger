@@ -11,7 +11,11 @@ import {
   type ChannelCredentials,
   Client,
   type ClientOptions,
+  type ClientReadableStream,
   type ClientUnaryCall,
+  type ClientWritableStream,
+  type handleClientStreamingCall,
+  type handleServerStreamingCall,
   type handleUnaryCall,
   makeGenericClientConstructor,
   type Metadata,
@@ -20,6 +24,12 @@ import {
 } from "@grpc/grpc-js";
 
 export const protobufPackage = "geoledger.v1";
+
+export interface DataChunk {
+  data: Buffer;
+  /** Required on the first chunk, zero on subsequent chunks. Detects truncated EOF. */
+  totalBytes: string;
+}
 
 export interface NameRequest {
   name: string;
@@ -65,6 +75,7 @@ export interface DeleteProjectRequest {
 export interface DatasetRequest {
   project: string;
   name: string;
+  geometryType: string;
 }
 
 export interface WorkspaceRequest {
@@ -187,6 +198,7 @@ export interface OkReply {
 export interface DatasetReply {
   dataset: string;
   name: string;
+  geometryType: string;
 }
 
 export interface DatasetsReply {
@@ -207,6 +219,8 @@ export interface WorkspacesReply {
 export interface SaveReply {
   version: string;
   changes: string;
+  /** Topology diagnostics; coordinates are stored unchanged. */
+  warnings: string[];
 }
 
 export interface DiscardReply {
@@ -263,6 +277,8 @@ export interface CommitInfo {
   subject: string;
   message: string;
   createdAt: string;
+  sourceWorkspace: string;
+  sourceBaseRevision: string;
 }
 
 export interface HistoryReply {
@@ -329,6 +345,112 @@ export interface ErrorAny {
   typeUrl: string;
   value: Buffer;
 }
+
+export interface RenameProjectRequest {
+  project: string;
+  name: string;
+}
+
+export interface RenameDatasetRequest {
+  project: string;
+  dataset: string;
+  name: string;
+}
+
+export interface DeleteDatasetRequest {
+  project: string;
+  dataset: string;
+  confirmName: string;
+}
+
+function createBaseDataChunk(): DataChunk {
+  return { data: Buffer.alloc(0), totalBytes: "0" };
+}
+
+export const DataChunk: MessageFns<DataChunk> = {
+  encode(message: DataChunk, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.data.length !== 0) {
+      writer.uint32(10).bytes(message.data);
+    }
+    if (message.totalBytes !== "0") {
+      writer.uint32(16).uint64(message.totalBytes);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DataChunk {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseDataChunk();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.data = Buffer.from(reader.bytes());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.totalBytes = reader.uint64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): DataChunk {
+    return {
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0),
+      totalBytes: isSet(object.totalBytes)
+        ? globalThis.String(object.totalBytes)
+        : isSet(object.total_bytes)
+        ? globalThis.String(object.total_bytes)
+        : "0",
+    };
+  },
+
+  toJSON(message: DataChunk): unknown {
+    const obj: any = {};
+    if (message.data.length !== 0) {
+      obj.data = base64FromBytes(message.data);
+    }
+    if (message.totalBytes !== "0") {
+      obj.totalBytes = message.totalBytes;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<DataChunk>, I>>(base?: I): DataChunk {
+    return DataChunk.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DataChunk>, I>>(object: I): DataChunk {
+    const message = createBaseDataChunk();
+    message.data = object.data ?? Buffer.alloc(0);
+    message.totalBytes = object.totalBytes ?? "0";
+    return message;
+  },
+};
 
 function createBaseNameRequest(): NameRequest {
   return { name: "" };
@@ -1011,7 +1133,7 @@ export const DeleteProjectRequest: MessageFns<DeleteProjectRequest> = {
 };
 
 function createBaseDatasetRequest(): DatasetRequest {
-  return { project: "", name: "" };
+  return { project: "", name: "", geometryType: "" };
 }
 
 export const DatasetRequest: MessageFns<DatasetRequest> = {
@@ -1021,6 +1143,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     }
     if (message.name !== "") {
       writer.uint32(18).string(message.name);
+    }
+    if (message.geometryType !== "") {
+      writer.uint32(26).string(message.geometryType);
     }
     return writer;
   },
@@ -1054,6 +1179,14 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
             message.name = reader.string();
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.geometryType = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1070,6 +1203,11 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     return {
       project: isSet(object.project) ? globalThis.String(object.project) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
+      geometryType: isSet(object.geometryType)
+        ? globalThis.String(object.geometryType)
+        : isSet(object.geometry_type)
+        ? globalThis.String(object.geometry_type)
+        : "",
     };
   },
 
@@ -1081,6 +1219,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     if (message.name !== "") {
       obj.name = message.name;
     }
+    if (message.geometryType !== "") {
+      obj.geometryType = message.geometryType;
+    }
     return obj;
   },
 
@@ -1091,6 +1232,7 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     const message = createBaseDatasetRequest();
     message.project = object.project ?? "";
     message.name = object.name ?? "";
+    message.geometryType = object.geometryType ?? "";
     return message;
   },
 };
@@ -3113,7 +3255,7 @@ export const OkReply: MessageFns<OkReply> = {
 };
 
 function createBaseDatasetReply(): DatasetReply {
-  return { dataset: "", name: "" };
+  return { dataset: "", name: "", geometryType: "" };
 }
 
 export const DatasetReply: MessageFns<DatasetReply> = {
@@ -3123,6 +3265,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     }
     if (message.name !== "") {
       writer.uint32(18).string(message.name);
+    }
+    if (message.geometryType !== "") {
+      writer.uint32(26).string(message.geometryType);
     }
     return writer;
   },
@@ -3156,6 +3301,14 @@ export const DatasetReply: MessageFns<DatasetReply> = {
             message.name = reader.string();
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.geometryType = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3172,6 +3325,11 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     return {
       dataset: isSet(object.dataset) ? globalThis.String(object.dataset) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
+      geometryType: isSet(object.geometryType)
+        ? globalThis.String(object.geometryType)
+        : isSet(object.geometry_type)
+        ? globalThis.String(object.geometry_type)
+        : "",
     };
   },
 
@@ -3183,6 +3341,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     if (message.name !== "") {
       obj.name = message.name;
     }
+    if (message.geometryType !== "") {
+      obj.geometryType = message.geometryType;
+    }
     return obj;
   },
 
@@ -3193,6 +3354,7 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     const message = createBaseDatasetReply();
     message.dataset = object.dataset ?? "";
     message.name = object.name ?? "";
+    message.geometryType = object.geometryType ?? "";
     return message;
   },
 };
@@ -3461,7 +3623,7 @@ export const WorkspacesReply: MessageFns<WorkspacesReply> = {
 };
 
 function createBaseSaveReply(): SaveReply {
-  return { version: "0", changes: "0" };
+  return { version: "0", changes: "0", warnings: [] };
 }
 
 export const SaveReply: MessageFns<SaveReply> = {
@@ -3471,6 +3633,9 @@ export const SaveReply: MessageFns<SaveReply> = {
     }
     if (message.changes !== "0") {
       writer.uint32(16).int64(message.changes);
+    }
+    for (const v of message.warnings) {
+      writer.uint32(26).string(v!);
     }
     return writer;
   },
@@ -3504,6 +3669,14 @@ export const SaveReply: MessageFns<SaveReply> = {
             message.changes = reader.int64().toString();
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.warnings.push(reader.string());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3520,6 +3693,7 @@ export const SaveReply: MessageFns<SaveReply> = {
     return {
       version: isSet(object.version) ? globalThis.String(object.version) : "0",
       changes: isSet(object.changes) ? globalThis.String(object.changes) : "0",
+      warnings: globalThis.Array.isArray(object?.warnings) ? object.warnings.map((e: any) => globalThis.String(e)) : [],
     };
   },
 
@@ -3531,6 +3705,9 @@ export const SaveReply: MessageFns<SaveReply> = {
     if (message.changes !== "0") {
       obj.changes = message.changes;
     }
+    if (message.warnings?.length) {
+      obj.warnings = message.warnings;
+    }
     return obj;
   },
 
@@ -3541,6 +3718,7 @@ export const SaveReply: MessageFns<SaveReply> = {
     const message = createBaseSaveReply();
     message.version = object.version ?? "0";
     message.changes = object.changes ?? "0";
+    message.warnings = object.warnings?.map((e) => e) || [];
     return message;
   },
 };
@@ -4418,7 +4596,7 @@ export const ConflictsReply: MessageFns<ConflictsReply> = {
 };
 
 function createBaseCommitInfo(): CommitInfo {
-  return { revision: "0", subject: "", message: "", createdAt: "" };
+  return { revision: "0", subject: "", message: "", createdAt: "", sourceWorkspace: "", sourceBaseRevision: "0" };
 }
 
 export const CommitInfo: MessageFns<CommitInfo> = {
@@ -4434,6 +4612,12 @@ export const CommitInfo: MessageFns<CommitInfo> = {
     }
     if (message.createdAt !== "") {
       writer.uint32(34).string(message.createdAt);
+    }
+    if (message.sourceWorkspace !== "") {
+      writer.uint32(42).string(message.sourceWorkspace);
+    }
+    if (message.sourceBaseRevision !== "0") {
+      writer.uint32(48).int64(message.sourceBaseRevision);
     }
     return writer;
   },
@@ -4483,6 +4667,22 @@ export const CommitInfo: MessageFns<CommitInfo> = {
             message.createdAt = reader.string();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.sourceWorkspace = reader.string();
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.sourceBaseRevision = reader.int64().toString();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -4505,6 +4705,16 @@ export const CommitInfo: MessageFns<CommitInfo> = {
         : isSet(object.created_at)
         ? globalThis.String(object.created_at)
         : "",
+      sourceWorkspace: isSet(object.sourceWorkspace)
+        ? globalThis.String(object.sourceWorkspace)
+        : isSet(object.source_workspace)
+        ? globalThis.String(object.source_workspace)
+        : "",
+      sourceBaseRevision: isSet(object.sourceBaseRevision)
+        ? globalThis.String(object.sourceBaseRevision)
+        : isSet(object.source_base_revision)
+        ? globalThis.String(object.source_base_revision)
+        : "0",
     };
   },
 
@@ -4522,6 +4732,12 @@ export const CommitInfo: MessageFns<CommitInfo> = {
     if (message.createdAt !== "") {
       obj.createdAt = message.createdAt;
     }
+    if (message.sourceWorkspace !== "") {
+      obj.sourceWorkspace = message.sourceWorkspace;
+    }
+    if (message.sourceBaseRevision !== "0") {
+      obj.sourceBaseRevision = message.sourceBaseRevision;
+    }
     return obj;
   },
 
@@ -4534,6 +4750,8 @@ export const CommitInfo: MessageFns<CommitInfo> = {
     message.subject = object.subject ?? "";
     message.message = object.message ?? "";
     message.createdAt = object.createdAt ?? "";
+    message.sourceWorkspace = object.sourceWorkspace ?? "";
+    message.sourceBaseRevision = object.sourceBaseRevision ?? "0";
     return message;
   },
 };
@@ -5578,6 +5796,297 @@ export const ErrorAny: MessageFns<ErrorAny> = {
   },
 };
 
+function createBaseRenameProjectRequest(): RenameProjectRequest {
+  return { project: "", name: "" };
+}
+
+export const RenameProjectRequest: MessageFns<RenameProjectRequest> = {
+  encode(message: RenameProjectRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.project !== "") {
+      writer.uint32(10).string(message.project);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RenameProjectRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRenameProjectRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.project = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): RenameProjectRequest {
+    return {
+      project: isSet(object.project) ? globalThis.String(object.project) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+    };
+  },
+
+  toJSON(message: RenameProjectRequest): unknown {
+    const obj: any = {};
+    if (message.project !== "") {
+      obj.project = message.project;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RenameProjectRequest>, I>>(base?: I): RenameProjectRequest {
+    return RenameProjectRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RenameProjectRequest>, I>>(object: I): RenameProjectRequest {
+    const message = createBaseRenameProjectRequest();
+    message.project = object.project ?? "";
+    message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseRenameDatasetRequest(): RenameDatasetRequest {
+  return { project: "", dataset: "", name: "" };
+}
+
+export const RenameDatasetRequest: MessageFns<RenameDatasetRequest> = {
+  encode(message: RenameDatasetRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.project !== "") {
+      writer.uint32(10).string(message.project);
+    }
+    if (message.dataset !== "") {
+      writer.uint32(18).string(message.dataset);
+    }
+    if (message.name !== "") {
+      writer.uint32(26).string(message.name);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): RenameDatasetRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRenameDatasetRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.project = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.dataset = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): RenameDatasetRequest {
+    return {
+      project: isSet(object.project) ? globalThis.String(object.project) : "",
+      dataset: isSet(object.dataset) ? globalThis.String(object.dataset) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+    };
+  },
+
+  toJSON(message: RenameDatasetRequest): unknown {
+    const obj: any = {};
+    if (message.project !== "") {
+      obj.project = message.project;
+    }
+    if (message.dataset !== "") {
+      obj.dataset = message.dataset;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<RenameDatasetRequest>, I>>(base?: I): RenameDatasetRequest {
+    return RenameDatasetRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<RenameDatasetRequest>, I>>(object: I): RenameDatasetRequest {
+    const message = createBaseRenameDatasetRequest();
+    message.project = object.project ?? "";
+    message.dataset = object.dataset ?? "";
+    message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseDeleteDatasetRequest(): DeleteDatasetRequest {
+  return { project: "", dataset: "", confirmName: "" };
+}
+
+export const DeleteDatasetRequest: MessageFns<DeleteDatasetRequest> = {
+  encode(message: DeleteDatasetRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.project !== "") {
+      writer.uint32(10).string(message.project);
+    }
+    if (message.dataset !== "") {
+      writer.uint32(18).string(message.dataset);
+    }
+    if (message.confirmName !== "") {
+      writer.uint32(26).string(message.confirmName);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DeleteDatasetRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseDeleteDatasetRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.project = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.dataset = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.confirmName = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): DeleteDatasetRequest {
+    return {
+      project: isSet(object.project) ? globalThis.String(object.project) : "",
+      dataset: isSet(object.dataset) ? globalThis.String(object.dataset) : "",
+      confirmName: isSet(object.confirmName)
+        ? globalThis.String(object.confirmName)
+        : isSet(object.confirm_name)
+        ? globalThis.String(object.confirm_name)
+        : "",
+    };
+  },
+
+  toJSON(message: DeleteDatasetRequest): unknown {
+    const obj: any = {};
+    if (message.project !== "") {
+      obj.project = message.project;
+    }
+    if (message.dataset !== "") {
+      obj.dataset = message.dataset;
+    }
+    if (message.confirmName !== "") {
+      obj.confirmName = message.confirmName;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<DeleteDatasetRequest>, I>>(base?: I): DeleteDatasetRequest {
+    return DeleteDatasetRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DeleteDatasetRequest>, I>>(object: I): DeleteDatasetRequest {
+    const message = createBaseDeleteDatasetRequest();
+    message.project = object.project ?? "";
+    message.dataset = object.dataset ?? "";
+    message.confirmName = object.confirmName ?? "";
+    return message;
+  },
+};
+
 /**
  * GeoJSON remains UTF-8 text to preserve exact 64-bit property numbers.
  * A missing Edit.feature is an explicit deletion. No client-supplied identity.
@@ -5627,6 +6136,33 @@ export const GeoLedgerService = {
     responseStream: false as const,
     requestSerialize: (value: MemberRequest): Buffer => Buffer.from(MemberRequest.encode(value).finish()),
     requestDeserialize: (value: Buffer): MemberRequest => MemberRequest.decode(value),
+    responseSerialize: (value: OkReply): Buffer => Buffer.from(OkReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): OkReply => OkReply.decode(value),
+  },
+  renameProject: {
+    path: "/geoledger.v1.GeoLedger/RenameProject" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: RenameProjectRequest): Buffer => Buffer.from(RenameProjectRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): RenameProjectRequest => RenameProjectRequest.decode(value),
+    responseSerialize: (value: ProjectReply): Buffer => Buffer.from(ProjectReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ProjectReply => ProjectReply.decode(value),
+  },
+  renameDataset: {
+    path: "/geoledger.v1.GeoLedger/RenameDataset" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: RenameDatasetRequest): Buffer => Buffer.from(RenameDatasetRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): RenameDatasetRequest => RenameDatasetRequest.decode(value),
+    responseSerialize: (value: DatasetReply): Buffer => Buffer.from(DatasetReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): DatasetReply => DatasetReply.decode(value),
+  },
+  deleteDataset: {
+    path: "/geoledger.v1.GeoLedger/DeleteDataset" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: DeleteDatasetRequest): Buffer => Buffer.from(DeleteDatasetRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): DeleteDatasetRequest => DeleteDatasetRequest.decode(value),
     responseSerialize: (value: OkReply): Buffer => Buffer.from(OkReply.encode(value).finish()),
     responseDeserialize: (value: Buffer): OkReply => OkReply.decode(value),
   },
@@ -5684,6 +6220,16 @@ export const GeoLedgerService = {
     responseSerialize: (value: SaveReply): Buffer => Buffer.from(SaveReply.encode(value).finish()),
     responseDeserialize: (value: Buffer): SaveReply => SaveReply.decode(value),
   },
+  /** Concatenated chunks encode one SaveRequest; apply atomically only after EOF. */
+  saveStream: {
+    path: "/geoledger.v1.GeoLedger/SaveStream" as const,
+    requestStream: true as const,
+    responseStream: false as const,
+    requestSerialize: (value: DataChunk): Buffer => Buffer.from(DataChunk.encode(value).finish()),
+    requestDeserialize: (value: Buffer): DataChunk => DataChunk.decode(value),
+    responseSerialize: (value: SaveReply): Buffer => Buffer.from(SaveReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SaveReply => SaveReply.decode(value),
+  },
   discard: {
     path: "/geoledger.v1.GeoLedger/Discard" as const,
     requestStream: false as const,
@@ -5701,6 +6247,16 @@ export const GeoLedgerService = {
     requestDeserialize: (value: Buffer): FeaturesRequest => FeaturesRequest.decode(value),
     responseSerialize: (value: FeaturesReply): Buffer => Buffer.from(FeaturesReply.encode(value).finish()),
     responseDeserialize: (value: Buffer): FeaturesReply => FeaturesReply.decode(value),
+  },
+  /** Concatenated chunks encode one snapshot-consistent FeaturesReply. */
+  featuresStream: {
+    path: "/geoledger.v1.GeoLedger/FeaturesStream" as const,
+    requestStream: false as const,
+    responseStream: true as const,
+    requestSerialize: (value: FeaturesRequest): Buffer => Buffer.from(FeaturesRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): FeaturesRequest => FeaturesRequest.decode(value),
+    responseSerialize: (value: DataChunk): Buffer => Buffer.from(DataChunk.encode(value).finish()),
+    responseDeserialize: (value: Buffer): DataChunk => DataChunk.decode(value),
   },
   diff: {
     path: "/geoledger.v1.GeoLedger/Diff" as const,
@@ -5828,14 +6384,21 @@ export interface GeoLedgerServer extends UntypedServiceImplementation {
   listProjects: handleUnaryCall<PageRequest, ProjectsReply>;
   getProject: handleUnaryCall<ProjectRequest, ProjectReply>;
   setMember: handleUnaryCall<MemberRequest, OkReply>;
+  renameProject: handleUnaryCall<RenameProjectRequest, ProjectReply>;
+  renameDataset: handleUnaryCall<RenameDatasetRequest, DatasetReply>;
+  deleteDataset: handleUnaryCall<DeleteDatasetRequest, OkReply>;
   createDataset: handleUnaryCall<DatasetRequest, DatasetReply>;
   listDatasets: handleUnaryCall<ProjectPageRequest, DatasetsReply>;
   createWorkspace: handleUnaryCall<ProjectRequest, WorkspaceReply>;
   listWorkspaces: handleUnaryCall<ProjectPageRequest, WorkspacesReply>;
   getWorkspace: handleUnaryCall<WorkspaceRequest, WorkspaceReply>;
   save: handleUnaryCall<SaveRequest, SaveReply>;
+  /** Concatenated chunks encode one SaveRequest; apply atomically only after EOF. */
+  saveStream: handleClientStreamingCall<DataChunk, SaveReply>;
   discard: handleUnaryCall<VersionRequest, DiscardReply>;
   features: handleUnaryCall<FeaturesRequest, FeaturesReply>;
+  /** Concatenated chunks encode one snapshot-consistent FeaturesReply. */
+  featuresStream: handleServerStreamingCall<FeaturesRequest, DataChunk>;
   diff: handleUnaryCall<DiffRequest, DiffReply>;
   conflicts: handleUnaryCall<DiffRequest, ConflictsReply>;
   history: handleUnaryCall<HistoryRequest, HistoryReply>;
@@ -5917,6 +6480,51 @@ export interface GeoLedgerClient extends Client {
   ): ClientUnaryCall;
   setMember(
     request: MemberRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: OkReply) => void,
+  ): ClientUnaryCall;
+  renameProject(
+    request: RenameProjectRequest,
+    callback: (error: ServiceError | null, response: ProjectReply) => void,
+  ): ClientUnaryCall;
+  renameProject(
+    request: RenameProjectRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ProjectReply) => void,
+  ): ClientUnaryCall;
+  renameProject(
+    request: RenameProjectRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ProjectReply) => void,
+  ): ClientUnaryCall;
+  renameDataset(
+    request: RenameDatasetRequest,
+    callback: (error: ServiceError | null, response: DatasetReply) => void,
+  ): ClientUnaryCall;
+  renameDataset(
+    request: RenameDatasetRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: DatasetReply) => void,
+  ): ClientUnaryCall;
+  renameDataset(
+    request: RenameDatasetRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: DatasetReply) => void,
+  ): ClientUnaryCall;
+  deleteDataset(
+    request: DeleteDatasetRequest,
+    callback: (error: ServiceError | null, response: OkReply) => void,
+  ): ClientUnaryCall;
+  deleteDataset(
+    request: DeleteDatasetRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: OkReply) => void,
+  ): ClientUnaryCall;
+  deleteDataset(
+    request: DeleteDatasetRequest,
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: OkReply) => void,
@@ -6008,6 +6616,21 @@ export interface GeoLedgerClient extends Client {
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: SaveReply) => void,
   ): ClientUnaryCall;
+  /** Concatenated chunks encode one SaveRequest; apply atomically only after EOF. */
+  saveStream(callback: (error: ServiceError | null, response: SaveReply) => void): ClientWritableStream<DataChunk>;
+  saveStream(
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: SaveReply) => void,
+  ): ClientWritableStream<DataChunk>;
+  saveStream(
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: SaveReply) => void,
+  ): ClientWritableStream<DataChunk>;
+  saveStream(
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: SaveReply) => void,
+  ): ClientWritableStream<DataChunk>;
   discard(
     request: VersionRequest,
     callback: (error: ServiceError | null, response: DiscardReply) => void,
@@ -6038,6 +6661,13 @@ export interface GeoLedgerClient extends Client {
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: FeaturesReply) => void,
   ): ClientUnaryCall;
+  /** Concatenated chunks encode one snapshot-consistent FeaturesReply. */
+  featuresStream(request: FeaturesRequest, options?: Partial<CallOptions>): ClientReadableStream<DataChunk>;
+  featuresStream(
+    request: FeaturesRequest,
+    metadata?: Metadata,
+    options?: Partial<CallOptions>,
+  ): ClientReadableStream<DataChunk>;
   diff(request: DiffRequest, callback: (error: ServiceError | null, response: DiffReply) => void): ClientUnaryCall;
   diff(
     request: DiffRequest,

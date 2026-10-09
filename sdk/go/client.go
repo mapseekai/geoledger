@@ -150,7 +150,7 @@ func DialWithOptions(endpoint, token string, options DialOptions) (*Client, erro
 		md.Set("authorization", "Bearer "+token)
 		return invoker(metadata.NewOutgoingContext(ctx, md), method, req, reply, cc, opts...)
 	}
-	conn, err := grpc.NewClient(u.Host, grpc.WithTransportCredentials(transport), grpc.WithUnaryInterceptor(auth), grpc.WithDisableRetry(), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(4<<20), grpc.MaxCallSendMsgSize(4<<20)))
+	conn, err := grpc.NewClient(u.Host, grpc.WithTransportCredentials(transport), grpc.WithUnaryInterceptor(auth), grpc.WithDisableRetry(), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(int(^uint(0)>>1)), grpc.MaxCallSendMsgSize(int(^uint(0)>>1))))
 	if err != nil {
 		return nil, &Error{Code: "unavailable", Message: "could not initialize client"}
 	}
@@ -328,14 +328,28 @@ func (c *Client) ArchiveProject(ctx context.Context, project string, archived bo
 	return r, e
 }
 
-// DeleteProject permanently hides a project; confirmName must equal its name.
+// DeleteProject deletes project data and retains its audit tombstone; confirmName must equal its name.
 func (c *Client) DeleteProject(ctx context.Context, project, confirmName string) error {
 	var r struct{ OK bool }
 	return call(c, ctx, c.rpc.DeleteProject, &pb.DeleteProjectRequest{Project: project, ConfirmName: confirmName}, &r)
 }
-func (c *Client) CreateDataset(ctx context.Context, project, name string) (Dataset, error) {
+func (c *Client) RenameProject(ctx context.Context, project, name string) (Project, error) {
+	var r Project
+	e := call(c, ctx, c.rpc.RenameProject, &pb.RenameProjectRequest{Project: project, Name: name}, &r)
+	return r, e
+}
+func (c *Client) RenameDataset(ctx context.Context, project, dataset, name string) (Dataset, error) {
 	var r Dataset
-	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name}, &r)
+	e := call(c, ctx, c.rpc.RenameDataset, &pb.RenameDatasetRequest{Project: project, Dataset: dataset, Name: name}, &r)
+	return r, e
+}
+func (c *Client) DeleteDataset(ctx context.Context, project, dataset, confirmName string) error {
+	var r struct{ OK bool }
+	return call(c, ctx, c.rpc.DeleteDataset, &pb.DeleteDatasetRequest{Project: project, Dataset: dataset, ConfirmName: confirmName}, &r)
+}
+func (c *Client) CreateDataset(ctx context.Context, project, name, geometryType string) (Dataset, error) {
+	var r Dataset
+	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, GeometryType: geometryType}, &r)
 	return r, e
 }
 func (c *Client) Datasets(ctx context.Context, project string, page Page) ([]Dataset, error) {

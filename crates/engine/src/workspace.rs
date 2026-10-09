@@ -153,6 +153,9 @@ pub(super) fn workspace(
     w: &str,
     version: Option<i64>,
 ) -> Result<(i64, i64, String)> {
+    if version.is_some() {
+        head(t, p, true)?;
+    }
     membership(t, p, s, version.is_some())?;
     id(w)?;
     let r = t
@@ -316,6 +319,7 @@ pub(super) fn delete_project(
     if row.get::<_, String>(0usize)? != r.confirm_name {
         return Err(Error::new(400, "confirm_name must equal the project name"));
     }
+    t.purge_data(&r.project, None)?;
     t.set_project_state(&r.project, "deleted")?;
     audit(t, &r.project, s, "delete_project", json!({}))?;
     Ok(json!({"ok":true}))
@@ -350,13 +354,20 @@ pub(super) fn set_member(
     )?;
     Ok(json!({"ok":true}))
 }
-pub(super) fn create_dataset(t: &mut Transaction, s: &str, r: NamedProject) -> Result<Value> {
+pub(super) fn create_dataset(t: &mut Transaction, s: &str, r: CreateDataset) -> Result<Value> {
+    head(t, &r.project, true)?;
     membership(t, &r.project, s, true)?;
     text(&r.name, 256)?;
     let d = Uuid::new_v4().to_string();
-    t.insert_dataset(&r.project, &d, &r.name)?;
+    if !["point", "line", "polygon"].contains(&r.geometry_type.as_str()) {
+        return Err(Error::new(
+            400,
+            "geometry_type must be point, line or polygon",
+        ));
+    }
+    t.insert_dataset(&r.project, &d, &r.name, &r.geometry_type)?;
     audit(t, &r.project, s, "create_dataset", json!({"dataset":d}))?;
-    Ok(json!({"dataset":d,"name":r.name}))
+    Ok(json!({"dataset":d,"name":r.name,"geometry_type":r.geometry_type}))
 }
 pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Result<Value> {
     membership(t, &r.project, s, false)?;
@@ -365,14 +376,14 @@ pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Res
     Ok(json!(
         rows.iter()
             .map(|x| Ok(
-                json!({"dataset":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?})
+                json!({"dataset":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?,"geometry_type":x.get::<_,String>(2usize)?})
             ))
             .collect::<Result<Vec<_>>>()?
     ))
 }
 pub(super) fn create_workspace(t: &mut Transaction, s: &str, r: Project) -> Result<Value> {
     membership(t, &r.project, s, true)?;
-    let base = head(t, &r.project, false)?;
+    let base = head(t, &r.project, true)?;
     new_workspace(t, s, &r.project, base)
 }
 pub(super) fn new_workspace(t: &mut Transaction, s: &str, p: &str, base: i64) -> Result<Value> {
@@ -427,12 +438,16 @@ pub(super) fn put_delta(
     key: &str,
     v: Option<&Stored>,
 ) -> Result<()> {
+    if let Some(v) = v {
+        validate_dataset_geometry(t, p, d, v)?;
+    }
     let props = v.map(|x| json!(x.properties).to_string());
     let g = v.and_then(|x| x.geometry.as_deref());
     t.put_delta(p, w, d, key, &props, &g)?;
     Ok(())
 }
 pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
+    head(t, &r.project, true)?;
     let (base, _, _) = workspace(
         t,
         s,
@@ -447,13 +462,26 @@ pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
     // In particular an explicit deletion may equal an absent original base.
     t.invalidate_resolutions(&r.project, &r.workspace)?;
     let mut seen = BTreeSet::new();
+    let mut warnings = Vec::new();
     for e in r.edits {
         dataset(t, &r.project, &e.dataset)?;
         text(&e.feature_id, 256)?;
         if !seen.insert((e.dataset.clone(), e.feature_id.clone())) {
             return Err(bad());
         }
-        let value = e.feature.map(|f| normalize(f, &e.feature_id)).transpose()?;
+        let value = e
+            .feature
+            .map(|f| {
+                let value = normalize(f.clone(), &e.feature_id)?;
+                if let Some(warning) = geometry::topology_warning(&f.geometry)? {
+                    warnings.push(format!(
+                        "dataset {}, feature {}: {}",
+                        e.dataset, e.feature_id, warning
+                    ));
+                }
+                Ok::<_, Error>(value)
+            })
+            .transpose()?;
         let was_resolved: bool = t
             .has_resolution(&r.project, &r.workspace, &e.dataset, &e.feature_id)?
             .get(0usize)?;
@@ -471,18 +499,15 @@ pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
         }
     }
     let count: i64 = t.count_deltas(&r.project, &r.workspace)?.get(0usize)?;
-    if count > 1000 {
-        return Err(Error::new(413, "workspace edit limit exceeded"));
-    }
     let version = bump(t, &r.project, &r.workspace, "open")?;
     audit(
         t,
         &r.project,
         s,
         "save",
-        json!({"workspace":r.workspace,"version":version}),
+        json!({"workspace":r.workspace,"version":version,"topology_warnings":warnings}),
     )?;
-    Ok(json!({"version":version,"changes":count}))
+    Ok(json!({"version":version,"changes":count,"warnings":warnings}))
 }
 pub(super) fn discard(t: &mut Transaction, s: &str, r: Version) -> Result<Value> {
     workspace(
@@ -501,4 +526,82 @@ pub(super) fn discard(t: &mut Transaction, s: &str, r: Version) -> Result<Value>
         json!({"workspace":r.workspace}),
     )?;
     Ok(json!({"version":v,"status":"discarded"}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreateDataset {
+    project: String,
+    name: String,
+    geometry_type: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RenameDataset {
+    project: String,
+    dataset: String,
+    name: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DeleteDataset {
+    project: String,
+    dataset: String,
+    confirm_name: String,
+}
+pub(super) fn rename_project(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: NamedProject,
+) -> Result<Value> {
+    head(t, &r.project, true)?;
+    let (role, _) = manage(t, &r.project, s, policy, true)?;
+    text(&r.name, 256)?;
+    t.rename_project(&r.project, &r.name)?;
+    audit(t, &r.project, s, "rename_project", json!({"name":r.name}))?;
+    project_json(t, &r.project, &role)
+}
+pub(super) fn rename_dataset(t: &mut Transaction, s: &str, r: RenameDataset) -> Result<Value> {
+    head(t, &r.project, true)?;
+    membership(t, &r.project, s, true)?;
+    dataset(t, &r.project, &r.dataset)?;
+    text(&r.name, 256)?;
+    let row = t
+        .dataset_exists(&r.project, &r.dataset)?
+        .ok_or_else(missing)?;
+    t.rename_dataset(&r.project, &r.dataset, &r.name)?;
+    audit(
+        t,
+        &r.project,
+        s,
+        "rename_dataset",
+        json!({"dataset":r.dataset,"name":r.name}),
+    )?;
+    Ok(json!({"dataset":r.dataset,"name":r.name,"geometry_type":row.get::<_,String>(0usize)?}))
+}
+pub(super) fn delete_dataset(
+    t: &mut Transaction,
+    s: &str,
+    policy: &Policy,
+    r: DeleteDataset,
+) -> Result<Value> {
+    head(t, &r.project, true)?;
+    manage(t, &r.project, s, policy, true)?;
+    id(&r.dataset)?;
+    let row = t
+        .dataset_exists(&r.project, &r.dataset)?
+        .ok_or_else(missing)?;
+    if row.get::<_, String>(1usize)? != r.confirm_name {
+        return Err(Error::new(400, "confirm_name must equal the dataset name"));
+    }
+    t.purge_data(&r.project, Some(&r.dataset))?;
+    audit(
+        t,
+        &r.project,
+        s,
+        "delete_dataset",
+        json!({"dataset":r.dataset,"name":r.confirm_name}),
+    )?;
+    Ok(json!({"ok":true}))
 }

@@ -24,14 +24,19 @@ const (
 	GeoLedger_ListProjects_FullMethodName    = "/geoledger.v1.GeoLedger/ListProjects"
 	GeoLedger_GetProject_FullMethodName      = "/geoledger.v1.GeoLedger/GetProject"
 	GeoLedger_SetMember_FullMethodName       = "/geoledger.v1.GeoLedger/SetMember"
+	GeoLedger_RenameProject_FullMethodName   = "/geoledger.v1.GeoLedger/RenameProject"
+	GeoLedger_RenameDataset_FullMethodName   = "/geoledger.v1.GeoLedger/RenameDataset"
+	GeoLedger_DeleteDataset_FullMethodName   = "/geoledger.v1.GeoLedger/DeleteDataset"
 	GeoLedger_CreateDataset_FullMethodName   = "/geoledger.v1.GeoLedger/CreateDataset"
 	GeoLedger_ListDatasets_FullMethodName    = "/geoledger.v1.GeoLedger/ListDatasets"
 	GeoLedger_CreateWorkspace_FullMethodName = "/geoledger.v1.GeoLedger/CreateWorkspace"
 	GeoLedger_ListWorkspaces_FullMethodName  = "/geoledger.v1.GeoLedger/ListWorkspaces"
 	GeoLedger_GetWorkspace_FullMethodName    = "/geoledger.v1.GeoLedger/GetWorkspace"
 	GeoLedger_Save_FullMethodName            = "/geoledger.v1.GeoLedger/Save"
+	GeoLedger_SaveStream_FullMethodName      = "/geoledger.v1.GeoLedger/SaveStream"
 	GeoLedger_Discard_FullMethodName         = "/geoledger.v1.GeoLedger/Discard"
 	GeoLedger_Features_FullMethodName        = "/geoledger.v1.GeoLedger/Features"
+	GeoLedger_FeaturesStream_FullMethodName  = "/geoledger.v1.GeoLedger/FeaturesStream"
 	GeoLedger_Diff_FullMethodName            = "/geoledger.v1.GeoLedger/Diff"
 	GeoLedger_Conflicts_FullMethodName       = "/geoledger.v1.GeoLedger/Conflicts"
 	GeoLedger_History_FullMethodName         = "/geoledger.v1.GeoLedger/History"
@@ -60,14 +65,21 @@ type GeoLedgerClient interface {
 	ListProjects(ctx context.Context, in *PageRequest, opts ...grpc.CallOption) (*ProjectsReply, error)
 	GetProject(ctx context.Context, in *ProjectRequest, opts ...grpc.CallOption) (*ProjectReply, error)
 	SetMember(ctx context.Context, in *MemberRequest, opts ...grpc.CallOption) (*OkReply, error)
+	RenameProject(ctx context.Context, in *RenameProjectRequest, opts ...grpc.CallOption) (*ProjectReply, error)
+	RenameDataset(ctx context.Context, in *RenameDatasetRequest, opts ...grpc.CallOption) (*DatasetReply, error)
+	DeleteDataset(ctx context.Context, in *DeleteDatasetRequest, opts ...grpc.CallOption) (*OkReply, error)
 	CreateDataset(ctx context.Context, in *DatasetRequest, opts ...grpc.CallOption) (*DatasetReply, error)
 	ListDatasets(ctx context.Context, in *ProjectPageRequest, opts ...grpc.CallOption) (*DatasetsReply, error)
 	CreateWorkspace(ctx context.Context, in *ProjectRequest, opts ...grpc.CallOption) (*WorkspaceReply, error)
 	ListWorkspaces(ctx context.Context, in *ProjectPageRequest, opts ...grpc.CallOption) (*WorkspacesReply, error)
 	GetWorkspace(ctx context.Context, in *WorkspaceRequest, opts ...grpc.CallOption) (*WorkspaceReply, error)
 	Save(ctx context.Context, in *SaveRequest, opts ...grpc.CallOption) (*SaveReply, error)
+	// Concatenated chunks encode one SaveRequest; apply atomically only after EOF.
+	SaveStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[DataChunk, SaveReply], error)
 	Discard(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*DiscardReply, error)
 	Features(ctx context.Context, in *FeaturesRequest, opts ...grpc.CallOption) (*FeaturesReply, error)
+	// Concatenated chunks encode one snapshot-consistent FeaturesReply.
+	FeaturesStream(ctx context.Context, in *FeaturesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error)
 	Diff(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*DiffReply, error)
 	Conflicts(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*ConflictsReply, error)
 	History(ctx context.Context, in *HistoryRequest, opts ...grpc.CallOption) (*HistoryReply, error)
@@ -141,6 +153,36 @@ func (c *geoLedgerClient) SetMember(ctx context.Context, in *MemberRequest, opts
 	return out, nil
 }
 
+func (c *geoLedgerClient) RenameProject(ctx context.Context, in *RenameProjectRequest, opts ...grpc.CallOption) (*ProjectReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProjectReply)
+	err := c.cc.Invoke(ctx, GeoLedger_RenameProject_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *geoLedgerClient) RenameDataset(ctx context.Context, in *RenameDatasetRequest, opts ...grpc.CallOption) (*DatasetReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DatasetReply)
+	err := c.cc.Invoke(ctx, GeoLedger_RenameDataset_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *geoLedgerClient) DeleteDataset(ctx context.Context, in *DeleteDatasetRequest, opts ...grpc.CallOption) (*OkReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OkReply)
+	err := c.cc.Invoke(ctx, GeoLedger_DeleteDataset_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *geoLedgerClient) CreateDataset(ctx context.Context, in *DatasetRequest, opts ...grpc.CallOption) (*DatasetReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DatasetReply)
@@ -201,6 +243,19 @@ func (c *geoLedgerClient) Save(ctx context.Context, in *SaveRequest, opts ...grp
 	return out, nil
 }
 
+func (c *geoLedgerClient) SaveStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[DataChunk, SaveReply], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GeoLedger_ServiceDesc.Streams[0], GeoLedger_SaveStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DataChunk, SaveReply]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GeoLedger_SaveStreamClient = grpc.ClientStreamingClient[DataChunk, SaveReply]
+
 func (c *geoLedgerClient) Discard(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*DiscardReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DiscardReply)
@@ -220,6 +275,25 @@ func (c *geoLedgerClient) Features(ctx context.Context, in *FeaturesRequest, opt
 	}
 	return out, nil
 }
+
+func (c *geoLedgerClient) FeaturesStream(ctx context.Context, in *FeaturesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GeoLedger_ServiceDesc.Streams[1], GeoLedger_FeaturesStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[FeaturesRequest, DataChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GeoLedger_FeaturesStreamClient = grpc.ServerStreamingClient[DataChunk]
 
 func (c *geoLedgerClient) Diff(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*DiffReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -364,14 +438,21 @@ type GeoLedgerServer interface {
 	ListProjects(context.Context, *PageRequest) (*ProjectsReply, error)
 	GetProject(context.Context, *ProjectRequest) (*ProjectReply, error)
 	SetMember(context.Context, *MemberRequest) (*OkReply, error)
+	RenameProject(context.Context, *RenameProjectRequest) (*ProjectReply, error)
+	RenameDataset(context.Context, *RenameDatasetRequest) (*DatasetReply, error)
+	DeleteDataset(context.Context, *DeleteDatasetRequest) (*OkReply, error)
 	CreateDataset(context.Context, *DatasetRequest) (*DatasetReply, error)
 	ListDatasets(context.Context, *ProjectPageRequest) (*DatasetsReply, error)
 	CreateWorkspace(context.Context, *ProjectRequest) (*WorkspaceReply, error)
 	ListWorkspaces(context.Context, *ProjectPageRequest) (*WorkspacesReply, error)
 	GetWorkspace(context.Context, *WorkspaceRequest) (*WorkspaceReply, error)
 	Save(context.Context, *SaveRequest) (*SaveReply, error)
+	// Concatenated chunks encode one SaveRequest; apply atomically only after EOF.
+	SaveStream(grpc.ClientStreamingServer[DataChunk, SaveReply]) error
 	Discard(context.Context, *VersionRequest) (*DiscardReply, error)
 	Features(context.Context, *FeaturesRequest) (*FeaturesReply, error)
+	// Concatenated chunks encode one snapshot-consistent FeaturesReply.
+	FeaturesStream(*FeaturesRequest, grpc.ServerStreamingServer[DataChunk]) error
 	Diff(context.Context, *DiffRequest) (*DiffReply, error)
 	Conflicts(context.Context, *DiffRequest) (*ConflictsReply, error)
 	History(context.Context, *HistoryRequest) (*HistoryReply, error)
@@ -410,6 +491,15 @@ func (UnimplementedGeoLedgerServer) GetProject(context.Context, *ProjectRequest)
 func (UnimplementedGeoLedgerServer) SetMember(context.Context, *MemberRequest) (*OkReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetMember not implemented")
 }
+func (UnimplementedGeoLedgerServer) RenameProject(context.Context, *RenameProjectRequest) (*ProjectReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenameProject not implemented")
+}
+func (UnimplementedGeoLedgerServer) RenameDataset(context.Context, *RenameDatasetRequest) (*DatasetReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenameDataset not implemented")
+}
+func (UnimplementedGeoLedgerServer) DeleteDataset(context.Context, *DeleteDatasetRequest) (*OkReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteDataset not implemented")
+}
 func (UnimplementedGeoLedgerServer) CreateDataset(context.Context, *DatasetRequest) (*DatasetReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateDataset not implemented")
 }
@@ -428,11 +518,17 @@ func (UnimplementedGeoLedgerServer) GetWorkspace(context.Context, *WorkspaceRequ
 func (UnimplementedGeoLedgerServer) Save(context.Context, *SaveRequest) (*SaveReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Save not implemented")
 }
+func (UnimplementedGeoLedgerServer) SaveStream(grpc.ClientStreamingServer[DataChunk, SaveReply]) error {
+	return status.Errorf(codes.Unimplemented, "method SaveStream not implemented")
+}
 func (UnimplementedGeoLedgerServer) Discard(context.Context, *VersionRequest) (*DiscardReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Discard not implemented")
 }
 func (UnimplementedGeoLedgerServer) Features(context.Context, *FeaturesRequest) (*FeaturesReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Features not implemented")
+}
+func (UnimplementedGeoLedgerServer) FeaturesStream(*FeaturesRequest, grpc.ServerStreamingServer[DataChunk]) error {
+	return status.Errorf(codes.Unimplemented, "method FeaturesStream not implemented")
 }
 func (UnimplementedGeoLedgerServer) Diff(context.Context, *DiffRequest) (*DiffReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Diff not implemented")
@@ -584,6 +680,60 @@ func _GeoLedger_SetMember_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GeoLedger_RenameProject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameProjectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).RenameProject(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_RenameProject_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).RenameProject(ctx, req.(*RenameProjectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GeoLedger_RenameDataset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameDatasetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).RenameDataset(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_RenameDataset_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).RenameDataset(ctx, req.(*RenameDatasetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GeoLedger_DeleteDataset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDatasetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).DeleteDataset(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_DeleteDataset_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).DeleteDataset(ctx, req.(*DeleteDatasetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GeoLedger_CreateDataset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DatasetRequest)
 	if err := dec(in); err != nil {
@@ -692,6 +842,13 @@ func _GeoLedger_Save_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GeoLedger_SaveStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GeoLedgerServer).SaveStream(&grpc.GenericServerStream[DataChunk, SaveReply]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GeoLedger_SaveStreamServer = grpc.ClientStreamingServer[DataChunk, SaveReply]
+
 func _GeoLedger_Discard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(VersionRequest)
 	if err := dec(in); err != nil {
@@ -727,6 +884,17 @@ func _GeoLedger_Features_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _GeoLedger_FeaturesStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(FeaturesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(GeoLedgerServer).FeaturesStream(m, &grpc.GenericServerStream[FeaturesRequest, DataChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GeoLedger_FeaturesStreamServer = grpc.ServerStreamingServer[DataChunk]
 
 func _GeoLedger_Diff_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DiffRequest)
@@ -990,6 +1158,18 @@ var GeoLedger_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GeoLedger_SetMember_Handler,
 		},
 		{
+			MethodName: "RenameProject",
+			Handler:    _GeoLedger_RenameProject_Handler,
+		},
+		{
+			MethodName: "RenameDataset",
+			Handler:    _GeoLedger_RenameDataset_Handler,
+		},
+		{
+			MethodName: "DeleteDataset",
+			Handler:    _GeoLedger_DeleteDataset_Handler,
+		},
+		{
 			MethodName: "CreateDataset",
 			Handler:    _GeoLedger_CreateDataset_Handler,
 		},
@@ -1074,6 +1254,17 @@ var GeoLedger_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GeoLedger_DeleteProject_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SaveStream",
+			Handler:       _GeoLedger_SaveStream_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "FeaturesStream",
+			Handler:       _GeoLedger_FeaturesStream_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "geoledger/v1/geoledger.proto",
 }

@@ -1,12 +1,6 @@
 import { parse } from "lossless-json";
 export type Json =
-  | null
-  | boolean
-  | string
-  | number
-  | bigint
-  | Json[]
-  | { [key: string]: Json };
+  null | boolean | string | number | bigint | Json[] | { [key: string]: Json };
 export interface Feature {
   type: "Feature";
   id: string;
@@ -15,7 +9,8 @@ export interface Feature {
 }
 /** Parse JSON without silently rounding integral properties. */
 export function parseJson(raw: string): Json {
-  return parse(raw, undefined, (token) => {
+  const protectedInput = protectProtoKeys(raw);
+  const value = parse(protectedInput.raw, undefined, (token) => {
     const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token);
     if (!match) throw new Error("invalid JSON number");
     const digits = (match[2] + (match[3] ?? "")).replace(/^0+/, "");
@@ -45,7 +40,64 @@ export function parseJson(raw: string): Json {
     if (Number.isInteger(number) || Math.abs(number) >= Number.MAX_SAFE_INTEGER)
       throw new Error("fractional JSON number cannot be represented safely");
     return number;
-  }) as Json;
+  });
+  return protectedInput.marker
+    ? (restoreProtoKeys(value, protectedInput.marker) as Json)
+    : (value as Json);
+}
+
+// lossless-json assigns into `{}`, so `__proto__` would invoke the inherited setter.
+function protectProtoKeys(raw: string): { raw: string; marker?: string } {
+  let marker = "\0geoledger_proto_key";
+  for (let number = 0; raw.includes(JSON.stringify(marker)); number++)
+    marker = `\0geoledger_proto_key_${number}`;
+  let output = "";
+  let changed = false;
+  for (let index = 0; index < raw.length;) {
+    if (raw[index] !== '"') {
+      output += raw[index++];
+      continue;
+    }
+    const start = index++;
+    while (index < raw.length) {
+      if (raw[index] === "\\") {
+        index += 2;
+        continue;
+      }
+      if (raw[index++] === '"') break;
+    }
+    const token = raw.slice(start, index);
+    let after = index;
+    while (/\s/.test(raw[after] ?? "")) after++;
+    if (raw[after] === ":" && JSON.parse(token) === "__proto__") {
+      output += JSON.stringify(marker);
+      changed = true;
+    } else output += token;
+  }
+  return changed ? { raw: output, marker } : { raw };
+}
+
+function restoreProtoKeys(value: unknown, marker: string): unknown {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++)
+      value[index] = restoreProtoKeys(value[index], marker);
+    return value;
+  }
+  if (!value || typeof value !== "object") return value;
+  const object = value as Record<string, unknown>;
+  for (const key of Object.keys(object)) {
+    const child = restoreProtoKeys(object[key], marker);
+    if (key === marker) {
+      Object.defineProperty(object, "__proto__", {
+        value: child,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      delete object[key];
+    } else object[key] = child;
+  }
+  return object;
 }
 
 export interface ServerInfo {
@@ -70,7 +122,10 @@ export interface Member {
   role: string;
 }
 
+export type GeometryType = "point" | "line" | "polygon";
+
 export interface Dataset {
+  geometryType: GeometryType;
   id: string;
   name: string;
 }
@@ -83,6 +138,7 @@ export interface WorkspaceInfo {
 }
 
 export interface SaveResult {
+  warnings: string[];
   version: bigint;
   changes: bigint;
 }
@@ -141,8 +197,9 @@ export interface Commit {
   subject: string;
   message: string;
   createdAt: string;
+  sourceWorkspace: string;
+  sourceBaseRevision: bigint;
 }
-
 export interface CommitChanges {
   revision: bigint;
   changes: Change[];

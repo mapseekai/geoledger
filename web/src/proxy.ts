@@ -16,5 +16,7 @@ export function proxy(request: NextRequest) {
   return response;
 }
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|logo.svg|favicon.ico).*)"],
+  // JSON APIs validate sessions and Origin in route handlers; skip page CSP
+  // middleware so Next.js does not buffer/truncate large API request bodies.
+  matcher: ["/((?!api/|_next/static|_next/image|logo.svg|favicon.ico).*)"],
 };

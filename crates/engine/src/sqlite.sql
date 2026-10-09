@@ -1,5 +1,6 @@
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=6));
-INSERT INTO gl_format VALUES(true,6);
+CREATE TABLE gl_purge (project text PRIMARY KEY);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=7));
+INSERT INTO gl_format VALUES(true,7);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -10,6 +11,7 @@ CREATE TABLE gl_project_members (
 CREATE INDEX gl_project_members_subject ON gl_project_members(subject,project);
 CREATE TABLE gl_datasets (
  project text REFERENCES gl_projects(id), id text NOT NULL, name text NOT NULL,
+ geometry_type text NOT NULL CHECK(geometry_type IN ('point','line','polygon')),
  PRIMARY KEY(project,id), UNIQUE(project,name));
 CREATE TABLE gl_workspaces (
  project text NOT NULL, id text NOT NULL, owner text NOT NULL, base_revision INTEGER NOT NULL CHECK(base_revision>=0),
@@ -50,17 +52,17 @@ CREATE TABLE gl_audit_events (
  FOREIGN KEY(project,subject) REFERENCES gl_project_members(project,subject));
 CREATE INDEX audit_project_id ON gl_audit_events(project,id);
 CREATE TRIGGER gl_commits_update BEFORE UPDATE ON gl_commits BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
-CREATE TRIGGER gl_commits_delete BEFORE DELETE ON gl_commits BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
+CREATE TRIGGER gl_commits_delete BEFORE DELETE ON gl_commits WHEN NOT EXISTS (SELECT 1 FROM gl_purge WHERE project=OLD.project) BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
 CREATE TRIGGER gl_commit_changes_update BEFORE UPDATE ON gl_commit_changes BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
-CREATE TRIGGER gl_commit_changes_delete BEFORE DELETE ON gl_commit_changes BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
+CREATE TRIGGER gl_commit_changes_delete BEFORE DELETE ON gl_commit_changes WHEN NOT EXISTS (SELECT 1 FROM gl_purge WHERE project=OLD.project) BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
 CREATE TRIGGER gl_audit_events_update BEFORE UPDATE ON gl_audit_events BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
 CREATE TRIGGER gl_audit_events_delete BEFORE DELETE ON gl_audit_events BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
 CREATE TRIGGER gl_idempotency_update BEFORE UPDATE ON gl_idempotency BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
-CREATE TRIGGER gl_idempotency_delete BEFORE DELETE ON gl_idempotency BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
+CREATE TRIGGER gl_idempotency_delete BEFORE DELETE ON gl_idempotency WHEN NOT EXISTS (SELECT 1 FROM gl_purge WHERE project=OLD.project) BEGIN SELECT RAISE(ABORT,'immutable version record'); END;
 CREATE TRIGGER gl_history_update BEFORE UPDATE ON gl_history WHEN NOT (
 OLD.valid_to IS NULL AND NEW.valid_to IS NOT NULL AND OLD.project=NEW.project AND OLD.dataset=NEW.dataset AND OLD.feature_id=NEW.feature_id AND OLD.valid_from=NEW.valid_from AND OLD.properties IS NEW.properties AND OLD.geom IS NEW.geom)
 BEGIN SELECT RAISE(ABORT,'immutable history'); END;
-CREATE TRIGGER gl_history_delete BEFORE DELETE ON gl_history BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+CREATE TRIGGER gl_history_delete BEFORE DELETE ON gl_history WHEN NOT EXISTS (SELECT 1 FROM gl_purge WHERE project=OLD.project) BEGIN SELECT RAISE(ABORT,'immutable history'); END;
 CREATE VIRTUAL TABLE gl_history_spatial USING rtree(id,min_x,max_x,min_y,max_y);
 CREATE TRIGGER gl_history_spatial_insert AFTER INSERT ON gl_history WHEN NEW.geom IS NOT NULL AND gl_bound(NEW.geom,0) IS NOT NULL BEGIN
  INSERT INTO gl_history_spatial VALUES(NEW.rowid,gl_bound(NEW.geom,0),gl_bound(NEW.geom,2),gl_bound(NEW.geom,1),gl_bound(NEW.geom,3)); END;

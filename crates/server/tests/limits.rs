@@ -101,7 +101,7 @@ async fn storage_lock_past_deadline_and_saturated_slots_fail_fast_and_recover() 
     let started = Instant::now();
     let write = {
         let router = router.clone();
-        let body = format!(r#"{{"project":"{project}","name":"roads"}}"#);
+        let body = format!(r#"{{"project":"{project}","name":"roads","geometry_type":"point"}}"#);
         tokio::spawn(async move { call(&router, "create_dataset", &body).await })
     };
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -129,7 +129,7 @@ async fn storage_lock_past_deadline_and_saturated_slots_fail_fast_and_recover() 
     // Nothing was written, and the service recovers as soon as the lock is gone.
     blocker.execute_batch("ROLLBACK")?;
     drop(blocker);
-    let body = format!(r#"{{"project":"{project}","name":"roads"}}"#);
+    let body = format!(r#"{{"project":"{project}","name":"roads","geometry_type":"point"}}"#);
     let (status, created) = call(&router, "create_dataset", &body).await?;
     assert_eq!(
         status, 200,
@@ -302,6 +302,7 @@ async fn grpc_deadline_busy_and_unauthenticated_paths() -> TestResult {
         let mut client = client.clone();
         let mut request = rpc_request(
             pb::DatasetRequest {
+                geometry_type: "point".into(),
                 project: project.clone(),
                 name: "roads".into(),
             },
@@ -343,6 +344,7 @@ async fn grpc_deadline_busy_and_unauthenticated_paths() -> TestResult {
         match client
             .create_dataset(rpc_request(
                 pb::DatasetRequest {
+                    geometry_type: "point".into(),
                     project: project.clone(),
                     name: "roads".into(),
                 },

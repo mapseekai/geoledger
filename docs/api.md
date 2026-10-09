@@ -18,7 +18,7 @@ Go、Rust、TypeScript / Node.js、Python 提供普通业务方法和工作区�
 Python 使用 RLock，TypeScript 进行同句柄并发校验。多个独立对象的并发编辑由服务端乐观版本检查协调。
 
 默认 SDK 地址 `http://127.0.0.1:7882`，控制台 HTTP 地址使用另一个端口。
-SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒，消息上限 4 MiB。
+SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒，不设应用层固定消息字节上限。
 
 `http://` 地址只用于回环主机（`127.0.0.1`、`::1`、`localhost`）。确需在隔离内网使用明文时，设置环境变量 `GL_ALLOW_INSECURE_TRANSPORT=true` 或使用各语言的显式选项：
 
@@ -42,7 +42,7 @@ from geoledger import Client
 
 with Client("http://127.0.0.1:7882", os.environ["GL_TOKEN"]) as client:
     project = client.create_project("城市道路")
-    dataset = client.create_dataset(project.id, "roads")
+    dataset = client.create_dataset(project.id, "roads", "point")
     draft = client.create_workspace(project.id)
     draft.save(dataset.id, {
         "type": "Feature", "id": "road-1",
@@ -67,7 +67,7 @@ use serde_json::json;
 
 let client = Client::connect(endpoint, &token).await?;
 let project = client.create_project("城市道路").await?;
-let dataset = client.create_dataset(&project.id, "roads").await?;
+let dataset = client.create_dataset(&project.id, "roads", "point").await?;
 let mut draft = client.create_workspace(&project.id).await?;
 draft.save(&dataset.id, json!({
     "type":"Feature", "id":"road-1",
@@ -90,7 +90,7 @@ if err != nil { return err }
 defer client.Close()
 project, err := client.CreateProject(ctx, "城市道路")
 if err != nil { return err }
-dataset, err := client.CreateDataset(ctx, project.ID, "roads")
+dataset, err := client.CreateDataset(ctx, project.ID, "roads", "point")
 if err != nil { return err }
 draft, err := client.CreateWorkspace(ctx, project.ID)
 if err != nil { return err }
@@ -120,7 +120,7 @@ const token = process.env.GL_TOKEN!;
 const client = new Client(endpoint, token);
 try {
   const project = await client.createProject("城市道路");
-  const dataset = await client.createDataset(project.id, "roads");
+  const dataset = await client.createDataset(project.id, "roads", "point");
   const draft = await client.createWorkspace(project.id);
   await draft.save(dataset.id, {
     type: "Feature", id: "road-1",
@@ -164,6 +164,7 @@ Python SDK 与 TS SDK 分别按上文安装和构建；统一安装与联调流�
 `save` 直接接收带字符串 `id` 的完整 GeoJSON Feature。批量编辑使用 SDK 自身的 `Edit`，
 删除通过 `delete()` 或显式 `null` / `None` 表达，保存操作提供完整要素字段。
 正式要素分页固定首次返回的 revision，后续查询带该版本及 next_after；草稿分页需核对 workspace_version。
+`history` 的每条提交还包含实际发布工作区及其发布时基线：Go 使用 `SourceWorkspace` / `SourceBaseRevision`，Rust/Python 使用 `source_workspace` / `source_base_revision`，TypeScript 使用 `sourceWorkspace` / `sourceBaseRevision`。基线随发布前 rebase 更新；已发布工作区保持其基线不变。
 JSON 对象键通过递归校验，保护普通对象的编解码语义；
 `$serde_json::private::RawValue` 和 `$serde_json::private::Number` 为保留键，
 包含嵌套或转义写法的输入会获得 `invalid_argument` 校验结果。普通字符串值可以包含这些文字。
@@ -221,7 +222,7 @@ SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布�
 | 期限耗尽 | 504 |
 | 存储不可用 | 503 |
 
-Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 最大 16 KiB、最多 256 个属性；EPSG:4326，XY/XYZ。
+Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 不设独立字节上限、最多 256 个属性；EPSG:4326，XY/XYZ。
 标识采用有效文本字符，属性键和值使用 U+0000 以外的 JSON 文本；服务统一校验输入并返回业务错误。容量配置见 [生产运行](production.md)。
 
 ## 当前版本契约
@@ -230,4 +231,16 @@ Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / ar
 
 当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-当前存储格式为 6，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+当前存储格式为 7，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+
+`Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 为 `0` 也表示不设应用层固定请求字节上限。
+
+### 大数据流式传输
+
+`SaveStream` 接收分块编码的单个 `SaveRequest`，`FeaturesStream` 返回分块编码的单个 `FeaturesReply`。每个流首块携带 `total_bytes`，后续块为 0；总长度不符或流中断时不接受不完整数据。服务端收齐保存请求后通过 Application 原子校验与写入，读取结果来自同一快照。Node.js SDK（含 Web BFF）对超过 64 KiB 的保存请求自动使用流式上传，要素查询使用流式下载，每块目标大小 64 KiB，并保留认证、期限和背压。其他 SDK 的普通 RPC 也已取消 4 MiB 固定上限。
+
+当前业务 API 仍在内存中组装完整请求/结果；流式传输解决消息分块，不代表恒定内存占用。实际容量受可用内存、运行时和 gRPC 协议边界影响。发布请求的原始内容、幂等重试与事务语义不变。
+
+创建数据集必须传 `geometry_type`（SDK TypeScript 使用 `geometryType`）：`point`、`line` 或 `polygon`。列表与创建结果返回该字段。新增 `RenameProject`、`RenameDataset`、`DeleteDataset` RPC，以及同名 snake_case HTTP 操作。重命名请求包含 `project`、`name`，数据集操作还包含 `dataset`。删除数据集包含 `project`、`dataset`、`confirm_name`，确认名称必须完全匹配。项目重命名和项目／数据集删除限 owner 或平台管理员；数据集重命名限可写成员。
+
+Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓扑问题，并在同一保存事务的审计事件中记录。此类几何按原坐标保存，不自动修复；坐标结构、维度、闭环、有限数值、经纬度范围及数据集几何类型仍严格校验。工作区累计要素数不再限制为 1000，单次 Save 仍限制 1–100 个修改。

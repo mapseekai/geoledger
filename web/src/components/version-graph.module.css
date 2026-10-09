@@ -1,0 +1,278 @@
+.graph {
+  min-width: 0;
+}
+
+.status,
+.error,
+.empty,
+.reference {
+  margin: 0;
+  padding: 16px 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.error {
+  color: #b42318;
+}
+
+.graphScroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.canvas {
+  position: relative;
+  min-width: 860px;
+}
+
+.lines {
+  position: absolute;
+  inset: 40px auto 0 0;
+  z-index: 0;
+  width: var(--rail-width);
+  height: calc(var(--row-count) * var(--row-height));
+  overflow: hidden;
+  fill: none;
+  pointer-events: none;
+}
+
+.branch {
+  stroke: var(--branch-color);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.draftBranch {
+  stroke-dasharray: 5 4;
+}
+
+.offPage {
+  stroke-width: 2;
+}
+
+.offPageLabel {
+  fill: var(--text-muted);
+  font: 10px var(--mono);
+  stroke: none;
+}
+
+.log {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  position: relative;
+  display: grid;
+  grid-template-columns:
+    var(--rail-width) minmax(150px, 1.35fr) minmax(130px, 1fr)
+    minmax(100px, 0.75fr) minmax(150px, 0.9fr) minmax(260px, 1.5fr) minmax(
+      155px,
+      1fr
+    );
+  align-items: center;
+  height: var(--row-height);
+  min-height: var(--row-height);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.node {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #a3a3a3;
+  transform: translate(-50%, -50%);
+}
+
+.draft .node {
+  border: 2px solid var(--node-color);
+  background: var(--surface);
+}
+
+.commit {
+  display: grid;
+  grid-template-columns: minmax(44px, auto) minmax(0, 1fr);
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+}
+.commit {
+  grid-column: 2;
+}
+
+.message {
+  grid-column: 3;
+}
+
+.row > .meta {
+  grid-column: 4;
+}
+
+.row > time.meta {
+  grid-column: 5;
+}
+
+.source,
+.rowActions {
+  grid-column: 7;
+}
+
+.draftBase {
+  grid-column: 4 !important;
+}
+
+.draftPage {
+  grid-column: 5 !important;
+}
+
+.commit:hover,
+.commit:focus-visible {
+  background: var(--line-faint);
+}
+
+.commit strong {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text);
+  font: 600 12px var(--mono);
+}
+
+.commit > span,
+.message,
+.meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit > span,
+.message {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.meta {
+  padding: 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.headMark {
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--surface);
+  font: 600 10px var(--mono);
+  font-style: normal;
+}
+
+.source {
+  position: relative;
+  min-width: 0;
+  padding: 6px 8px;
+  color: var(--text-muted);
+  font: 12px var(--mono);
+}
+
+.rowActions {
+  min-width: 0;
+}
+
+.rowActions :global(.row-actions) {
+  flex-wrap: nowrap;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.footer > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.footer svg {
+  width: 14px;
+}
+
+.paging {
+  display: flex;
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .footer {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .canvas {
+    min-width: 720px;
+  }
+
+  .row {
+    grid-template-columns:
+      var(--rail-width) minmax(125px, 1.2fr) minmax(105px, 1fr)
+      minmax(90px, 0.8fr) minmax(130px, 1fr) minmax(260px, 1.5fr) minmax(
+        135px,
+        1fr
+      );
+  }
+
+  .meta {
+    white-space: nowrap;
+  }
+
+  .footer > span {
+    display: none;
+  }
+}
+
+.columnHeaders {
+  height: 40px;
+  min-height: 40px;
+  background: var(--line-faint);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.columnHeaders > span {
+  padding: 0 8px;
+}
+.changeCounts {
+  grid-column: 6;
+  max-height: 56px;
+  overflow: auto;
+  padding: 2px 8px;
+}

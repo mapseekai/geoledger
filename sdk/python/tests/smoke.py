@@ -10,7 +10,7 @@ with open(os.environ["GL_TOKEN_FILE"]) as source:
 with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as client:
     info = client.info()
     project = client.create_project("python-" + str(uuid4()))
-    dataset = client.create_dataset(project.id, "places")
+    dataset = client.create_dataset(project.id, "places", "point")
     draft = client.create_workspace(project.id)
     feature = {"type": "Feature", "id": "one", "properties": {"exact": 18446744073709551615, "nested": {"geojson": "hello"}, "detail_json": "plain"}, "geometry": {"type": "Point", "coordinates": [1, 2, 3]}}
     assert draft.save(dataset.id, feature)["version"] == 1
@@ -29,7 +29,8 @@ with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as cl
     published = draft.publish("Python SDK")
     assert draft.publish("Python SDK") == published
     assert client.features(project.id, dataset.id, revision=published["revision"])["features"][0] == feature
-    assert len(client.history(project.id)) == 1
+    history = client.history(project.id)
+    assert len(history) == 1 and history[0]["source_workspace"] == published["workspace"] and history[0]["source_base_revision"] == 0
     assert len(client.commit(project.id, published["revision"])["changes"]) == 1
     assert client.audit(project.id)["events"]
     assert client.project(project.id).head == 1
@@ -42,7 +43,7 @@ with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as cl
     except GeoLedgerError as e:
         assert e.code == "conflict" and e.request_id and not e.uncertain
     try:
-        client.create_dataset(project.id, "places")
+        client.create_dataset(project.id, "places", "point")
         raise AssertionError("duplicate accepted")
     except GeoLedgerError as e:
         assert e.code == "conflict"

@@ -62,6 +62,21 @@ class GeoLedgerStub(object):
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.MemberRequest.SerializeToString,
                 response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
                 _registered_method=True)
+        self.RenameProject = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/RenameProject',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.RenameProjectRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.ProjectReply.FromString,
+                _registered_method=True)
+        self.RenameDataset = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/RenameDataset',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.RenameDatasetRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.DatasetReply.FromString,
+                _registered_method=True)
+        self.DeleteDataset = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/DeleteDataset',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.DeleteDatasetRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
+                _registered_method=True)
         self.CreateDataset = channel.unary_unary(
                 '/geoledger.v1.GeoLedger/CreateDataset',
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.DatasetRequest.SerializeToString,
@@ -92,6 +107,11 @@ class GeoLedgerStub(object):
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.SaveRequest.SerializeToString,
                 response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.SaveReply.FromString,
                 _registered_method=True)
+        self.SaveStream = channel.stream_unary(
+                '/geoledger.v1.GeoLedger/SaveStream',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.DataChunk.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.SaveReply.FromString,
+                _registered_method=True)
         self.Discard = channel.unary_unary(
                 '/geoledger.v1.GeoLedger/Discard',
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.VersionRequest.SerializeToString,
@@ -101,6 +121,11 @@ class GeoLedgerStub(object):
                 '/geoledger.v1.GeoLedger/Features',
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
                 response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesReply.FromString,
+                _registered_method=True)
+        self.FeaturesStream = channel.unary_stream(
+                '/geoledger.v1.GeoLedger/FeaturesStream',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.DataChunk.FromString,
                 _registered_method=True)
         self.Diff = channel.unary_unary(
                 '/geoledger.v1.GeoLedger/Diff',
@@ -205,6 +230,24 @@ class GeoLedgerServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RenameProject(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RenameDataset(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteDataset(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def CreateDataset(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -241,6 +284,13 @@ class GeoLedgerServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SaveStream(self, request_iterator, context):
+        """Concatenated chunks encode one SaveRequest; apply atomically only after EOF.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Discard(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -249,6 +299,13 @@ class GeoLedgerServicer(object):
 
     def Features(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def FeaturesStream(self, request, context):
+        """Concatenated chunks encode one snapshot-consistent FeaturesReply.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -359,6 +416,21 @@ def add_GeoLedgerServicer_to_server(servicer, server):
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.MemberRequest.FromString,
                     response_serializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.SerializeToString,
             ),
+            'RenameProject': grpc.unary_unary_rpc_method_handler(
+                    servicer.RenameProject,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.RenameProjectRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.ProjectReply.SerializeToString,
+            ),
+            'RenameDataset': grpc.unary_unary_rpc_method_handler(
+                    servicer.RenameDataset,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.RenameDatasetRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.DatasetReply.SerializeToString,
+            ),
+            'DeleteDataset': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteDataset,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.DeleteDatasetRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.SerializeToString,
+            ),
             'CreateDataset': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateDataset,
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.DatasetRequest.FromString,
@@ -389,6 +461,11 @@ def add_GeoLedgerServicer_to_server(servicer, server):
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.SaveRequest.FromString,
                     response_serializer=geoledger_dot_v1_dot_geoledger__pb2.SaveReply.SerializeToString,
             ),
+            'SaveStream': grpc.stream_unary_rpc_method_handler(
+                    servicer.SaveStream,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.DataChunk.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.SaveReply.SerializeToString,
+            ),
             'Discard': grpc.unary_unary_rpc_method_handler(
                     servicer.Discard,
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.VersionRequest.FromString,
@@ -398,6 +475,11 @@ def add_GeoLedgerServicer_to_server(servicer, server):
                     servicer.Features,
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.FromString,
                     response_serializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesReply.SerializeToString,
+            ),
+            'FeaturesStream': grpc.unary_stream_rpc_method_handler(
+                    servicer.FeaturesStream,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.DataChunk.SerializeToString,
             ),
             'Diff': grpc.unary_unary_rpc_method_handler(
                     servicer.Diff,
@@ -614,6 +696,87 @@ class GeoLedger(object):
             _registered_method=True)
 
     @staticmethod
+    def RenameProject(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/RenameProject',
+            geoledger_dot_v1_dot_geoledger__pb2.RenameProjectRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.ProjectReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RenameDataset(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/RenameDataset',
+            geoledger_dot_v1_dot_geoledger__pb2.RenameDatasetRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.DatasetReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteDataset(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/DeleteDataset',
+            geoledger_dot_v1_dot_geoledger__pb2.DeleteDatasetRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def CreateDataset(request,
             target,
             options=(),
@@ -776,6 +939,33 @@ class GeoLedger(object):
             _registered_method=True)
 
     @staticmethod
+    def SaveStream(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_unary(
+            request_iterator,
+            target,
+            '/geoledger.v1.GeoLedger/SaveStream',
+            geoledger_dot_v1_dot_geoledger__pb2.DataChunk.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.SaveReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def Discard(request,
             target,
             options=(),
@@ -819,6 +1009,33 @@ class GeoLedger(object):
             '/geoledger.v1.GeoLedger/Features',
             geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
             geoledger_dot_v1_dot_geoledger__pb2.FeaturesReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FeaturesStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/FeaturesStream',
+            geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.DataChunk.FromString,
             options,
             channel_credentials,
             insecure,

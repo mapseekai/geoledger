@@ -27,7 +27,6 @@ pub(super) fn merge_plan(
         truncated: false,
     };
     let mut after = String::new();
-    let mut budget = codec::Budget::new();
     // Restrict the workspace prefix before expanding joined historical JSON.
     loop {
         let (after_dataset, after_key) = cursor_parts(&after)?;
@@ -66,7 +65,8 @@ pub(super) fn merge_plan(
             match merged {
                 Ok(value) => {
                     if let Some(v) = &value {
-                        validate_candidate(&d.key, v)?;
+                        validate_candidate(v)?;
+                        validate_dataset_geometry(t, p, &d.dataset, v)?;
                     }
                     if value != o {
                         plan.change_count += 1;
@@ -102,17 +102,7 @@ pub(super) fn merge_plan(
                             item["reason"] = json!("stale_resolution");
                             item["resolved_against_revision"] = json!(d.resolved_head);
                         }
-                        if budget.take(&item).is_err() {
-                            if plan.conflicts.is_empty() {
-                                return Err(Error::new(
-                                    413,
-                                    "conflict exceeds response memory budget",
-                                ));
-                            }
-                            plan.truncated = true;
-                        } else {
-                            plan.conflicts.push(item);
-                        }
+                        plan.conflicts.push(item);
                     }
                 }
             }
@@ -249,6 +239,9 @@ pub(super) fn resolve(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> 
             ));
         }
         let value = e.feature.map(|f| normalize(f, &e.feature_id)).transpose()?;
+        if let Some(v) = &value {
+            validate_dataset_geometry(t, &r.project, &e.dataset, v)?;
+        }
         put_delta(
             t,
             &r.project,
@@ -297,6 +290,9 @@ pub(super) fn rebase(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> {
             return Err(Error::new(409, "resolutions must match conflicts exactly"));
         }
         let value = e.feature.map(|f| normalize(f, &e.feature_id)).transpose()?;
+        if let Some(v) = &value {
+            validate_dataset_geometry(t, &r.project, &e.dataset, v)?;
+        }
         if value != at_revision(t, &r.project, &e.dataset, &e.feature_id, current)? {
             t.stage_resolution(
                 &e.dataset,
@@ -329,17 +325,12 @@ pub(super) struct Restore {
     revision: i64,
 }
 pub(super) fn restore(t: &mut Transaction, s: &str, r: Restore) -> Result<Value> {
+    head(t, &r.project, true)?;
     membership(t, &r.project, s, true)?;
     t.commit_exists(&r.project, r.revision)?
         .ok_or_else(missing)?;
     let result = new_workspace(t, s, &r.project, r.revision)?;
     let w = result["workspace"].as_str().ok_or_else(bad)?;
-    let count: i64 = t
-        .count_commit_changes(&r.project, r.revision)?
-        .get(0usize)?;
-    if count > 1000 {
-        return Err(Error::new(413, "restore exceeds workspace limit"));
-    }
     t.restore_deltas(&r.project, r.revision, w)?;
     audit(
         t,

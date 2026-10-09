@@ -556,7 +556,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn dataset_exists(&mut self, project: &str, dataset: &str) -> Result<Option<Row>> {
         self.query_opt(
-            "SELECT 1 FROM gl_datasets WHERE project=$1 AND id=$2",
+            "SELECT geometry_type,name FROM gl_datasets WHERE project=$1 AND id=$2",
             &[&project, &dataset],
         )
     }
@@ -647,15 +647,105 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         // membership get an inactive placeholder that grants nothing.
         self.execute("INSERT INTO gl_project_members(project,subject,role,removed) VALUES($1,$2,'viewer',true) ON CONFLICT(project,subject) DO NOTHING", &[&project, &subject])
     }
-    fn insert_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()> {
+    fn insert_dataset(
+        &mut self,
+        project: &str,
+        dataset: &str,
+        name: &str,
+        geometry_type: &str,
+    ) -> Result<()> {
         self.execute(
-            "INSERT INTO gl_datasets VALUES($1,$2,$3)",
+            "INSERT INTO gl_datasets VALUES($1,$2,$3,$4)",
+            &[&project, &dataset, &name, &geometry_type],
+        )
+    }
+    fn rename_project(&mut self, project: &str, name: &str) -> Result<()> {
+        self.execute(
+            "UPDATE gl_projects SET name=$2 WHERE id=$1",
+            &[&project, &name],
+        )
+    }
+    fn rename_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()> {
+        self.execute(
+            "UPDATE gl_datasets SET name=$3 WHERE project=$1 AND id=$2",
             &[&project, &dataset, &name],
         )
     }
+    fn purge_data(&mut self, project: &str, dataset: Option<&str>) -> Result<()> {
+        self.execute("INSERT INTO gl_purge VALUES($1)", &[&project])?;
+        if let Some(dataset) = dataset {
+            // Capture only workspaces touched by this dataset, including published drafts.
+            let affected = self.query("SELECT workspace FROM gl_workspace_changes WHERE project=$1 AND dataset=$2 UNION SELECT c.workspace FROM gl_commits c JOIN gl_commit_changes d ON c.project=d.project AND c.revision=d.revision WHERE d.project=$1 AND d.dataset=$2", &[&project, &dataset])?;
+            let commits = self.query(
+                "SELECT DISTINCT revision FROM gl_commit_changes WHERE project=$1 AND dataset=$2",
+                &[&project, &dataset],
+            )?;
+            for table in ["gl_workspace_changes", "gl_history", "gl_commit_changes"] {
+                self.execute(
+                    &format!("DELETE FROM {table} WHERE project=$1 AND dataset=$2"),
+                    &[&project, &dataset],
+                )?;
+            }
+            for row in commits {
+                let revision: i64 = row.get(0usize)?;
+                let remaining: i64 = self
+                    .query_one(
+                        "SELECT count(*) FROM gl_commit_changes WHERE project=$1 AND revision=$2",
+                        &[&project, &revision],
+                    )?
+                    .get(0usize)?;
+                if remaining == 0 {
+                    let revision_text = revision.to_string();
+                    self.execute("DELETE FROM gl_idempotency WHERE project=$1 AND gl_json_field(result,'revision')=$2", &[&project, &revision_text])?;
+                    self.execute(
+                        "DELETE FROM gl_commits WHERE project=$1 AND revision=$2",
+                        &[&project, &revision],
+                    )?;
+                }
+            }
+            for row in affected {
+                let workspace: String = row.get(0usize)?;
+                let remaining: i64 = self.query_one("SELECT (SELECT count(*) FROM gl_workspace_changes WHERE project=$1 AND workspace=$2)+(SELECT count(*) FROM gl_commits WHERE project=$1 AND workspace=$2)", &[&project, &workspace])?.get(0usize)?;
+                if remaining == 0 {
+                    self.execute("DELETE FROM gl_idempotency WHERE project=$1 AND gl_json_field(payload,'workspace')=$2", &[&project, &workspace])?;
+                    self.execute(
+                        "DELETE FROM gl_workspaces WHERE project=$1 AND id=$2",
+                        &[&project, &workspace],
+                    )?;
+                } else {
+                    self.invalidate_resolutions(project, &workspace)?;
+                    self.execute(
+                        "UPDATE gl_workspaces SET version=version+1 WHERE project=$1 AND id=$2",
+                        &[&project, &workspace],
+                    )?;
+                }
+            }
+            self.execute(
+                "DELETE FROM gl_datasets WHERE project=$1 AND id=$2",
+                &[&project, &dataset],
+            )?;
+        } else {
+            for table in [
+                "gl_workspace_changes",
+                "gl_history",
+                "gl_commit_changes",
+                "gl_idempotency",
+                "gl_commits",
+                "gl_workspaces",
+                "gl_datasets",
+            ] {
+                self.execute(
+                    &format!("DELETE FROM {table} WHERE project=$1"),
+                    &[&project],
+                )?;
+            }
+        }
+        // The guard is transaction-local in lifetime; errors roll it and all deletes back.
+        self.execute("DELETE FROM gl_purge WHERE project=$1", &[&project])
+    }
     fn list_datasets(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
         self.query(
-            "SELECT id,name FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
+            "SELECT id,name,geometry_type FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
             &[&project, &after, &limit],
         )
     }
@@ -730,7 +820,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.query("WITH batch AS MATERIALIZED (SELECT * FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($4,$5) ORDER BY dataset,feature_id LIMIT $6) SELECT c.dataset,c.feature_id,c.properties,c.geom,b.properties,b.geom FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &after_dataset, &after_key, &limit])
     }
     fn history_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>> {
-        self.query("SELECT revision,subject,message,created_at FROM gl_commits WHERE project=$1 AND revision>$2 ORDER BY revision LIMIT $3", &[&project, &after, &limit])
+        self.query("SELECT c.revision,c.subject,c.message,c.created_at,c.workspace,w.base_revision FROM gl_commits c JOIN gl_workspaces w ON w.project=c.project AND w.id=c.workspace WHERE c.project=$1 AND c.revision>$2 ORDER BY c.revision LIMIT $3", &[&project, &after, &limit])
     }
     fn commit_exists(&mut self, project: &str, revision: i64) -> Result<Option<Row>> {
         self.query_opt(

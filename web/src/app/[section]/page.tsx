@@ -23,11 +23,13 @@ export default async function Page({
   )
     notFound();
   if (!(await session()).token) redirect("/login");
+  const query = await searchParams;
+  const hasProject = Object.hasOwn(query, "project");
   return (
     <Console
-      key={`${section}:${(await searchParams).project ?? ""}`}
+      key={`${section}:${hasProject ? (query.project ?? "") : "missing"}`}
       section={section}
-      projectId={(await searchParams).project ?? ""}
+      projectId={hasProject ? (query.project ?? "") : undefined}
       basemap={rasterBasemap(process.env)}
     />
   );

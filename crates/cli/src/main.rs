@@ -90,15 +90,12 @@ async fn run(a: Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ),
         Command::Call { operation, file } => {
             let mut data = Vec::new();
-            let reader: Box<dyn Read> = if file.as_os_str() == "-" {
+            let mut reader: Box<dyn Read> = if file.as_os_str() == "-" {
                 Box::new(std::io::stdin())
             } else {
                 Box::new(std::fs::File::open(file)?)
             };
-            reader.take(4 * 1024 * 1024 + 1).read_to_end(&mut data)?;
-            if data.len() > 4 * 1024 * 1024 {
-                return Err("request too large".into());
-            }
+            reader.read_to_end(&mut data)?;
             (operation, serde_json::from_slice(&data)?)
         }
     };

@@ -39,19 +39,20 @@
 | workspace_state | base_revision:i64, version:i64, status:text |
 | feature_page | feature_id:text, properties:text, geometry:text? |
 | feature_at | properties:text?, geometry:text? |
-| dataset_exists / commit_exists | 存在时返回单行标记 |
+| dataset_exists | geometry_type:text, name:text |
+| commit_exists | 存在时返回单行标记 |
 | advance_workspace | version:i64 |
 | list_projects | project:text, name:text, head:i64, state:text, role:text |
 | project_info / live_project | name:text, head:i64, state:text |
 | list_members | subject:text, role:text（仅有效成员，按 subject 排序） |
 | owned_projects | count:i64（subject 为有效 owner 且未删除的项目数） |
 | owner_summary | owner_count:i64, target_is_owner:i64（0/1） |
-| list_datasets | dataset:text, name:text |
+| list_datasets | dataset:text, name:text, geometry_type:text |
 | list_workspaces | workspace:text, base_revision:i64, version:i64, status:text |
 | has_resolution | bool |
 | count_deltas / count_commit_changes | count:i64 |
 | diff_page | dataset:text, key:text, draft_properties:text?, draft_geometry:text?, base_properties:text?, base_geometry:text? |
-| history_page | revision:i64, subject:text, message:text, created_at:text |
+| history_page | revision:i64, subject:text, message:text, created_at:text, source_workspace:text |
 | commit_page | dataset:text, key:text, before_properties:text?, before_geometry:text?, after_properties:text?, after_geometry:text? |
 | audit_page | id:i64, subject:text, action:text, detail:text, created_at:text |
 | merge_page | dataset:text, key:text, draft_properties:text?, draft_geometry:text?, resolved_head:i64?, resolution_stale:bool, base_properties:text?, base_geometry:text?, current_properties:text?, current_geometry:text? |
@@ -67,10 +68,16 @@ SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读�
 
 PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。几何的规范 GeoJSON 与属性 JSON 文本保留跨后端一致性，PostGIS 在 `ST_GeomFromGeoJSON(geom)` 上创建 GiST 表达式索引；bbox 使用 PostGIS 空间查询。几何合法性在共同应用层校验。
 
-当前格式为 6，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
+当前格式为 7，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
 
 ## 新后端验收
 
 运行 [conformance](../crates/engine/tests/conformance.rs) 同一组业务场景，并增加该后端的事务失败、锁等待期限、重启和崩溃恢复测试。必须覆盖并发发布、草稿竞态、删除遮蔽、精确数字、XYZ 几何、旧解决选择失效、权限隔离、失败批次回滚、原请求重试、历史分页与不可变性。单独运行容量用例验证索引与真实数据规模。
 
 接入步骤为实现 trait、配置服务端后端选择、运行共用 conformance 套件，再完成故障恢复和专项容量验收。构建与测试命令见 [开发指南](development.md#回归测试入口)，上线配置和备份要求见 [生产运行](production.md)。
+
+数据集必须声明不可变的 `geometry_type`（`point`、`line`、`polygon`）。单几何和多几何归入同一类；GeometryCollection 的所有成员必须同类，null 几何表示暂未提供位置。保存、冲突解决、重设基线和发布均执行类型校验。
+
+删除项目清除全部数据集、工作区、版本、历史快照和发布收据，保留项目删除标记、成员引用与不可变审计记录。删除数据集仅清除对应记录：共享版本保留其他数据集的变更，共享工作区保留并递增版本、失效旧冲突解决标记；仅因此变空的版本和工作区会移除。未涉及的空工作区不受影响。项目 head 保留为已分配版本号的高水位，版本号可以有空缺，不重新编号或复用。已删除版本的发布收据会清除，幸存版本的原始请求收据保持不变。
+
+`RepositoryTransaction::purge_data` 在项目锁保护下启用并清除事务内的 `gl_purge` 标记，允许指定项目删除不可变数据记录。其他写入仍受不可变触发器约束；审计不允许删除。此标记不导出、不持久保留，失败事务同时回滚标记与数据删除。

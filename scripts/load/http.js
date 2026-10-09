@@ -54,7 +54,7 @@ function call(op, body) {
 
 export function setup() {
   const project = call('create_project', { name: `load-${Date.now()}` }).json('project');
-  const dataset = call('create_dataset', { project, name: 'points' }).json('dataset');
+  const dataset = call('create_dataset', { project, name: 'points', geometry_type: 'point' }).json('dataset');
   if (!project || !dataset) fail('could not create the load-test project');
   return { project, dataset };
 }

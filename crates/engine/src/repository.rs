@@ -104,7 +104,18 @@ pub trait RepositoryTransaction: Send {
     fn ensure_identity(&mut self, project: &str, subject: &str) -> Result<()>;
     fn owner_summary(&mut self, project: &str, subject: &str) -> Result<Row>;
     fn set_member(&mut self, project: &str, subject: &str, role: &str) -> Result<()>;
-    fn insert_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()>;
+    fn insert_dataset(
+        &mut self,
+        project: &str,
+        dataset: &str,
+        name: &str,
+        geometry_type: &str,
+    ) -> Result<()>;
+    fn rename_project(&mut self, project: &str, name: &str) -> Result<()>;
+    fn rename_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()>;
+    /// Purge the selected dataset, or all project data. Caller holds the project lock.
+    /// Shared commits/workspaces retain other datasets; audit records remain immutable.
+    fn purge_data(&mut self, project: &str, dataset: Option<&str>) -> Result<()>;
     fn list_datasets(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>>;
     fn insert_workspace(
         &mut self,

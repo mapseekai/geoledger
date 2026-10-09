@@ -33,6 +33,7 @@ class Member:
 class Dataset:
     id: str
     name: str
+    geometry_type: str
 
 @dataclass(frozen=True)
 class WorkspaceInfo:
@@ -107,7 +108,7 @@ def _error(error):
         pass  # Malformed optional metadata must not hide the original failure.
     return GeoLedgerError(codes.get(error.code(), "unavailable"), error.details() or "request failed", uncertain=uncertain)
 
-_REQUESTS = {"Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
+_REQUESTS = {"RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDatasetRequest", "DeleteDataset": "DeleteDatasetRequest", "Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
              "SetMember": "MemberRequest", "CreateDataset": "DatasetRequest", "ListDatasets": "ProjectPageRequest",
              "CreateWorkspace": "ProjectRequest", "ListWorkspaces": "ProjectPageRequest", "GetWorkspace": "WorkspaceRequest",
              "Save": "SaveRequest", "Discard": "VersionRequest", "Features": "FeaturesRequest", "Diff": "DiffRequest",
@@ -140,8 +141,8 @@ class Client:
         opted_in = allow_insecure or os.environ.get("GL_ALLOW_INSECURE_TRANSPORT", "") in ("1", "true", "yes")
         if url.scheme == "http" and not _is_loopback(url.hostname or "") and not opted_in:
             raise _invalid("refusing to send credentials over plaintext http to a non-loopback host; use https or allow_insecure=True")
-        options = [("grpc.max_receive_message_length", 4 * 1024 * 1024),
-                   ("grpc.max_send_message_length", 4 * 1024 * 1024), ("grpc.enable_retries", 0)]
+        options = [("grpc.max_receive_message_length", -1),
+                   ("grpc.max_send_message_length", -1), ("grpc.enable_retries", 0)]
         self._channel = (_grpc.secure_channel(url.netloc, _grpc.ssl_channel_credentials(), options)
                          if url.scheme == "https" else _grpc.insecure_channel(url.netloc, options))
         self._stub = _Stub(self._channel)
@@ -218,11 +219,20 @@ class Client:
         return Project(**self._call("ArchiveProject", project=project, archived=archived))
 
     def delete_project(self, project: str, confirm_name: str) -> None:
-        """Permanently hide a project; confirm_name must equal its name."""
+        """Delete all project data and retain its audit tombstone; confirm_name must equal its name."""
         self._call("DeleteProject", project=project, confirm_name=confirm_name)
 
-    def create_dataset(self, project: str, name: str) -> Dataset:
-        return Dataset(**self._call("CreateDataset", project=project, name=name))
+    def rename_project(self, project: str, name: str) -> Project:
+        return Project(**self._call("RenameProject", project=project, name=name))
+
+    def rename_dataset(self, project: str, dataset: str, name: str) -> Dataset:
+        return Dataset(**self._call("RenameDataset", project=project, dataset=dataset, name=name))
+
+    def delete_dataset(self, project: str, dataset: str, confirm_name: str) -> None:
+        self._call("DeleteDataset", project=project, dataset=dataset, confirm_name=confirm_name)
+
+    def create_dataset(self, project: str, name: str, geometry_type: str) -> Dataset:
+        return Dataset(**self._call("CreateDataset", project=project, name=name, geometry_type=geometry_type))
 
     def datasets(self, project: str, *, after: str = "", limit: int = 100) -> list[Dataset]:
         return [Dataset(**r) for r in self._call("ListDatasets", project=project, after=after, limit=limit)["datasets"]]

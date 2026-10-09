@@ -51,7 +51,7 @@ echo "== seed (SQLite, $base)"
 start "$work/live"
 token=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d[0]["token"])' "$work/live/admin-credentials.json")
 project=$(call create_project '{"name":"drill"}' | field project)
-dataset=$(call create_dataset "{\"project\":\"$project\",\"name\":\"roads\"}" | field dataset)
+dataset=$(call create_dataset "{\"project\":\"$project\",\"name\":\"roads\",\"geometry_type\":\"point\"}" | field dataset)
 for i in 1 2 3; do
   ws=$(call create_workspace "{\"project\":\"$project\"}" | field workspace)
   call save "{\"project\":\"$project\",\"workspace\":\"$ws\",\"expected_workspace_version\":0,\"edits\":[{\"dataset\":\"$dataset\",\"feature_id\":\"road-$i\",\"feature\":{\"type\":\"Feature\",\"id\":\"road-$i\",\"properties\":{\"exact\":18446744073709551615},\"geometry\":{\"type\":\"Point\",\"coordinates\":[120,30]}}}]}" >/dev/null

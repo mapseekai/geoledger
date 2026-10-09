@@ -19,12 +19,13 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Access, AuditPanel } from "./access-audit";
 import { Brand } from "./brand";
 import { MapConfigProvider } from "./map-config";
 import type { RasterBasemap } from "@/lib/basemap";
+import { currentProjectKey, resolveProject } from "@/lib/project-context";
 import { Empty, ErrorBox, Loading, Tip, useMedia } from "./common";
 import { HistoryPanel } from "./history";
 import { Datasets, Projects, ServiceInfo } from "./projects";
@@ -93,40 +94,57 @@ export function Console({
   basemap,
 }: {
   section: string;
-  projectId: string;
+  projectId?: string;
   basemap?: RasterBasemap;
 }) {
   const router = useRouter();
-  const [info, setInfo] = useState<Info>(),
-    [project, setProject] = useState<Project>(),
-    [error, setError] = useState("");
+  const searchParams = useSearchParams();
+  const query = searchParams.toString();
+  const navigationQuery = query ? `?${query}` : "";
+  const [info, setInfo] = useState<Info>();
+  const [project, setProject] = useState<Project>();
+  const [error, setError] = useState("");
+  const [resolved, setResolved] = useState(false);
   const [mobile, setMobile] = useState(false);
   const narrow = useMedia("(max-width: 1024px)");
   const logout = useAction();
   useEffect(() => {
     let active = true;
-    Promise.all([
-      call<Info>({ action: "info" }),
-      projectId
-        ? call<Project>({ action: "project", project: projectId })
-        : Promise.resolve(undefined),
-    ])
-      .then(([i, p]) => {
-        if (active) {
-          setInfo(i);
-          setProject(p);
-        }
-      })
-      .catch((e) => {
-        if (active) setError(e.message);
+    const replaceProject = (id: string) => {
+      const next = new URLSearchParams(query);
+      next.set("project", id);
+      router.replace(`/${section}?${next}`);
+    };
+    const loadProject = async () => {
+      const result = await resolveProject({
+        explicit: projectId,
+        remembered: sessionStorage.getItem(currentProjectKey),
+        getProject: (id) => call<Project>({ action: "project", project: id }),
+        listProjectIds: async () =>
+          (await call<Project[]>({ action: "projects", limit: 1 })).map(
+            (project) => project.id,
+          ),
       });
+      if (!active) return;
+      if (result.forgotRemembered) sessionStorage.removeItem(currentProjectKey);
+      if (!result.project) {
+        setResolved(true);
+        return;
+      }
+      sessionStorage.setItem(currentProjectKey, result.project.id);
+      if (result.source === "explicit") setProject(result.project);
+      else replaceProject(result.project.id);
+    };
+    void call<Info>({ action: "info" })
+      .then((i) => active && setInfo(i))
+      .catch((e) => active && setError(e.message));
+    void loadProject().catch((e) => active && setError(e.message));
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, query, router, section]);
   const meta = sections.find((s) => s.id === section)!;
   const writable = project?.role === "owner" || project?.role === "editor";
-  const query = projectId ? `?project=${encodeURIComponent(projectId)}` : "";
   const status = info ? "online" : error ? "offline" : "pending";
   const statusText = info
     ? `${info.backend.toUpperCase()} · 已连接`
@@ -137,7 +155,7 @@ export function Console({
     <>
       <div className="sidebar-header">
         <Link
-          href="/projects"
+          href={`/projects${navigationQuery}`}
           aria-label="GeoLedger 项目"
           className="sidebar-brand"
         >
@@ -160,7 +178,7 @@ export function Console({
         <div className="sidebar-label">当前项目</div>
         <Tip label="切换项目" side="right">
           <Link
-            href="/projects"
+            href={`/projects${navigationQuery}`}
             className="project-switch"
             onClick={() => setMobile(false)}
           >
@@ -188,9 +206,9 @@ export function Console({
                 return (
                   <Link
                     key={item.id}
-                    className={`nav-item ${active ? "active" : ""} ${item.scoped && !projectId ? "is-idle" : ""}`}
+                    className={`nav-item ${active ? "active" : ""} ${item.scoped && !project ? "is-idle" : ""}`}
                     aria-current={active ? "page" : undefined}
-                    href={`/${item.id}${query}`}
+                    href={`/${item.id}${navigationQuery}`}
                     onClick={() => setMobile(false)}
                   >
                     <item.icon size={17} aria-hidden="true" />
@@ -229,6 +247,7 @@ export function Console({
                 void logout.run(async () => {
                   await send("/api/session", "DELETE");
                   sessionStorage.removeItem("gl.publication");
+                  sessionStorage.removeItem(currentProjectKey);
                   router.replace("/login");
                   router.refresh();
                 })
@@ -270,7 +289,7 @@ export function Console({
             <Menu />
           </Button>
           <nav aria-label="面包屑" className="breadcrumbs">
-            <Link href="/projects">控制台</Link>
+            <Link href={`/projects${navigationQuery}`}>控制台</Link>
             {project && meta.scoped && (
               <>
                 <ChevronRight size={14} aria-hidden="true" />
@@ -304,10 +323,10 @@ export function Console({
             <Projects info={info} />
           ) : section === "service" ? (
             !error && <ServiceInfo info={info} />
-          ) : !projectId ? (
+          ) : projectId === undefined && resolved ? (
             <section className="panel">
               <Empty icon={FolderOpen} title="先选择一个项目">
-                <Link href="/projects">
+                <Link href={`/projects${navigationQuery}`}>
                   前往项目列表 <ArrowRight className="inline size-4" />
                 </Link>
               </Empty>

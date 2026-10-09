@@ -1,5 +1,11 @@
 "use client";
-import { call, type Dataset, type Info, type Project } from "@/lib/browser-api";
+import {
+  call,
+  type Dataset,
+  type GeometryType,
+  type Info,
+  type Project,
+} from "@/lib/browser-api";
 import {
   ArrowRight,
   Database,
@@ -31,6 +37,14 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 import {
   Table,
   TableBody,
@@ -43,6 +57,7 @@ export function Projects({ info }: { info?: Info }) {
   const [refresh, setRefresh] = useState(0),
     [create, setCreate] = useState(false),
     [query, setQuery] = useState("");
+  const [manage, setManage] = useState<{ item: Project; remove: boolean }>();
   const page = usePage<Project>(
     async (after) =>
       listPage(await call<Project[]>({ action: "projects", after, limit: 20 })),
@@ -148,6 +163,24 @@ export function Projects({ info }: { info?: Info }) {
                     {short(p.id)}
                   </TableCell>
                   <TableCell className="cell-actions">
+                    {p.role === "owner" && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setManage({ item: p, remove: false })}
+                        >
+                          重命名
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setManage({ item: p, remove: true })}
+                        >
+                          删除
+                        </Button>
+                      </>
+                    )}
                     <Button asChild variant="ghost" size="sm">
                       <Link
                         aria-label={`打开 ${p.name}`}
@@ -170,6 +203,34 @@ export function Projects({ info }: { info?: Info }) {
         )}
         {page.footer}
       </Panel>
+      {manage && (
+        <NameDialog
+          title={manage.remove ? "删除项目" : "修改项目名称"}
+          actionLabel={manage.remove ? "删除" : "保存"}
+          initialName={manage.remove ? "" : manage.item.name}
+          confirmName={manage.remove ? manage.item.name : undefined}
+          description={
+            manage.remove
+              ? `删除「${manage.item.name}」及全部数据集、工作区和版本历史，此操作不可撤销。`
+              : undefined
+          }
+          close={() => setManage(undefined)}
+          submit={async (name) => {
+            await call(
+              manage.remove
+                ? {
+                    action: "deleteProject",
+                    project: manage.item.id,
+                    confirmName: name,
+                  }
+                : { action: "renameProject", project: manage.item.id, name },
+            );
+            setManage(undefined);
+            setRefresh((n) => n + 1);
+            page.reset();
+          }}
+        />
+      )}
       {create && (
         <NameDialog
           title="创建项目"
@@ -219,6 +280,8 @@ export function Datasets({
   const [selected, setSelected] = useState<Dataset>(),
     [create, setCreate] = useState(false),
     [refresh, setRefresh] = useState(0);
+  const [geometryType, setGeometryType] = useState<GeometryType>("point");
+  const [manage, setManage] = useState<{ item: Dataset; remove: boolean }>();
   const page = usePage<Dataset>(
     async (after) =>
       listPage(
@@ -262,6 +325,7 @@ export function Datasets({
             <TableHeader>
               <TableRow>
                 <TableHead>数据集名称</TableHead>
+                <TableHead>几何类型</TableHead>
                 <TableHead>数据集标识</TableHead>
                 <TableHead className="cell-actions">操作</TableHead>
               </TableRow>
@@ -281,8 +345,28 @@ export function Datasets({
                       {d.name}
                     </Button>
                   </TableCell>
+                  <TableCell>
+                    {{ point: "点", line: "线", polygon: "面" }[d.geometryType]}
+                  </TableCell>
                   <TableCell className="mono muted">{d.id}</TableCell>
                   <TableCell className="cell-actions">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={!writable}
+                      onClick={() => setManage({ item: d, remove: false })}
+                    >
+                      重命名
+                    </Button>
+                    {project.role === "owner" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setManage({ item: d, remove: true })}
+                      >
+                        删除
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -301,17 +385,78 @@ export function Datasets({
         )}
         {page.footer}
       </Panel>
+      {manage && (
+        <NameDialog
+          title={manage.remove ? "删除数据集" : "修改数据集名称"}
+          actionLabel={manage.remove ? "删除" : "保存"}
+          initialName={manage.remove ? "" : manage.item.name}
+          confirmName={manage.remove ? manage.item.name : undefined}
+          description={
+            manage.remove
+              ? `删除「${manage.item.name}」的要素、工作区变更和版本历史；保留其他数据集的记录，清理空记录。此操作不可撤销。`
+              : undefined
+          }
+          close={() => setManage(undefined)}
+          submit={async (name) => {
+            await call(
+              manage.remove
+                ? {
+                    action: "deleteDataset",
+                    project: project.id,
+                    dataset: manage.item.id,
+                    confirmName: name,
+                  }
+                : {
+                    action: "renameDataset",
+                    project: project.id,
+                    dataset: manage.item.id,
+                    name,
+                  },
+            );
+            setManage(undefined);
+            setRefresh((n) => n + 1);
+            page.reset();
+          }}
+        />
+      )}
       {create && (
         <NameDialog
           title="创建数据集"
           close={() => setCreate(false)}
           submit={async (name) => {
-            await call({ action: "createDataset", project: project.id, name });
+            await call({
+              action: "createDataset",
+              project: project.id,
+              name,
+              geometryType,
+            });
             setCreate(false);
             setRefresh((n) => n + 1);
             page.reset();
           }}
-        />
+        >
+          <Label htmlFor="geometry-type">几何类型</Label>
+          <Select
+            value={geometryType}
+            onValueChange={(value) => setGeometryType(value as GeometryType)}
+          >
+            <SelectTrigger id="geometry-type" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="point">点（Point / MultiPoint）</SelectItem>
+              <SelectItem value="line">
+                线（LineString / MultiLineString）
+              </SelectItem>
+              <SelectItem value="polygon">
+                面（Polygon / MultiPolygon）
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="muted">
+            创建后不可更改类型；后续新增和修改必须使用相同类型。
+          </p>
+        </NameDialog>
       )}
     </>
   );
@@ -334,14 +479,26 @@ export function ServiceInfo({ info }: { info?: Info }) {
       <Stat
         icon={FileJson}
         label="单要素上限"
-        value={bytes(info.maxFeatureBytes)}
-        hint={`${info.maxFeatureBytes.toLocaleString()} bytes`}
+        value={
+          info.maxFeatureBytes === 0 ? "不限制" : bytes(info.maxFeatureBytes)
+        }
+        hint={
+          info.maxFeatureBytes === 0
+            ? "不设独立字节上限"
+            : `${info.maxFeatureBytes.toLocaleString()} bytes`
+        }
       />
       <Stat
         icon={Gauge}
         label="单次请求上限"
-        value={bytes(info.maxRequestBytes)}
-        hint={`${info.maxRequestBytes.toLocaleString()} bytes`}
+        value={
+          info.maxRequestBytes === 0 ? "不限制" : bytes(info.maxRequestBytes)
+        }
+        hint={
+          info.maxRequestBytes === 0
+            ? "支持大数据传输"
+            : `${info.maxRequestBytes.toLocaleString()} bytes`
+        }
       />
     </div>
   );

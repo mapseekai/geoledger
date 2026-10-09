@@ -26,6 +26,7 @@ import {
 } from "@/lib/map";
 import { Tip } from "./common";
 import { useRasterBasemap } from "./map-config";
+import { Alert, AlertDescription } from "./ui/alert";
 import { Button } from "./ui/button";
 import {
   DropdownMenu,
@@ -421,9 +422,9 @@ export function MapView({
       <div ref={tip} className="map-tip" hidden />
       {children}
       {error && (
-        <div className="map-overlay" role="alert">
-          地图无法加载：{error}
-        </div>
+        <Alert variant="destructive" className="map-overlay">
+          <AlertDescription>地图无法加载：{error}</AlertDescription>
+        </Alert>
       )}
       <div className="map-controls" role="toolbar" aria-label="地图工具">
         <div className="map-control-group">

@@ -112,11 +112,7 @@ pub(super) fn coordinates(v: &Value) -> Result<()> {
 }
 pub(super) fn normalize(f: Feature, key: &str) -> Result<Stored> {
     text(key, 256)?;
-    if f.kind != "Feature"
-        || f.id != key
-        || f.properties.len() > 256
-        || serde_json::to_vec(&f).map_err(|_| bad())?.len() > 16384
-    {
+    if f.kind != "Feature" || f.id != key || f.properties.len() > 256 {
         return Err(bad());
     }
     for (k, value) in &f.properties {
@@ -156,14 +152,9 @@ fn portable_property(value: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn validate_candidate(key: &str, value: &Stored) -> Result<()> {
+pub(super) fn validate_candidate(value: &Stored) -> Result<()> {
     // Merging individually valid property maps can exceed a Feature's bounds.
-    if value.properties.len() > 256
-        || serde_json::to_vec(&geojson(key, Some(value))?)
-            .map_err(|_| bad())?
-            .len()
-            > 16384
-    {
+    if value.properties.len() > 256 {
         return Err(Error::new(
             422,
             "merged feature exceeds feature limits; revise the draft",
@@ -207,5 +198,36 @@ pub(super) fn at_revision(
 pub(super) fn dataset(t: &mut Transaction, p: &str, d: &str) -> Result<()> {
     id(d)?;
     t.dataset_exists(p, d)?.ok_or_else(missing)?;
+    Ok(())
+}
+
+pub(super) fn validate_dataset_geometry(
+    t: &mut Transaction,
+    p: &str,
+    d: &str,
+    v: &Stored,
+) -> Result<()> {
+    let family: String = t.dataset_exists(p, d)?.ok_or_else(missing)?.get(0usize)?;
+    fn matches(v: &Value, family: &str) -> bool {
+        match v.get("type").and_then(Value::as_str) {
+            Some("Point" | "MultiPoint") => family == "point",
+            Some("LineString" | "MultiLineString") => family == "line",
+            Some("Polygon" | "MultiPolygon") => family == "polygon",
+            Some("GeometryCollection") => v
+                .get("geometries")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.iter().all(|v| matches(v, family))),
+            _ => false,
+        }
+    }
+    if let Some(g) = &v.geometry {
+        let value: Value = codec::stored(g)?;
+        if !matches(&value, &family) {
+            return Err(Error::new(
+                400,
+                &format!("dataset {d} only accepts {family} geometries"),
+            ));
+        }
+    }
     Ok(())
 }

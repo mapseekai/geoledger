@@ -9,9 +9,15 @@ test("plaintext to remote hosts requires explicit opt-in", () => {
     () => new Client("http://geoledger.example:7882", "token"),
     (e) => e.code === "invalid_argument",
   );
-  new Client("http://geoledger.example:7882", "token", 1000, { allowInsecure: true }).close();
+  new Client("http://geoledger.example:7882", "token", 1000, {
+    allowInsecure: true,
+  }).close();
   new Client("http://127.0.0.1:7882", "token").close();
-  assert.ok(isLoopbackHost("[::1]") && isLoopbackHost("localhost") && !isLoopbackHost("10.0.0.1"));
+  assert.ok(
+    isLoopbackHost("[::1]") &&
+      isLoopbackHost("localhost") &&
+      !isLoopbackHost("10.0.0.1"),
+  );
 });
 
 test("public client keeps generated transport private", () => {
@@ -32,6 +38,18 @@ test("JSON properties remain opaque and integer tokens remain exact", () => {
   assert.equal(parsed.detail_json, "plain");
   assert.equal(parsed.exact, 9007199254740993n);
   assert.equal(parsed.max, 18446744073709551615n);
+});
+test("JSON preserves own __proto__ properties without rounding numbers", () => {
+  const parsed = parseJson(
+    '{"__proto__":{"exact":18446744073709551615},"ordinary":9007199254740993}',
+  );
+  assert.equal(Object.hasOwn(parsed, "__proto__"), true);
+  assert.equal(Object.getPrototypeOf(parsed), Object.prototype);
+  assert.equal(parsed.__proto__.exact, 18446744073709551615n);
+  assert.equal(parsed.ordinary, 9007199254740993n);
+  const escaped = parseJson('{"__pr\\u006fto__":18446744073709551615}');
+  assert.equal(Object.hasOwn(escaped, "__proto__"), true);
+  assert.equal(escaped.__proto__, 18446744073709551615n);
 });
 
 test("integral decimal and exponent spellings must not silently lose digits", () => {
@@ -172,12 +190,26 @@ test("definite conflict permits resolution with the unchanged draft version", as
 for (const code of ["unauthenticated", "permission_denied", "not_found"]) {
   test(`retry ${code} preserves original publication`, async () => {
     const sent = [];
-    const workspace = new Workspace({publish: async (intent) => {
-      sent.push({...intent});
-      if (sent.length === 1) throw new GeoLedgerError("unavailable", "lost", undefined, undefined, true);
-      if (sent.length === 2) throw new GeoLedgerError(code, "access denied");
-      return {revision: 2n, version: 5n, status: "published"};
-    }}, "project", {id: "draft", baseRevision: 1n, version: 4n, status: "open"});
+    const workspace = new Workspace(
+      {
+        publish: async (intent) => {
+          sent.push({ ...intent });
+          if (sent.length === 1)
+            throw new GeoLedgerError(
+              "unavailable",
+              "lost",
+              undefined,
+              undefined,
+              true,
+            );
+          if (sent.length === 2)
+            throw new GeoLedgerError(code, "access denied");
+          return { revision: 2n, version: 5n, status: "published" };
+        },
+      },
+      "project",
+      { id: "draft", baseRevision: 1n, version: 4n, status: "open" },
+    );
     await assert.rejects(workspace.publish("original"));
     await assert.rejects(workspace.publish("original"));
     assert.deepEqual(workspace.pendingPublication, sent[0]);
@@ -188,15 +220,111 @@ for (const code of ["unauthenticated", "permission_denied", "not_found"]) {
 }
 
 test("first access failure and retry conflict release intent", async () => {
-  for (const code of ["unauthenticated", "permission_denied", "not_found", "conflict"]) {
+  for (const code of [
+    "unauthenticated",
+    "permission_denied",
+    "not_found",
+    "conflict",
+  ]) {
     let calls = 0;
-    const workspace = new Workspace({publish: async () => {
-      if (code === "conflict" && calls++ === 0)
-        throw new GeoLedgerError("unavailable", "lost", undefined, undefined, true);
-      throw new GeoLedgerError(code, "rejected");
-    }}, "project", {id: "draft", baseRevision: 1n, version: 4n, status: "open"});
-    if (code === "conflict") await assert.rejects(workspace.publish("original"));
+    const workspace = new Workspace(
+      {
+        publish: async () => {
+          if (code === "conflict" && calls++ === 0)
+            throw new GeoLedgerError(
+              "unavailable",
+              "lost",
+              undefined,
+              undefined,
+              true,
+            );
+          throw new GeoLedgerError(code, "rejected");
+        },
+      },
+      "project",
+      { id: "draft", baseRevision: 1n, version: 4n, status: "open" },
+    );
+    if (code === "conflict")
+      await assert.rejects(workspace.publish("original"));
     await assert.rejects(workspace.publish("original"));
     assert.equal(workspace.pendingPublication, undefined);
+  }
+});
+
+test("large saves and feature reads use chunked RPCs and reject truncated responses", async () => {
+  const grpc = require("@grpc/grpc-js");
+  const wire = require("../dist/_internal/geoledger/v1/geoledger");
+  const server = new grpc.Server();
+  const raw = JSON.stringify({
+    type: "Feature",
+    id: "large",
+    properties: { payload: "x".repeat(5 * 1024 * 1024) },
+    geometry: null,
+  });
+  let uploaded;
+  let chunksReceived = 0;
+  let truncate = false;
+  server.addService(wire.GeoLedgerService, {
+    saveStream(call, cb) {
+      assert.equal(call.metadata.get("authorization")[0], "Bearer test-token");
+      const chunks = [];
+      let total;
+      call.on("data", (chunk) => {
+        if (!chunks.length) total = Number(chunk.totalBytes);
+        chunks.push(chunk.data);
+        chunksReceived++;
+        assert.ok(chunk.data.length <= 65536);
+      });
+      call.on("end", () => {
+        const bytes = Buffer.concat(chunks);
+        assert.equal(bytes.length, total);
+        uploaded = wire.SaveRequest.decode(bytes);
+        cb(null, { version: "1", changes: "1", warnings: [] });
+      });
+    },
+    featuresStream(call) {
+      const bytes = wire.FeaturesReply.encode({
+        features: [{ geojson: raw }],
+        revision: "0",
+        workspaceVersion: "1",
+      }).finish();
+      for (let offset = 0; offset < bytes.length; offset += 65536)
+        call.write({
+          data: Buffer.from(bytes.subarray(offset, offset + 65536)),
+          totalBytes:
+            offset === 0 ? String(bytes.length + (truncate ? 1 : 0)) : "0",
+        });
+      call.end();
+    },
+  });
+  const port = await new Promise((resolve, reject) =>
+    server.bindAsync(
+      "127.0.0.1:0",
+      grpc.ServerCredentials.createInsecure(),
+      (error, port) => (error ? reject(error) : resolve(port)),
+    ),
+  );
+  const client = new Client(`http://127.0.0.1:${port}`, "test-token");
+  try {
+    assert.equal(
+      (
+        await client.save("p", "w", 0n, [
+          { dataset: "d", featureId: "large", feature: raw },
+        ])
+      ).version,
+      1n,
+    );
+    assert.ok(chunksReceived > 80);
+    assert.equal(uploaded.edits[0].feature.geojson, raw);
+    const result = await client.features("p", "d");
+    assert.equal(result.features[0].properties.payload.length, 5 * 1024 * 1024);
+    truncate = true;
+    await assert.rejects(
+      client.features("p", "d"),
+      /invalid streamed response/,
+    );
+  } finally {
+    client.close();
+    server.forceShutdown();
   }
 });

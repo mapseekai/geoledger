@@ -48,7 +48,7 @@ fn scenario(instances: &[Application]) -> TestResult {
         &execute(
             first,
             "create_dataset",
-            json!({"project":project,"name":"shared"}),
+            json!({"geometry_type":"point","project":project,"name":"shared"}),
         )?,
         "dataset",
     )?;

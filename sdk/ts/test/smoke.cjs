@@ -11,7 +11,7 @@ const client = new Client(
 (async () => {
   try {
     const project = await client.createProject("ts-" + randomUUID());
-    const dataset = await client.createDataset(project.id, "places");
+    const dataset = await client.createDataset(project.id, "places", "point");
     const draft = await client.createWorkspace(project.id);
     const feature = {
       type: "Feature",
@@ -44,7 +44,10 @@ const client = new Client(
       ).features[0],
       feature,
     );
-    assert.equal((await client.history(project.id)).length, 1);
+    const history = await client.history(project.id);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].sourceWorkspace, receipt.workspace);
+    assert.equal(history[0].sourceBaseRevision, 0n);
     assert.equal(
       (await client.commit(project.id, receipt.revision)).changes.length,
       1,
@@ -56,7 +59,7 @@ const client = new Client(
         e instanceof GeoLedgerError && e.code === "conflict" && !e.uncertain,
     );
     await assert.rejects(
-      client.createDataset(project.id, "places"),
+      client.createDataset(project.id, "places", "point"),
       (e) => e.code === "conflict",
     );
     assert.equal(parseJson("9007199254740993.0"), 9007199254740993n);

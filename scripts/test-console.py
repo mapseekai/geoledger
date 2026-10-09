@@ -84,12 +84,11 @@ with sync_playwright() as p:
     page.get_by_role('option').nth(1).click()
     expect(page.locator('.map-canvas canvas')).to_be_visible(timeout=30000)
     page.locator('.feature-row',has_text='road-1').click()
-    # A collection exercises point, line and fill layers together.
+    # Homogeneous collections obey the point dataset family.
     collection=json.loads(feature)
     collection['geometry']={'type':'GeometryCollection','geometries':[
         {'type':'MultiPoint','coordinates':[[104,35],[104.01,35.01]]},
-        {'type':'LineString','coordinates':[[103.99,34.99],[104.02,35.02]]},
-        {'type':'Polygon','coordinates':[[[104,35],[104.02,35],[104.02,35.02],[104,35.02],[104,35]]]}]}
+        {'type':'Point','coordinates':[103.99,34.99]}]}
     page.get_by_role('button',name='编辑',exact=True).click()
     page.get_by_label('GeoJSON',exact=True).fill(json.dumps(collection))
     page.get_by_role('button',name='保存到工作区',exact=True).click()
@@ -149,7 +148,7 @@ with sync_playwright() as p:
     data=command({'action':'features','project':project,'dataset':datasets[0]['id']})
     assert '18446744073709551615' in data['features'][0]['geojson']
     for index in range(21):
-        command({'action':'createDataset','project':project,'name':f'分页数据集 {index:02}'})
+        command({'action':'createDataset','geometryType':'point','project':project,'name':f'分页数据集 {index:02}'})
     page.goto(origin+'/datasets?project='+project)
     expect(page.get_by_text('第 1 页 · 本页 20 项',exact=True)).to_be_visible()
     page.get_by_role('button',name='下一页',exact=True).click()
@@ -182,7 +181,7 @@ with sync_playwright() as p:
     # Interoperability and concurrent paging: workspace beyond first 100, 256-byte ID,
     # stale draft pages, and a published snapshot pinned while another user publishes.
     edge=command({'action':'createProject','name':'分页边界 '+uuid.uuid4().hex[:8]})['id']
-    dataset=command({'action':'createDataset','project':edge,'name':'边界要素'})['id']
+    dataset=command({'action':'createDataset','geometryType':'point','project':edge,'name':'边界要素'})['id']
     workspaces=[command({'action':'createWorkspace','project':edge}) for _ in range(101)]
     listed={w['id'] for w in command({'action':'workspaces','project':edge,'limit':100})}
     workspace=next(w for w in workspaces if w['id'] not in listed)

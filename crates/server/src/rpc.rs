@@ -6,8 +6,8 @@ use serde_json::json;
 use tonic::{Code, Request, Response, Status};
 pub fn grpc(service: Service) -> pb::geo_ledger_server::GeoLedgerServer<Service> {
     pb::geo_ledger_server::GeoLedgerServer::new(service)
-        .max_decoding_message_size(MAX_BYTES)
-        .max_encoding_message_size(MAX_BYTES)
+        .max_decoding_message_size(usize::MAX)
+        .max_encoding_message_size(usize::MAX)
 }
 fn input(mut value: Value) -> Result<Value> {
     if let Some(o) = value.as_object_mut() {
@@ -185,6 +185,94 @@ fn parse_timeout(s: &str) -> Option<Duration> {
 }
 #[tonic::async_trait]
 impl pb::geo_ledger_server::GeoLedger for Service {
+    type FeaturesStreamStream = std::pin::Pin<
+        Box<dyn tokio_stream::Stream<Item = std::result::Result<pb::DataChunk, Status>> + Send>,
+    >;
+
+    async fn save_stream(
+        &self,
+        request: Request<tonic::Streaming<pb::DataChunk>>,
+    ) -> std::result::Result<Response<pb::SaveReply>, Status> {
+        let mut call = Call::new("grpc", "save", incoming_id(&request), peer(&request));
+        let result = async {
+            // Authenticate and reserve capacity before accepting the upload.
+            let permit = self.admit(&mut call, &request.metadata().clone().into_headers())?;
+            let timeout = request
+                .metadata()
+                .get("grpc-timeout")
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_timeout)
+                .unwrap_or(self.limits.request_timeout)
+                .min(self.limits.request_timeout);
+            let started = std::time::Instant::now();
+            let mut stream = request.into_inner();
+            let bytes = tokio::time::timeout(timeout, async {
+                let mut bytes = Vec::new();
+                let mut total = None;
+                while let Some(chunk) = stream
+                    .message()
+                    .await
+                    .map_err(|_| Error::new(400, "upload interrupted"))?
+                {
+                    if total.is_none() {
+                        total = Some(chunk.total_bytes);
+                    } else if chunk.total_bytes != 0 {
+                        return Err(bad());
+                    }
+                    bytes.extend_from_slice(&chunk.data);
+                    if Some(bytes.len() as u64) > total {
+                        return Err(bad());
+                    }
+                }
+                if total != Some(bytes.len() as u64) {
+                    return Err(Error::new(400, "incomplete upload"));
+                }
+                Ok::<_, Error>(bytes)
+            })
+            .await
+            .map_err(|_| Error::new(408, "upload timeout"))??;
+            let request = pb::SaveRequest::decode(bytes.as_slice()).map_err(|_| bad())?;
+            let value = input(serde_json::to_value(request).map_err(|_| bad())?)?;
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(Error::new(408, "upload timeout"));
+            }
+            let result = self.execute(&call, value, Some(remaining), permit).await?;
+            serde_json::from_value(output(result))
+                .map_err(|_| Error::new(500, "response contract violation"))
+        }
+        .await;
+        let response = self.finish(&call, result).map_err(status)?;
+        Ok(with_id(Response::new(response), &call.request_id))
+    }
+
+    async fn features_stream(
+        &self,
+        request: Request<pb::FeaturesRequest>,
+    ) -> std::result::Result<Response<Self::FeaturesStreamStream>, Status> {
+        // Run one Application query so all chunks describe the same snapshot.
+        let response: Response<pb::FeaturesReply> = self.call(request, "features").await?;
+        let (metadata, value, extensions) = response.into_parts();
+        let bytes = value.encode_to_vec();
+        let mut offset = 0;
+        let mut emitted = false;
+        let chunks = std::iter::from_fn(move || {
+            if emitted && offset == bytes.len() {
+                return None;
+            }
+            let end = (offset + 64 * 1024).min(bytes.len());
+            let chunk = pb::DataChunk {
+                data: bytes[offset..end].to_vec(),
+                total_bytes: if emitted { 0 } else { bytes.len() as u64 },
+            };
+            emitted = true;
+            offset = end;
+            Some(Ok(chunk))
+        });
+        let stream: Self::FeaturesStreamStream = Box::pin(tokio_stream::iter(chunks));
+        Ok(Response::from_parts(metadata, stream, extensions))
+    }
+
     async fn info(
         &self,
         request: Request<pb::Empty>,
@@ -199,8 +287,8 @@ impl pb::geo_ledger_server::GeoLedger for Service {
                 version: env!("CARGO_PKG_VERSION").into(),
                 backend: self.app.backend().into(),
                 format_version: geoledger_engine::FORMAT_VERSION as u32,
-                max_request_bytes: MAX_BYTES as u32,
-                max_feature_bytes: 16384,
+                max_request_bytes: 0, // No application-level message byte cap.
+                max_feature_bytes: 0, // No independent per-feature byte limit.
             }),
             &call.request_id,
         ))
@@ -228,6 +316,24 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         request: tonic::Request<pb::MemberRequest>,
     ) -> std::result::Result<tonic::Response<pb::OkReply>, tonic::Status> {
         self.call(request, "set_member").await
+    }
+    async fn rename_project(
+        &self,
+        request: tonic::Request<pb::RenameProjectRequest>,
+    ) -> std::result::Result<tonic::Response<pb::ProjectReply>, tonic::Status> {
+        self.call(request, "rename_project").await
+    }
+    async fn rename_dataset(
+        &self,
+        request: tonic::Request<pb::RenameDatasetRequest>,
+    ) -> std::result::Result<tonic::Response<pb::DatasetReply>, tonic::Status> {
+        self.call(request, "rename_dataset").await
+    }
+    async fn delete_dataset(
+        &self,
+        request: tonic::Request<pb::DeleteDatasetRequest>,
+    ) -> std::result::Result<tonic::Response<pb::OkReply>, tonic::Status> {
+        self.call(request, "delete_dataset").await
     }
     async fn create_dataset(
         &self,

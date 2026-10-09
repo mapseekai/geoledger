@@ -221,9 +221,9 @@ function Lifecycle({ project }: { project: Project }) {
           }}
         >
           <div className="field">
-            <label htmlFor="confirm-delete">
+            <Label htmlFor="confirm-delete">
               删除项目：输入项目名称“{project.name}”确认
-            </label>
+            </Label>
             <Input
               id="confirm-delete"
               name="confirm"

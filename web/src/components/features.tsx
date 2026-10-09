@@ -10,6 +10,12 @@ import {
 } from "@/lib/browser-api";
 import { featureText, pretty } from "@/lib/geojson";
 import {
+  importBatch,
+  assertGeometryType,
+  geometryLabels,
+  type ImportedFeature,
+} from "@/lib/geojson-import";
+import {
   buildLayer,
   drawKinds,
   formatBounds,
@@ -461,6 +467,10 @@ export function FeatureWorkspace({
   alert: ReactNode;
 }) {
   const layerState = useLayer(project.id, dataset.id, workspaceId);
+  const [topologyWarnings, setTopologyWarnings] = useState<{
+    count: number;
+    samples: string[];
+  }>({ count: 0, samples: [] });
   const { load } = layerState;
   const [refresh, setRefresh] = useState(0);
   const [selectedId, setSelectedId] = useState<string>(),
@@ -703,6 +713,18 @@ export function FeatureWorkspace({
       </header>
       <div className="gis-alerts">
         {alert}
+        {topologyWarnings.count > 0 && (
+          <Notice tone="warning" role="status">
+            已原样保存。发现 {topologyWarnings.count}{" "}
+            个要素存在拓扑问题（如自相交），未自动修复坐标。
+            <ul>
+              {topologyWarnings.samples.map((warning, index) => (
+                <li key={index}>{warning}</li>
+              ))}
+            </ul>
+          </Notice>
+        )}
+
         <ErrorBox message={layerState.error || task.error} />
         {pending && (
           <Notice tone="warning" icon={<TriangleAlert aria-hidden="true" />}>
@@ -832,19 +854,34 @@ export function FeatureWorkspace({
       </div>
       {edit && (
         <FeatureEditor
+          geometryType={dataset.geometryType}
           feature={edit}
-          close={() => setEdit(undefined)}
-          save={async (id, text) => {
-            await call({
-              action: "save",
-              project: project.id,
-              workspace: workspaceId,
-              version,
-              edits: [{ dataset: dataset.id, featureId: id, feature: text }],
-            });
+          close={() => {
             setEdit(undefined);
-            setSelectedId(id);
             reload();
+          }}
+          save={async (features, nextVersion) => {
+            const result = await call<{ version: string; warnings?: string[] }>(
+              {
+                action: "save",
+                project: project.id,
+                workspace: workspaceId,
+                version: nextVersion ?? version,
+                edits: features.map(({ id, raw }) => ({
+                  dataset: dataset.id,
+                  featureId: id,
+                  feature: raw,
+                })),
+              },
+            );
+            if (result.warnings?.length) {
+              setTopologyWarnings((previous) => ({
+                count: previous.count + result.warnings!.length,
+                samples: [...previous.samples, ...result.warnings!].slice(0, 5),
+              }));
+            }
+            setSelectedId(features[0].id);
+            return result.version;
           }}
         />
       )}
@@ -1425,55 +1462,185 @@ function AttributeTable({
   );
 }
 export function FeatureEditor({
+  geometryType,
   feature,
   close,
   save,
 }: {
+  geometryType: Dataset["geometryType"];
   feature: Feature | "new";
   close: () => void;
-  save: (id: string, raw: string) => Promise<void>;
+  save: (features: ImportedFeature[], version?: string) => Promise<string>;
 }) {
   const task = useAction();
+  const [saved, setSaved] = useState(0);
+  const cursor = useRef<{
+    rows?: ImportedFeature[];
+    offset: number;
+    version?: string;
+  }>({ offset: 0 });
+  async function submit(rows: ImportedFeature[]) {
+    if (cursor.current.rows !== rows)
+      cursor.current = { rows, offset: 0, version: cursor.current.version };
+    const state = cursor.current;
+    while (state.offset < rows.length) {
+      const batch = importBatch(rows, state.offset);
+      state.version = await save(batch, state.version);
+      state.offset += batch.length;
+      setSaved(state.offset);
+    }
+    close();
+  }
+  const [upload, setUpload] = useState<{
+    name: string;
+    features: ImportedFeature[];
+  }>();
   return (
     <Modal
       title={feature === "new" ? "添加要素" : "编辑要素"}
-      description="输入 GeoJSON Feature，发布后生效。"
+      description="输入 GeoJSON Feature 或上传文件，保存到工作区后发布生效。"
       close={task.busy ? () => {} : close}
     >
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (upload) {
+            void task.run(() => submit(upload.features));
+            return;
+          }
           const form = new FormData(e.currentTarget);
           const id =
             feature === "new" ? String(form.get("id")).trim() : feature.id;
           void task.run(() =>
-            save(id, featureText(String(form.get("geojson")), id)),
+            (async () => {
+              const raw = featureText(String(form.get("geojson")), id);
+              assertGeometryType(JSON.parse(raw).geometry, geometryType);
+              await submit([{ id, raw }]);
+            })(),
           );
         }}
       >
-        <Label htmlFor="feature-id">要素标识</Label>
-        <Input
-          id="feature-id"
-          name="id"
-          required
-          maxLength={256}
-          defaultValue={feature === "new" ? "" : feature.id}
-          readOnly={feature !== "new"}
-        />
-        <Label htmlFor="geojson">GeoJSON</Label>
-        <Textarea
-          className="code-editor"
-          id="geojson"
-          name="geojson"
-          required
-          rows={14}
-          spellCheck={false}
-          defaultValue={
-            feature === "new"
-              ? '{\n  "type": "Feature",\n  "properties": {},\n  "geometry": {\n    "type": "Point",\n    "coordinates": [104, 35]\n  }\n}'
-              : pretty(feature.geojson)
-          }
-        />
+        {feature === "new" && (
+          <>
+            <Label htmlFor="geojson-file">上传 GeoJSON 文件</Label>
+            <Input
+              id="geojson-file"
+              type="file"
+              accept=".geojson,.json,application/geo+json,application/json"
+              disabled={task.busy}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                setUpload(undefined);
+                setSaved(0);
+                if (!file) return;
+                void task.run(async () => {
+                  const features = await new Promise<ImportedFeature[]>(
+                    (resolve, reject) => {
+                      const worker = new Worker(
+                        new URL(
+                          "../lib/geojson-import.worker.ts",
+                          import.meta.url,
+                        ),
+                      );
+                      worker.onmessage = (
+                        event: MessageEvent<{
+                          rows?: ImportedFeature[];
+                          error?: string;
+                        }>,
+                      ) => {
+                        worker.terminate();
+                        if (event.data.error)
+                          reject(new Error(event.data.error));
+                        else resolve(event.data.rows!);
+                      };
+                      worker.onerror = () => {
+                        worker.terminate();
+                        reject(new Error("GeoJSON 解析失败，请重试。"));
+                      };
+                      worker.postMessage({ file, family: geometryType });
+                    },
+                  );
+                  setUpload({ name: file.name, features });
+                });
+              }}
+            />
+            <p className="muted">
+              当前数据集类型：{geometryLabels[geometryType]}。支持
+              Feature、FeatureCollection 和几何对象，不限制文件大小。 缺少 id
+              时自动生成，已有同名要素将被更新。
+            </p>
+            {task.busy && !upload && (
+              <p role="status">正在解析 GeoJSON 文件…</p>
+            )}
+            {upload && (
+              <p role="status">
+                已读取 {upload.name}，共 {upload.features.length}{" "}
+                个要素，保存后分批导入工作区。
+                {upload.features.some((f) => f.reprojected) &&
+                  " 已将 EPSG:3857 米制坐标转换为 WGS84 经纬度。"}
+              </p>
+            )}
+          </>
+        )}
+        <fieldset disabled={task.busy || !!upload} hidden={!!upload}>
+          <Label htmlFor="feature-id">要素标识</Label>
+          <Input
+            id="feature-id"
+            name="id"
+            required
+            maxLength={256}
+            defaultValue={feature === "new" ? "" : feature.id}
+            readOnly={feature !== "new"}
+          />
+          <Label htmlFor="geojson">GeoJSON</Label>
+          <Textarea
+            className="code-editor"
+            id="geojson"
+            name="geojson"
+            required
+            rows={14}
+            spellCheck={false}
+            defaultValue={
+              feature === "new"
+                ? JSON.stringify(
+                    {
+                      type: "Feature",
+                      properties: {},
+                      geometry: {
+                        point: { type: "Point", coordinates: [104, 35] },
+                        line: {
+                          type: "LineString",
+                          coordinates: [
+                            [104, 35],
+                            [105, 36],
+                          ],
+                        },
+                        polygon: {
+                          type: "Polygon",
+                          coordinates: [
+                            [
+                              [104, 35],
+                              [105, 35],
+                              [105, 36],
+                              [104, 35],
+                            ],
+                          ],
+                        },
+                      }[geometryType],
+                    },
+                    null,
+                    2,
+                  )
+                : pretty(feature.geojson)
+            }
+          />
+        </fieldset>
+        {saved > 0 && (
+          <p role="status">
+            已保存 {saved}{" "}
+            个要素。中断时已完成的批次会保留，重试从未完成批次继续；若提示版本冲突，请关闭并刷新后检查工作区。
+          </p>
+        )}
         <ErrorBox message={task.error} />
         <div className="form-actions">
           <Button

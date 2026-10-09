@@ -31,8 +31,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const MAX_BYTES: usize = 4 * 1024 * 1024;
-pub const FORMAT_VERSION: i32 = 6;
+pub const FORMAT_VERSION: i32 = 7;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
@@ -220,6 +219,9 @@ impl Application {
             Command::ListMembers(r) => list_members(&mut t, subject, policy, r),
             Command::ArchiveProject(r) => archive_project(&mut t, subject, policy, r),
             Command::DeleteProject(r) => delete_project(&mut t, subject, policy, r),
+            Command::RenameProject(r) => rename_project(&mut t, subject, policy, r),
+            Command::RenameDataset(r) => rename_dataset(&mut t, subject, r),
+            Command::DeleteDataset(r) => delete_dataset(&mut t, subject, policy, r),
             Command::CreateDataset(r) => create_dataset(&mut t, subject, r),
             Command::ListDatasets(r) => list_datasets(&mut t, subject, r),
             Command::CreateWorkspace(r) => create_workspace(&mut t, subject, r),
@@ -313,7 +315,10 @@ enum Command {
     ListMembers(ProjectPage),
     ArchiveProject(Archive),
     DeleteProject(DeleteProject),
-    CreateDataset(NamedProject),
+    RenameProject(NamedProject),
+    RenameDataset(RenameDataset),
+    DeleteDataset(DeleteDataset),
+    CreateDataset(CreateDataset),
     ListDatasets(ProjectPage),
     CreateWorkspace(Project),
     ListWorkspaces(ProjectPage),
@@ -333,8 +338,5 @@ enum Command {
 }
 
 pub fn parse_json(bytes: &[u8]) -> Result<Value> {
-    if bytes.len() > MAX_BYTES {
-        return Err(Error::new(413, "request too large"));
-    }
     codec::parse(bytes)
 }

@@ -6,6 +6,35 @@ use uuid::Uuid;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn large_feature_save_publish_merge_and_history_have_no_16k_limit() -> TestResult {
+    let f = Fixture::new()?;
+    let seed = f.ws(&f.alice);
+    let properties = json!({"payload":"x".repeat(128 * 1024),"left":0,"right":0});
+    f.save(&f.alice, &seed, 0, properties.clone(), point(1., 2.))?;
+    assert_eq!(f.get(&f.alice, Some(&seed))["properties"], properties);
+    f.publish(&f.alice, &seed, 1)?;
+    let left = f.ws(&f.alice);
+    let right = f.ws(&f.bob);
+    let mut a = properties.clone();
+    let mut b = properties.clone();
+    a["left"] = json!(1);
+    b["right"] = json!(1);
+    f.save(&f.alice, &left, 0, a, point(1., 2.))?;
+    f.save(&f.bob, &right, 0, b, point(1., 2.))?;
+    f.publish(&f.alice, &left, 1)?;
+    f.publish(&f.bob, &right, 1)?;
+    let mut expected = properties.clone();
+    expected["left"] = json!(1);
+    expected["right"] = json!(1);
+    assert_eq!(f.get(&f.alice, None)["properties"], expected);
+    assert_eq!(
+        f.call(&f.alice, "commit", json!({"revision":1}))?["changes"][0]["after"]["properties"],
+        properties
+    );
+    Ok(())
+}
+
+#[test]
 fn codec_rejects_reserved_keys_and_preserves_binary64_properties() -> TestResult {
     let f = Fixture::new()?;
     let w = f.ws(&f.alice);
@@ -112,7 +141,11 @@ fn duplicate_dataset_is_conflict_and_rolls_back_without_public_diagnostics() -> 
     let datasets = f.call(&f.alice, "list_datasets", json!({}))?;
     let audit = f.call(&f.alice, "audit", json!({}))?;
     let error = f
-        .call(&f.alice, "create_dataset", json!({"name":"features"}))
+        .call(
+            &f.alice,
+            "create_dataset",
+            json!({"geometry_type":"point","name":"features"}),
+        )
         .unwrap_err();
     assert!(error.source().is_some());
     assert_eq!(error.status, 409);
@@ -123,7 +156,11 @@ fn duplicate_dataset_is_conflict_and_rolls_back_without_public_diagnostics() -> 
     assert_eq!(f.call(&f.alice, "list_datasets", json!({}))?, datasets);
     assert_eq!(f.call(&f.alice, "audit", json!({}))?, audit);
     // The rejected transaction must not poison the next connection or write.
-    f.call(&f.alice, "create_dataset", json!({"name":"after-conflict"}))?;
+    f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"geometry_type":"point","name":"after-conflict"}),
+    )?;
     assert_eq!(
         f.call(&f.alice, "list_datasets", json!({}))?
             .as_array()
@@ -201,7 +238,7 @@ impl Fixture {
         let d = app.execute(
             &alice,
             "create_dataset",
-            json!({"project":p,"name":"features"}),
+            json!({"geometry_type":"point","project":p,"name":"features"}),
         )?["dataset"]
             .as_str()
             .unwrap()
@@ -362,9 +399,13 @@ fn authorization_idempotency_batch_rollback_and_draft_race() -> TestResult {
         404
     );
     assert_eq!(
-        f.call(&f.viewer, "create_dataset", json!({"name":"denied"}))
-            .unwrap_err()
-            .status,
+        f.call(
+            &f.viewer,
+            "create_dataset",
+            json!({"geometry_type":"point","name":"denied"})
+        )
+        .unwrap_err()
+        .status,
         404
     );
     assert_eq!(
@@ -600,8 +641,16 @@ fn concurrent_publish_and_stale_head_resolution() -> TestResult {
 
 #[test]
 fn preserves_geometry_direction_z_and_requires_explicit_delete() -> TestResult {
-    let f = Fixture::new()?;
+    let mut f = Fixture::new()?;
     f.seed();
+    f.d = f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"name":"lines","geometry_type":"line"}),
+    )?["dataset"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let w = f.ws(&f.alice);
     let omitted = json!({"workspace":w,"expected_workspace_version":0,"edits":[{"dataset":f.d,"feature_id":"one"}]});
     assert_eq!(f.call(&f.alice, "save", omitted).unwrap_err().status, 400);
@@ -999,6 +1048,191 @@ fn platform_admins_creation_policy_and_quota() -> TestResult {
     assert_eq!(
         status(f.app.execute(&root, "get_project", json!({"project":f.p}))),
         404
+    );
+    Ok(())
+}
+
+#[test]
+fn dataset_family_and_lifecycle_preserve_shared_history() -> TestResult {
+    let f = Fixture::new()?;
+    assert_eq!(
+        f.call(&f.alice, "create_dataset", json!({"name":"missing type"}))
+            .unwrap_err()
+            .status,
+        400
+    );
+    let other = f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"name":"areas","geometry_type":"polygon"}),
+    )?["dataset"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let polygon = json!({"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]});
+    let area_edit = json!({"dataset":other,"feature_id":"area","feature":{"type":"Feature","id":"area","properties":{},"geometry":polygon}});
+    let mixed = f.ws(&f.alice);
+    let invalid = json!({"workspace":mixed,"expected_workspace_version":0,"edits":[area_edit.clone(), f.edit("bad",json!({}), polygon.clone())]});
+    assert_eq!(f.call(&f.alice, "save", invalid).unwrap_err().status, 400);
+    assert_eq!(
+        f.call(&f.alice, "diff", json!({"workspace":mixed}))?["changes"],
+        json!([])
+    );
+    f.call(&f.alice,"save",json!({"workspace":mixed,"expected_workspace_version":0,"edits":[area_edit, f.edit("one",json!({}),point(1.,2.))]}))?;
+    f.publish(&f.alice, &mixed, 1)?;
+    let only = f.ws(&f.alice);
+    f.save(&f.alice, &only, 0, json!({"changed":true}), point(1., 2.))?;
+    f.publish(&f.alice, &only, 1)?;
+    let draft = f.ws(&f.alice);
+    f.save(&f.alice, &draft, 0, json!({}), point(3., 4.))?;
+    let untouched = f.ws(&f.alice);
+    assert_eq!(
+        f.call(
+            &f.bob,
+            "delete_dataset",
+            json!({"dataset":f.d,"confirm_name":"features"})
+        )
+        .unwrap_err()
+        .status,
+        404
+    );
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "delete_dataset",
+            json!({"dataset":f.d,"confirm_name":"wrong"})
+        )
+        .unwrap_err()
+        .status,
+        400
+    );
+    f.call(
+        &f.alice,
+        "rename_project",
+        json!({"name":"renamed project"}),
+    )?;
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "rename_dataset",
+            json!({"dataset":f.d,"name":"renamed points"})
+        )?["geometry_type"],
+        "point"
+    );
+    f.call(
+        &f.alice,
+        "delete_dataset",
+        json!({"dataset":f.d,"confirm_name":"renamed points"}),
+    )?;
+    let history = f.call(&f.alice, "history", json!({}))?;
+    assert_eq!(history.as_array().unwrap().len(), 1);
+    let changes = f.call(&f.alice, "commit", json!({"revision":1}))?;
+    assert_eq!(changes["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(changes["changes"][0]["dataset"], other);
+    assert_eq!(
+        f.call(&f.alice, "get_workspace", json!({"workspace":mixed}))?["version"],
+        3
+    );
+    for w in [&only, &draft] {
+        assert_eq!(
+            f.call(&f.alice, "get_workspace", json!({"workspace":w}))
+                .unwrap_err()
+                .status,
+            404
+        );
+    }
+    f.call(&f.alice, "get_workspace", json!({"workspace":untouched}))?;
+    assert_eq!(
+        f.call(&f.alice, "features", json!({"dataset":other}))?["features"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    f.call(
+        &f.alice,
+        "delete_project",
+        json!({"confirm_name":"renamed project"}),
+    )?;
+    assert_eq!(
+        f.call(&f.alice, "get_project", json!({}))
+            .unwrap_err()
+            .status,
+        404
+    );
+    Ok(())
+}
+
+#[test]
+fn workspace_over_thousand_features_can_publish_and_restore() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    for batch in 0..11 {
+        let edits: Vec<_> = (batch * 100..(batch * 100 + 100).min(1001))
+            .map(|i| f.edit(&format!("bulk-{i:04}"), json!({"n":i}), Value::Null))
+            .collect();
+        f.call(
+            &f.alice,
+            "save",
+            json!({"workspace":w,"expected_workspace_version":batch,"edits":edits}),
+        )?;
+    }
+    let result = f.publish(&f.alice, &w, 11)?;
+    assert_eq!(result["changes"], 1001);
+    let undo = f.call(&f.alice, "restore", json!({"revision":1}))?;
+    let undo = undo["workspace"].as_str().ok_or("workspace")?;
+    assert_eq!(f.publish(&f.alice, undo, 0)?["changes"], 1001);
+    assert_eq!(
+        f.call(&f.alice, "features", json!({"dataset":f.d}))?["features"],
+        json!([])
+    );
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "features",
+            json!({"dataset":f.d,"revision":1,"limit":1000})
+        )?["features"]
+            .as_array()
+            .ok_or("features")?
+            .len(),
+        1000
+    );
+    Ok(())
+}
+
+#[test]
+fn topology_warnings_preserve_original_polygon_through_publication() -> TestResult {
+    let mut f = Fixture::new()?;
+    f.d = f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"name":"raw boundaries","geometry_type":"polygon"}),
+    )?["dataset"]
+        .as_str()
+        .ok_or("dataset")?
+        .to_owned();
+    let w = f.ws(&f.alice);
+    let crossing = json!({"type":"Polygon","coordinates":[[[0,0],[1,1],[0,1],[1,0],[0,0]]]});
+    let result = f.save(&f.alice, &w, 0, json!({}), crossing.clone())?;
+    assert_eq!(result["warnings"].as_array().ok_or("warnings")?.len(), 1);
+    assert!(
+        result["warnings"][0]
+            .as_str()
+            .ok_or("warning")?
+            .contains("self-intersection")
+    );
+    assert_eq!(f.get(&f.alice, Some(&w))["geometry"], crossing);
+    f.publish(&f.alice, &w, 1)?;
+    assert_eq!(f.get(&f.alice, None)["geometry"], crossing);
+    let audit = f.call(&f.alice, "audit", json!({}))?;
+    assert!(
+        audit["events"]
+            .as_array()
+            .ok_or("audit")?
+            .iter()
+            .any(|event| event["detail"]["topology_warnings"]
+                .as_array()
+                .is_some_and(|w| !w.is_empty()))
     );
     Ok(())
 }

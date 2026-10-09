@@ -41,7 +41,7 @@ fn sqlite_commit_failure_preserves_atomic_history_and_original_request_can_retry
     let d = app.execute(
         "alice",
         "create_dataset",
-        json!({"project":p,"name":"points"}),
+        json!({"geometry_type":"point","project":p,"name":"points"}),
     )?["dataset"]
         .clone();
     let w = app.execute("alice", "create_workspace", json!({"project":p}))?["workspace"].clone();

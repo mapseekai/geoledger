@@ -4,6 +4,7 @@ import {
   Interceptor,
   ServiceError,
 } from "@grpc/grpc-js";
+import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { stringify } from "lossless-json";
@@ -16,6 +17,7 @@ export type {
   Project,
   Member,
   Dataset,
+  GeometryType,
   WorkspaceInfo,
   ServerInfo,
   SaveResult,
@@ -187,7 +189,9 @@ export class Client {
       url.protocol === "http:" &&
       !isLoopbackHost(url.hostname) &&
       !options.allowInsecure &&
-      !["1", "true", "yes"].includes(process.env.GL_ALLOW_INSECURE_TRANSPORT ?? "")
+      !["1", "true", "yes"].includes(
+        process.env.GL_ALLOW_INSECURE_TRANSPORT ?? "",
+      )
     )
       throw invalid(
         "refusing to send credentials over plaintext http to a non-loopback host; use https or allowInsecure",
@@ -208,8 +212,8 @@ export class Client {
         : credentials.createInsecure(),
       {
         interceptors: [auth],
-        "grpc.max_receive_message_length": 4 * 1024 * 1024,
-        "grpc.max_send_message_length": 4 * 1024 * 1024,
+        "grpc.max_receive_message_length": -1,
+        "grpc.max_send_message_length": -1,
         "grpc.enable_retries": 0,
       },
     );
@@ -309,9 +313,39 @@ export class Client {
       (r: wire.OkReply) => r.ok,
     );
   }
-  createDataset(project: string, name: string): Promise<model.Dataset> {
+  renameProject(project: string, name: string): Promise<model.Project> {
     return this.#call(
-      (cb) => this.#rpc.createDataset({ project, name }, cb),
+      (cb) => this.#rpc.renameProject({ project, name }, cb),
+      convert.decodeProject,
+    );
+  }
+  renameDataset(
+    project: string,
+    dataset: string,
+    name: string,
+  ): Promise<model.Dataset> {
+    return this.#call(
+      (cb) => this.#rpc.renameDataset({ project, dataset, name }, cb),
+      convert.decodeDataset,
+    );
+  }
+  async deleteDataset(
+    project: string,
+    dataset: string,
+    confirmName: string,
+  ): Promise<void> {
+    await this.#call(
+      (cb) => this.#rpc.deleteDataset({ project, dataset, confirmName }, cb),
+      () => undefined,
+    );
+  }
+  createDataset(
+    project: string,
+    name: string,
+    geometryType: model.GeometryType,
+  ): Promise<model.Dataset> {
+    return this.#call(
+      (cb) => this.#rpc.createDataset({ project, name, geometryType }, cb),
       convert.decodeDataset,
     );
   }
@@ -355,24 +389,57 @@ export class Client {
     dataset: string,
     q: model.FeatureQuery = {},
   ): Promise<model.FeaturePage> {
-    return this.#call(
-      (cb) =>
-        this.#rpc.features(
-          {
-            project,
-            dataset,
-            ...page(q),
-            workspace: q.workspace,
-            revision:
-              q.revision === undefined ? undefined : revision(q.revision),
-            featureId: q.featureId,
-            bbox: q.bbox ?? [],
-          },
-          cb,
-        ),
-      convert.decodeFeaturePage,
-    );
+    return this.#call<wire.FeaturesReply, model.FeaturePage>((cb) => {
+      const stream = this.#rpc.featuresStream({
+        project,
+        dataset,
+        ...page(q),
+        workspace: q.workspace,
+        revision: q.revision === undefined ? undefined : revision(q.revision),
+        featureId: q.featureId,
+        bbox: q.bbox ?? [],
+      });
+      const chunks: Buffer[] = [];
+      let failed = false;
+      let expected: bigint | undefined;
+      let received = 0n;
+      stream.on("data", (chunk: wire.DataChunk) => {
+        if (failed) return;
+        try {
+          if (expected === undefined) expected = BigInt(chunk.totalBytes);
+          else if (chunk.totalBytes !== "0") throw new Error();
+          received += BigInt(chunk.data.length);
+          if (received > expected) throw new Error();
+          chunks.push(chunk.data);
+        } catch {
+          failed = true;
+          cb({
+            code: 13,
+            details: "invalid streamed response",
+          } as ServiceError);
+          stream.cancel();
+        }
+      });
+      stream.on("error", (error: ServiceError) => {
+        failed = true;
+        cb(error);
+      });
+      stream.on("end", () => {
+        if (failed) return;
+        try {
+          if (expected === undefined || received !== expected)
+            throw new Error();
+          cb(null, wire.FeaturesReply.decode(Buffer.concat(chunks)));
+        } catch {
+          cb({
+            code: 13,
+            details: "invalid streamed response",
+          } as ServiceError);
+        }
+      });
+    }, convert.decodeFeaturePage);
   }
+
   history(project: string, after = 0n, limit = 100): Promise<model.Commit[]> {
     return this.#call<wire.HistoryReply, model.Commit[]>(
       (cb) =>
@@ -433,20 +500,35 @@ export class Client {
     version: bigint,
     items: readonly model.Edit[],
   ): Promise<model.SaveResult> {
-    return this.#call(
-      (cb) =>
-        this.#rpc.save(
-          {
-            project,
-            workspace,
-            expectedWorkspaceVersion: revision(version),
-            edits: edits(items),
-          },
-          cb,
-        ),
-      convert.decodeSaveResult,
-    );
+    return this.#call<wire.SaveReply, model.SaveResult>((cb) => {
+      const request = {
+        project,
+        workspace,
+        expectedWorkspaceVersion: revision(version),
+        edits: edits(items),
+      };
+      const bytes = wire.SaveRequest.encode(request).finish();
+      if (bytes.length <= 64 * 1024) {
+        this.#rpc.save(request, cb);
+        return;
+      }
+      const stream = this.#rpc.saveStream(cb);
+      // Respect HTTP/2 backpressure and stop producing chunks after cancellation.
+      void (async () => {
+        for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
+          if (
+            !stream.write({
+              data: Buffer.from(bytes.subarray(offset, offset + 64 * 1024)),
+              totalBytes: offset === 0 ? String(bytes.length) : "0",
+            })
+          )
+            await once(stream, "drain");
+        }
+        stream.end();
+      })().catch(() => stream.cancel());
+    }, convert.decodeSaveResult);
   }
+
   diff(
     project: string,
     workspace: string,
@@ -676,7 +758,9 @@ export class Workspace {
           e instanceof GeoLedgerError &&
           !e.uncertain &&
           (!wasPending ||
-            !["unauthenticated", "permission_denied", "not_found"].includes(e.code))
+            !["unauthenticated", "permission_denied", "not_found"].includes(
+              e.code,
+            ))
         )
           this.#pending = undefined;
         throw e;

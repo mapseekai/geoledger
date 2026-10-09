@@ -30,7 +30,7 @@ fn million_features_twenty_distinct_writers() -> Result<(), Box<dyn std::error::
     let d = app.execute(
         "capacity-0",
         "create_dataset",
-        json!({"project":p,"name":"points"}),
+        json!({"geometry_type":"point","project":p,"name":"points"}),
     )?["dataset"]
         .as_str()
         .ok_or("dataset")?

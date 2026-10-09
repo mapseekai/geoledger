@@ -1,7 +1,8 @@
-CREATE FUNCTION gl_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'immutable version record'; END $$;
+CREATE TABLE gl_purge (project text PRIMARY KEY);
+CREATE FUNCTION gl_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' AND TG_TABLE_NAME<>'gl_audit_events' AND EXISTS(SELECT 1 FROM gl_purge WHERE project=OLD.project) THEN RETURN OLD; END IF; RAISE EXCEPTION 'immutable version record'; END $$;
 CREATE FUNCTION gl_json_field(value text, key text) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT value::jsonb ->> key $$;
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=6));
-INSERT INTO gl_format VALUES(true,6);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=7));
+INSERT INTO gl_format VALUES(true,7);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head bigint NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -12,6 +13,7 @@ CREATE TABLE gl_project_members (
 CREATE INDEX gl_project_members_subject ON gl_project_members(subject,project);
 CREATE TABLE gl_datasets (
  project text REFERENCES gl_projects(id), id text NOT NULL, name text NOT NULL,
+ geometry_type text NOT NULL CHECK(geometry_type IN ('point','line','polygon')),
  PRIMARY KEY(project,id), UNIQUE(project,name));
 CREATE TABLE gl_workspaces (
  project text NOT NULL, id text NOT NULL, owner text NOT NULL, base_revision bigint NOT NULL CHECK(base_revision>=0),
@@ -58,6 +60,7 @@ CREATE TRIGGER gl_commit_changes_immutable BEFORE UPDATE OR DELETE ON gl_commit_
 CREATE TRIGGER gl_audit_events_immutable BEFORE UPDATE OR DELETE ON gl_audit_events FOR EACH ROW EXECUTE FUNCTION gl_immutable();
 CREATE TRIGGER gl_idempotency_immutable BEFORE UPDATE OR DELETE ON gl_idempotency FOR EACH ROW EXECUTE FUNCTION gl_immutable();
 CREATE FUNCTION gl_close_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+IF TG_OP='DELETE' AND EXISTS(SELECT 1 FROM gl_purge WHERE project=OLD.project) THEN RETURN OLD; END IF;
 IF TG_OP='UPDATE' THEN
  IF OLD.valid_to IS NULL AND NEW.valid_to IS NOT NULL AND (to_jsonb(NEW)-'valid_to')=(to_jsonb(OLD)-'valid_to') THEN RETURN NEW; END IF;
 END IF; RAISE EXCEPTION 'immutable history'; END $$;

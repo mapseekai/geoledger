@@ -279,8 +279,8 @@ impl Client {
         })?;
         Ok(Self {
             rpc: pb::geo_ledger_client::GeoLedgerClient::with_interceptor(channel, auth)
-                .max_decoding_message_size(4 * 1024 * 1024)
-                .max_encoding_message_size(4 * 1024 * 1024),
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
         })
     }
     /// Advanced business-JSON entry point, also used by the CLI. GeoJSON is a plain object.
@@ -326,6 +326,21 @@ impl Client {
             )?,
             "set_member" => serde_json::to_value(
                 rpc.set_member(serde_json::from_value::<pb::MemberRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "rename_project" => serde_json::to_value(
+                rpc.rename_project(serde_json::from_value::<pb::RenameProjectRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "rename_dataset" => serde_json::to_value(
+                rpc.rename_dataset(serde_json::from_value::<pb::RenameDatasetRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "delete_dataset" => serde_json::to_value(
+                rpc.delete_dataset(serde_json::from_value::<pb::DeleteDatasetRequest>(value)?)
                     .await?
                     .into_inner(),
             )?,
@@ -498,7 +513,7 @@ impl Client {
             .await?,
         )
     }
-    /// Permanently hide a project. `confirm_name` must equal the project name.
+    /// Delete all project data and retain its audit tombstone. `confirm_name` must equal the project name.
     pub async fn delete_project(&self, project: &str, confirm_name: &str) -> Result<(), Error> {
         self.execute(
             "delete_project",
@@ -507,10 +522,51 @@ impl Client {
         .await?;
         Ok(())
     }
-    pub async fn create_dataset(&self, project: &str, name: &str) -> Result<Dataset, Error> {
+    pub async fn rename_project(&self, project: &str, name: &str) -> Result<Project, Error> {
         decode(
-            self.execute("create_dataset", json!({"project":project,"name":name}))
+            self.execute("rename_project", json!({"project":project,"name":name}))
                 .await?,
+        )
+    }
+    pub async fn rename_dataset(
+        &self,
+        project: &str,
+        dataset: &str,
+        name: &str,
+    ) -> Result<Dataset, Error> {
+        decode(
+            self.execute(
+                "rename_dataset",
+                json!({"project":project,"dataset":dataset,"name":name}),
+            )
+            .await?,
+        )
+    }
+    pub async fn delete_dataset(
+        &self,
+        project: &str,
+        dataset: &str,
+        confirm_name: &str,
+    ) -> Result<(), Error> {
+        self.execute(
+            "delete_dataset",
+            json!({"project":project,"dataset":dataset,"confirm_name":confirm_name}),
+        )
+        .await?;
+        Ok(())
+    }
+    pub async fn create_dataset(
+        &self,
+        project: &str,
+        name: &str,
+        geometry_type: &str,
+    ) -> Result<Dataset, Error> {
+        decode(
+            self.execute(
+                "create_dataset",
+                json!({"project":project,"name":name,"geometry_type":geometry_type}),
+            )
+            .await?,
         )
     }
     pub async fn datasets(&self, project: &str, page: Page) -> Result<Vec<Dataset>, Error> {
