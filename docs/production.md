@@ -107,7 +107,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 | GL_DATA_TIMEOUT_SECS | backup、export、import、verify 命令的期限，默认 3600 |
 | RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
-启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 6；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
+启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 8；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
 
 根目录 [.env.example](../.env.example) 提供当前服务配置模板，列出服务端和 `gl` 的全部 `GL_*` 参数及默认值，[check-env.py](../scripts/check-env.py) 在 `check.sh` 中校验它与代码一致。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
 
@@ -164,7 +164,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 ### 存储格式
 
-当前存储格式为 7，包含项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
+当前存储格式为 8，包含项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
 
 - 同格式部署沿用原数据目录，启动后检查 `/ready`、项目列表与历史查询。
 - 存储格式变化时，使用独立的新数据库，通过当前 CLI 或 SDK 导入源业务要素。

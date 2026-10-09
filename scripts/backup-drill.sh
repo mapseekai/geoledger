@@ -24,9 +24,14 @@ s=[socket.socket() for _ in range(2)]
 [x.bind(("127.0.0.1",0)) for x in s]
 print(*[x.getsockname()[1] for x in s])')
 base="http://127.0.0.1:$http"
-run() { env -i HOME="$HOME" PATH="$PATH" RUST_LOG=warn ${GL_DATABASE_URL:+"GL_DATABASE_URL=$GL_DATABASE_URL"} "$server" "$@"; }
+# Keep explicit native-library configuration when testing a non-system install.
+native_env=()
+for variable in GL_SPATIALITE_EXTENSION LD_LIBRARY_PATH PROJ_DATA; do
+  [[ -v $variable ]] && native_env+=("$variable=${!variable}")
+done
+run() { env -i HOME="$HOME" PATH="$PATH" RUST_LOG=warn "${native_env[@]}" ${GL_DATABASE_URL:+"GL_DATABASE_URL=$GL_DATABASE_URL"} "$server" "$@"; }
 start() {
-  env -i HOME="$HOME" PATH="$PATH" RUST_LOG=warn "$server" --data-dir "$1" \
+  env -i HOME="$HOME" PATH="$PATH" RUST_LOG=warn "${native_env[@]}" "$server" --data-dir "$1" \
     --http "127.0.0.1:$http" --grpc "127.0.0.1:$grpc" "${@:2}" >"$work/server.log" 2>&1 &
   pid=$!
   for _ in $(seq 100); do

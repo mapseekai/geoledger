@@ -1,7 +1,7 @@
 //! Logical export, import and verification of a whole database as JSON lines.
 //!
 //! File layout (one JSON object per line):
-//! 1. header `{"geoledger_export":1,"format":6,"backend":"sqlite"}`
+//! 1. header `{"geoledger_export":1,"format":8,"backend":"sqlite"}`
 //! 2. per table, in foreign-key order: `{"table":..,"columns":[..]}`, one
 //!    `{"r":[..]}` line per row, then `{"table_end":..,"rows":N,"digest":hex}`
 //! 3. trailer `{"end":true,"checksum":hex}` where checksum is the SHA-256 hash of
@@ -36,7 +36,7 @@ struct Table {
     key: usize,
 }
 use Kind::{Bool, Int, Text};
-/// Every table of format 6 in insertion (foreign-key) order. Derived spatial
+/// Every table of format 8 in insertion (foreign-key) order. Derived spatial
 /// indexes and gl_format are rebuilt by the target database.
 const TABLES: &[Table] = &[
     Table {
@@ -66,6 +66,7 @@ const TABLES: &[Table] = &[
             ("id", Text, false),
             ("name", Text, false),
             ("geometry_type", Text, false),
+            ("coordinate_dimension", Int, false),
         ],
         key: 2,
     },
@@ -102,7 +103,7 @@ const TABLES: &[Table] = &[
             ("valid_from", Int, false),
             ("valid_to", Int, true),
             ("properties", Text, true),
-            ("geom", Text, true),
+            ("geometry_json", Text, true),
         ],
         key: 4,
     },
@@ -128,7 +129,7 @@ const TABLES: &[Table] = &[
             ("resolved_head", Int, true),
             ("resolution_stale", Bool, false),
             ("properties", Text, true),
-            ("geom", Text, true),
+            ("geometry_json", Text, true),
         ],
         key: 4,
     },
@@ -467,13 +468,22 @@ pub(crate) fn import(client: Client, input: &mut dyn BufRead) -> Result<DataSumm
     }
     let summary = read(input, |name, columns, rows| {
         let width = columns.len();
-        let names = columns.iter().map(|c| c.0).collect::<Vec<_>>().join(",");
+        let mut names = columns.iter().map(|c| c.0).collect::<Vec<_>>().join(",");
+        let geometry = columns.iter().position(|c| c.0 == "geometry_json");
+        if geometry.is_some() {
+            names.push(',');
+            names.push_str(t.geometry_columns());
+        }
         let values = (0..rows.len())
             .map(|r| {
-                let cells = (1..=width)
+                let mut cells = (1..=width)
                     .map(|c| format!("${}", r * width + c))
                     .collect::<Vec<_>>()
                     .join(",");
+                if let Some(index) = geometry {
+                    cells.push(',');
+                    cells.push_str(&t.geometry_values(&format!("${}", r * width + index + 1)));
+                }
                 format!("({cells})")
             })
             .collect::<Vec<_>>()

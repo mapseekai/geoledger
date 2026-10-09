@@ -492,12 +492,14 @@ func (x *DeleteProjectRequest) GetConfirmName() string {
 }
 
 type DatasetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Project       string                 `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	GeometryType  string                 `protobuf:"bytes,3,opt,name=geometry_type,json=geometryType,proto3" json:"geometry_type,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Project      string                 `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	Name         string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	GeometryType string                 `protobuf:"bytes,3,opt,name=geometry_type,json=geometryType,proto3" json:"geometry_type,omitempty"`
+	// 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
+	CoordinateDimension uint32 `protobuf:"varint,4,opt,name=coordinate_dimension,json=coordinateDimension,proto3" json:"coordinate_dimension,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *DatasetRequest) Reset() {
@@ -549,6 +551,13 @@ func (x *DatasetRequest) GetGeometryType() string {
 		return x.GeometryType
 	}
 	return ""
+}
+
+func (x *DatasetRequest) GetCoordinateDimension() uint32 {
+	if x != nil {
+		return x.CoordinateDimension
+	}
+	return 0
 }
 
 type WorkspaceRequest struct {
@@ -1709,12 +1718,14 @@ func (x *OkReply) GetOk() bool {
 }
 
 type DatasetReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Dataset       string                 `protobuf:"bytes,1,opt,name=dataset,proto3" json:"dataset,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	GeometryType  string                 `protobuf:"bytes,3,opt,name=geometry_type,json=geometryType,proto3" json:"geometry_type,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Dataset      string                 `protobuf:"bytes,1,opt,name=dataset,proto3" json:"dataset,omitempty"`
+	Name         string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	GeometryType string                 `protobuf:"bytes,3,opt,name=geometry_type,json=geometryType,proto3" json:"geometry_type,omitempty"`
+	// 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
+	CoordinateDimension uint32 `protobuf:"varint,4,opt,name=coordinate_dimension,json=coordinateDimension,proto3" json:"coordinate_dimension,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *DatasetReply) Reset() {
@@ -1766,6 +1777,13 @@ func (x *DatasetReply) GetGeometryType() string {
 		return x.GeometryType
 	}
 	return ""
+}
+
+func (x *DatasetReply) GetCoordinateDimension() uint32 {
+	if x != nil {
+		return x.CoordinateDimension
+	}
+	return 0
 }
 
 type DatasetsReply struct {
@@ -3308,6 +3326,262 @@ func (x *DeleteDatasetRequest) GetConfirmName() string {
 	return ""
 }
 
+type SummaryCommitRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Project       string                 `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	Revision      int64                  `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SummaryCommitRequest) Reset() {
+	*x = SummaryCommitRequest{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SummaryCommitRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SummaryCommitRequest) ProtoMessage() {}
+
+func (x *SummaryCommitRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SummaryCommitRequest.ProtoReflect.Descriptor instead.
+func (*SummaryCommitRequest) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *SummaryCommitRequest) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *SummaryCommitRequest) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+type ChangeCounts struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Added         int64                  `protobuf:"varint,1,opt,name=added,proto3" json:"added,omitempty"`
+	Deleted       int64                  `protobuf:"varint,2,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	Modified      int64                  `protobuf:"varint,3,opt,name=modified,proto3" json:"modified,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangeCounts) Reset() {
+	*x = ChangeCounts{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeCounts) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeCounts) ProtoMessage() {}
+
+func (x *ChangeCounts) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeCounts.ProtoReflect.Descriptor instead.
+func (*ChangeCounts) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *ChangeCounts) GetAdded() int64 {
+	if x != nil {
+		return x.Added
+	}
+	return 0
+}
+
+func (x *ChangeCounts) GetDeleted() int64 {
+	if x != nil {
+		return x.Deleted
+	}
+	return 0
+}
+
+func (x *ChangeCounts) GetModified() int64 {
+	if x != nil {
+		return x.Modified
+	}
+	return 0
+}
+
+type DatasetChangeCounts struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Added         int64                  `protobuf:"varint,3,opt,name=added,proto3" json:"added,omitempty"`
+	Deleted       int64                  `protobuf:"varint,4,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	Modified      int64                  `protobuf:"varint,5,opt,name=modified,proto3" json:"modified,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DatasetChangeCounts) Reset() {
+	*x = DatasetChangeCounts{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DatasetChangeCounts) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DatasetChangeCounts) ProtoMessage() {}
+
+func (x *DatasetChangeCounts) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DatasetChangeCounts.ProtoReflect.Descriptor instead.
+func (*DatasetChangeCounts) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *DatasetChangeCounts) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *DatasetChangeCounts) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DatasetChangeCounts) GetAdded() int64 {
+	if x != nil {
+		return x.Added
+	}
+	return 0
+}
+
+func (x *DatasetChangeCounts) GetDeleted() int64 {
+	if x != nil {
+		return x.Deleted
+	}
+	return 0
+}
+
+func (x *DatasetChangeCounts) GetModified() int64 {
+	if x != nil {
+		return x.Modified
+	}
+	return 0
+}
+
+type ChangeSummaryReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Total         *ChangeCounts          `protobuf:"bytes,1,opt,name=total,proto3" json:"total,omitempty"`
+	Datasets      []*DatasetChangeCounts `protobuf:"bytes,2,rep,name=datasets,proto3" json:"datasets,omitempty"`
+	Version       *int64                 `protobuf:"varint,3,opt,name=version,proto3,oneof" json:"version,omitempty"`
+	Revision      *int64                 `protobuf:"varint,4,opt,name=revision,proto3,oneof" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangeSummaryReply) Reset() {
+	*x = ChangeSummaryReply{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeSummaryReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeSummaryReply) ProtoMessage() {}
+
+func (x *ChangeSummaryReply) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeSummaryReply.ProtoReflect.Descriptor instead.
+func (*ChangeSummaryReply) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *ChangeSummaryReply) GetTotal() *ChangeCounts {
+	if x != nil {
+		return x.Total
+	}
+	return nil
+}
+
+func (x *ChangeSummaryReply) GetDatasets() []*DatasetChangeCounts {
+	if x != nil {
+		return x.Datasets
+	}
+	return nil
+}
+
+func (x *ChangeSummaryReply) GetVersion() int64 {
+	if x != nil && x.Version != nil {
+		return *x.Version
+	}
+	return 0
+}
+
+func (x *ChangeSummaryReply) GetRevision() int64 {
+	if x != nil && x.Revision != nil {
+		return *x.Revision
+	}
+	return 0
+}
+
 var File_geoledger_v1_geoledger_proto protoreflect.FileDescriptor
 
 const file_geoledger_v1_geoledger_proto_rawDesc = "" +
@@ -3342,11 +3616,12 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\barchived\x18\x02 \x01(\bR\barchived\"S\n" +
 	"\x14DeleteProjectRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12!\n" +
-	"\fconfirm_name\x18\x02 \x01(\tR\vconfirmName\"c\n" +
+	"\fconfirm_name\x18\x02 \x01(\tR\vconfirmName\"\x96\x01\n" +
 	"\x0eDatasetRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12#\n" +
-	"\rgeometry_type\x18\x03 \x01(\tR\fgeometryType\"J\n" +
+	"\rgeometry_type\x18\x03 \x01(\tR\fgeometryType\x121\n" +
+	"\x14coordinate_dimension\x18\x04 \x01(\rR\x13coordinateDimension\"J\n" +
 	"\x10WorkspaceRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x1c\n" +
 	"\tworkspace\x18\x02 \x01(\tR\tworkspace\"\x86\x01\n" +
@@ -3436,11 +3711,12 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\fMembersReply\x122\n" +
 	"\amembers\x18\x01 \x03(\v2\x18.geoledger.v1.MemberInfoR\amembers\"\x19\n" +
 	"\aOkReply\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"a\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x94\x01\n" +
 	"\fDatasetReply\x12\x18\n" +
 	"\adataset\x18\x01 \x01(\tR\adataset\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12#\n" +
-	"\rgeometry_type\x18\x03 \x01(\tR\fgeometryType\"G\n" +
+	"\rgeometry_type\x18\x03 \x01(\tR\fgeometryType\x121\n" +
+	"\x14coordinate_dimension\x18\x04 \x01(\rR\x13coordinateDimension\"G\n" +
 	"\rDatasetsReply\x126\n" +
 	"\bdatasets\x18\x01 \x03(\v2\x1a.geoledger.v1.DatasetReplyR\bdatasets\"\x85\x01\n" +
 	"\x0eWorkspaceReply\x12\x1c\n" +
@@ -3567,7 +3843,28 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\x14DeleteDatasetRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x18\n" +
 	"\adataset\x18\x02 \x01(\tR\adataset\x12!\n" +
-	"\fconfirm_name\x18\x03 \x01(\tR\vconfirmName2\xba\x11\n" +
+	"\fconfirm_name\x18\x03 \x01(\tR\vconfirmName\"L\n" +
+	"\x14SummaryCommitRequest\x12\x18\n" +
+	"\aproject\x18\x01 \x01(\tR\aproject\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\x03R\brevision\"Z\n" +
+	"\fChangeCounts\x12\x14\n" +
+	"\x05added\x18\x01 \x01(\x03R\x05added\x12\x18\n" +
+	"\adeleted\x18\x02 \x01(\x03R\adeleted\x12\x1a\n" +
+	"\bmodified\x18\x03 \x01(\x03R\bmodified\"\x85\x01\n" +
+	"\x13DatasetChangeCounts\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
+	"\x05added\x18\x03 \x01(\x03R\x05added\x12\x18\n" +
+	"\adeleted\x18\x04 \x01(\x03R\adeleted\x12\x1a\n" +
+	"\bmodified\x18\x05 \x01(\x03R\bmodified\"\xde\x01\n" +
+	"\x12ChangeSummaryReply\x120\n" +
+	"\x05total\x18\x01 \x01(\v2\x1a.geoledger.v1.ChangeCountsR\x05total\x12=\n" +
+	"\bdatasets\x18\x02 \x03(\v2!.geoledger.v1.DatasetChangeCountsR\bdatasets\x12\x1d\n" +
+	"\aversion\x18\x03 \x01(\x03H\x00R\aversion\x88\x01\x01\x12\x1f\n" +
+	"\brevision\x18\x04 \x01(\x03H\x01R\brevision\x88\x01\x01B\n" +
+	"\n" +
+	"\b_versionB\v\n" +
+	"\t_revision2\xe7\x12\n" +
 	"\tGeoLedger\x124\n" +
 	"\x04Info\x12\x13.geoledger.v1.Empty\x1a\x17.geoledger.v1.InfoReply\x12F\n" +
 	"\rCreateProject\x12\x19.geoledger.v1.NameRequest\x1a\x1a.geoledger.v1.ProjectReply\x12F\n" +
@@ -3588,7 +3885,9 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"SaveStream\x12\x17.geoledger.v1.DataChunk\x1a\x17.geoledger.v1.SaveReply(\x01\x12C\n" +
 	"\aDiscard\x12\x1c.geoledger.v1.VersionRequest\x1a\x1a.geoledger.v1.DiscardReply\x12F\n" +
 	"\bFeatures\x12\x1d.geoledger.v1.FeaturesRequest\x1a\x1b.geoledger.v1.FeaturesReply\x12J\n" +
-	"\x0eFeaturesStream\x12\x1d.geoledger.v1.FeaturesRequest\x1a\x17.geoledger.v1.DataChunk0\x01\x12:\n" +
+	"\x0eFeaturesStream\x12\x1d.geoledger.v1.FeaturesRequest\x1a\x17.geoledger.v1.DataChunk0\x01\x12T\n" +
+	"\x10WorkspaceSummary\x12\x1e.geoledger.v1.WorkspaceRequest\x1a .geoledger.v1.ChangeSummaryReply\x12U\n" +
+	"\rCommitSummary\x12\".geoledger.v1.SummaryCommitRequest\x1a .geoledger.v1.ChangeSummaryReply\x12:\n" +
 	"\x04Diff\x12\x19.geoledger.v1.DiffRequest\x1a\x17.geoledger.v1.DiffReply\x12D\n" +
 	"\tConflicts\x12\x19.geoledger.v1.DiffRequest\x1a\x1c.geoledger.v1.ConflictsReply\x12C\n" +
 	"\aHistory\x12\x1c.geoledger.v1.HistoryRequest\x1a\x1a.geoledger.v1.HistoryReply\x12@\n" +
@@ -3615,7 +3914,7 @@ func file_geoledger_v1_geoledger_proto_rawDescGZIP() []byte {
 	return file_geoledger_v1_geoledger_proto_rawDescData
 }
 
-var file_geoledger_v1_geoledger_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
+var file_geoledger_v1_geoledger_proto_msgTypes = make([]protoimpl.MessageInfo, 58)
 var file_geoledger_v1_geoledger_proto_goTypes = []any{
 	(*DataChunk)(nil),             // 0: geoledger.v1.DataChunk
 	(*NameRequest)(nil),           // 1: geoledger.v1.NameRequest
@@ -3671,6 +3970,10 @@ var file_geoledger_v1_geoledger_proto_goTypes = []any{
 	(*RenameProjectRequest)(nil),  // 51: geoledger.v1.RenameProjectRequest
 	(*RenameDatasetRequest)(nil),  // 52: geoledger.v1.RenameDatasetRequest
 	(*DeleteDatasetRequest)(nil),  // 53: geoledger.v1.DeleteDatasetRequest
+	(*SummaryCommitRequest)(nil),  // 54: geoledger.v1.SummaryCommitRequest
+	(*ChangeCounts)(nil),          // 55: geoledger.v1.ChangeCounts
+	(*DatasetChangeCounts)(nil),   // 56: geoledger.v1.DatasetChangeCounts
+	(*ChangeSummaryReply)(nil),    // 57: geoledger.v1.ChangeSummaryReply
 }
 var file_geoledger_v1_geoledger_proto_depIdxs = []int32{
 	12, // 0: geoledger.v1.Edit.feature:type_name -> geoledger.v1.Feature
@@ -3695,73 +3998,79 @@ var file_geoledger_v1_geoledger_proto_depIdxs = []int32{
 	43, // 19: geoledger.v1.AuditReply.events:type_name -> geoledger.v1.AuditEvent
 	39, // 20: geoledger.v1.ErrorDetail.conflicts:type_name -> geoledger.v1.ConflictsReply
 	50, // 21: geoledger.v1.RpcStatus.details:type_name -> geoledger.v1.ErrorAny
-	22, // 22: geoledger.v1.GeoLedger.Info:input_type -> geoledger.v1.Empty
-	1,  // 23: geoledger.v1.GeoLedger.CreateProject:input_type -> geoledger.v1.NameRequest
-	3,  // 24: geoledger.v1.GeoLedger.ListProjects:input_type -> geoledger.v1.PageRequest
-	2,  // 25: geoledger.v1.GeoLedger.GetProject:input_type -> geoledger.v1.ProjectRequest
-	5,  // 26: geoledger.v1.GeoLedger.SetMember:input_type -> geoledger.v1.MemberRequest
-	51, // 27: geoledger.v1.GeoLedger.RenameProject:input_type -> geoledger.v1.RenameProjectRequest
-	52, // 28: geoledger.v1.GeoLedger.RenameDataset:input_type -> geoledger.v1.RenameDatasetRequest
-	53, // 29: geoledger.v1.GeoLedger.DeleteDataset:input_type -> geoledger.v1.DeleteDatasetRequest
-	9,  // 30: geoledger.v1.GeoLedger.CreateDataset:input_type -> geoledger.v1.DatasetRequest
-	4,  // 31: geoledger.v1.GeoLedger.ListDatasets:input_type -> geoledger.v1.ProjectPageRequest
-	2,  // 32: geoledger.v1.GeoLedger.CreateWorkspace:input_type -> geoledger.v1.ProjectRequest
-	4,  // 33: geoledger.v1.GeoLedger.ListWorkspaces:input_type -> geoledger.v1.ProjectPageRequest
-	10, // 34: geoledger.v1.GeoLedger.GetWorkspace:input_type -> geoledger.v1.WorkspaceRequest
-	14, // 35: geoledger.v1.GeoLedger.Save:input_type -> geoledger.v1.SaveRequest
-	0,  // 36: geoledger.v1.GeoLedger.SaveStream:input_type -> geoledger.v1.DataChunk
-	11, // 37: geoledger.v1.GeoLedger.Discard:input_type -> geoledger.v1.VersionRequest
-	15, // 38: geoledger.v1.GeoLedger.Features:input_type -> geoledger.v1.FeaturesRequest
-	15, // 39: geoledger.v1.GeoLedger.FeaturesStream:input_type -> geoledger.v1.FeaturesRequest
-	16, // 40: geoledger.v1.GeoLedger.Diff:input_type -> geoledger.v1.DiffRequest
-	16, // 41: geoledger.v1.GeoLedger.Conflicts:input_type -> geoledger.v1.DiffRequest
-	17, // 42: geoledger.v1.GeoLedger.History:input_type -> geoledger.v1.HistoryRequest
-	18, // 43: geoledger.v1.GeoLedger.Commit:input_type -> geoledger.v1.CommitRequest
-	17, // 44: geoledger.v1.GeoLedger.Audit:input_type -> geoledger.v1.HistoryRequest
-	19, // 45: geoledger.v1.GeoLedger.Publish:input_type -> geoledger.v1.PublishRequest
-	20, // 46: geoledger.v1.GeoLedger.Resolve:input_type -> geoledger.v1.ResolveRequest
-	20, // 47: geoledger.v1.GeoLedger.Rebase:input_type -> geoledger.v1.ResolveRequest
-	21, // 48: geoledger.v1.GeoLedger.Restore:input_type -> geoledger.v1.RestoreRequest
-	4,  // 49: geoledger.v1.GeoLedger.ListMembers:input_type -> geoledger.v1.ProjectPageRequest
-	6,  // 50: geoledger.v1.GeoLedger.RemoveMember:input_type -> geoledger.v1.MemberRefRequest
-	7,  // 51: geoledger.v1.GeoLedger.ArchiveProject:input_type -> geoledger.v1.ArchiveProjectRequest
-	8,  // 52: geoledger.v1.GeoLedger.DeleteProject:input_type -> geoledger.v1.DeleteProjectRequest
-	23, // 53: geoledger.v1.GeoLedger.Info:output_type -> geoledger.v1.InfoReply
-	24, // 54: geoledger.v1.GeoLedger.CreateProject:output_type -> geoledger.v1.ProjectReply
-	25, // 55: geoledger.v1.GeoLedger.ListProjects:output_type -> geoledger.v1.ProjectsReply
-	24, // 56: geoledger.v1.GeoLedger.GetProject:output_type -> geoledger.v1.ProjectReply
-	28, // 57: geoledger.v1.GeoLedger.SetMember:output_type -> geoledger.v1.OkReply
-	24, // 58: geoledger.v1.GeoLedger.RenameProject:output_type -> geoledger.v1.ProjectReply
-	29, // 59: geoledger.v1.GeoLedger.RenameDataset:output_type -> geoledger.v1.DatasetReply
-	28, // 60: geoledger.v1.GeoLedger.DeleteDataset:output_type -> geoledger.v1.OkReply
-	29, // 61: geoledger.v1.GeoLedger.CreateDataset:output_type -> geoledger.v1.DatasetReply
-	30, // 62: geoledger.v1.GeoLedger.ListDatasets:output_type -> geoledger.v1.DatasetsReply
-	31, // 63: geoledger.v1.GeoLedger.CreateWorkspace:output_type -> geoledger.v1.WorkspaceReply
-	32, // 64: geoledger.v1.GeoLedger.ListWorkspaces:output_type -> geoledger.v1.WorkspacesReply
-	31, // 65: geoledger.v1.GeoLedger.GetWorkspace:output_type -> geoledger.v1.WorkspaceReply
-	33, // 66: geoledger.v1.GeoLedger.Save:output_type -> geoledger.v1.SaveReply
-	33, // 67: geoledger.v1.GeoLedger.SaveStream:output_type -> geoledger.v1.SaveReply
-	34, // 68: geoledger.v1.GeoLedger.Discard:output_type -> geoledger.v1.DiscardReply
-	35, // 69: geoledger.v1.GeoLedger.Features:output_type -> geoledger.v1.FeaturesReply
-	0,  // 70: geoledger.v1.GeoLedger.FeaturesStream:output_type -> geoledger.v1.DataChunk
-	37, // 71: geoledger.v1.GeoLedger.Diff:output_type -> geoledger.v1.DiffReply
-	39, // 72: geoledger.v1.GeoLedger.Conflicts:output_type -> geoledger.v1.ConflictsReply
-	41, // 73: geoledger.v1.GeoLedger.History:output_type -> geoledger.v1.HistoryReply
-	42, // 74: geoledger.v1.GeoLedger.Commit:output_type -> geoledger.v1.CommitReply
-	44, // 75: geoledger.v1.GeoLedger.Audit:output_type -> geoledger.v1.AuditReply
-	45, // 76: geoledger.v1.GeoLedger.Publish:output_type -> geoledger.v1.PublishReply
-	46, // 77: geoledger.v1.GeoLedger.Resolve:output_type -> geoledger.v1.ResolveReply
-	47, // 78: geoledger.v1.GeoLedger.Rebase:output_type -> geoledger.v1.RebaseReply
-	31, // 79: geoledger.v1.GeoLedger.Restore:output_type -> geoledger.v1.WorkspaceReply
-	27, // 80: geoledger.v1.GeoLedger.ListMembers:output_type -> geoledger.v1.MembersReply
-	28, // 81: geoledger.v1.GeoLedger.RemoveMember:output_type -> geoledger.v1.OkReply
-	24, // 82: geoledger.v1.GeoLedger.ArchiveProject:output_type -> geoledger.v1.ProjectReply
-	28, // 83: geoledger.v1.GeoLedger.DeleteProject:output_type -> geoledger.v1.OkReply
-	53, // [53:84] is the sub-list for method output_type
-	22, // [22:53] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	55, // 22: geoledger.v1.ChangeSummaryReply.total:type_name -> geoledger.v1.ChangeCounts
+	56, // 23: geoledger.v1.ChangeSummaryReply.datasets:type_name -> geoledger.v1.DatasetChangeCounts
+	22, // 24: geoledger.v1.GeoLedger.Info:input_type -> geoledger.v1.Empty
+	1,  // 25: geoledger.v1.GeoLedger.CreateProject:input_type -> geoledger.v1.NameRequest
+	3,  // 26: geoledger.v1.GeoLedger.ListProjects:input_type -> geoledger.v1.PageRequest
+	2,  // 27: geoledger.v1.GeoLedger.GetProject:input_type -> geoledger.v1.ProjectRequest
+	5,  // 28: geoledger.v1.GeoLedger.SetMember:input_type -> geoledger.v1.MemberRequest
+	51, // 29: geoledger.v1.GeoLedger.RenameProject:input_type -> geoledger.v1.RenameProjectRequest
+	52, // 30: geoledger.v1.GeoLedger.RenameDataset:input_type -> geoledger.v1.RenameDatasetRequest
+	53, // 31: geoledger.v1.GeoLedger.DeleteDataset:input_type -> geoledger.v1.DeleteDatasetRequest
+	9,  // 32: geoledger.v1.GeoLedger.CreateDataset:input_type -> geoledger.v1.DatasetRequest
+	4,  // 33: geoledger.v1.GeoLedger.ListDatasets:input_type -> geoledger.v1.ProjectPageRequest
+	2,  // 34: geoledger.v1.GeoLedger.CreateWorkspace:input_type -> geoledger.v1.ProjectRequest
+	4,  // 35: geoledger.v1.GeoLedger.ListWorkspaces:input_type -> geoledger.v1.ProjectPageRequest
+	10, // 36: geoledger.v1.GeoLedger.GetWorkspace:input_type -> geoledger.v1.WorkspaceRequest
+	14, // 37: geoledger.v1.GeoLedger.Save:input_type -> geoledger.v1.SaveRequest
+	0,  // 38: geoledger.v1.GeoLedger.SaveStream:input_type -> geoledger.v1.DataChunk
+	11, // 39: geoledger.v1.GeoLedger.Discard:input_type -> geoledger.v1.VersionRequest
+	15, // 40: geoledger.v1.GeoLedger.Features:input_type -> geoledger.v1.FeaturesRequest
+	15, // 41: geoledger.v1.GeoLedger.FeaturesStream:input_type -> geoledger.v1.FeaturesRequest
+	10, // 42: geoledger.v1.GeoLedger.WorkspaceSummary:input_type -> geoledger.v1.WorkspaceRequest
+	54, // 43: geoledger.v1.GeoLedger.CommitSummary:input_type -> geoledger.v1.SummaryCommitRequest
+	16, // 44: geoledger.v1.GeoLedger.Diff:input_type -> geoledger.v1.DiffRequest
+	16, // 45: geoledger.v1.GeoLedger.Conflicts:input_type -> geoledger.v1.DiffRequest
+	17, // 46: geoledger.v1.GeoLedger.History:input_type -> geoledger.v1.HistoryRequest
+	18, // 47: geoledger.v1.GeoLedger.Commit:input_type -> geoledger.v1.CommitRequest
+	17, // 48: geoledger.v1.GeoLedger.Audit:input_type -> geoledger.v1.HistoryRequest
+	19, // 49: geoledger.v1.GeoLedger.Publish:input_type -> geoledger.v1.PublishRequest
+	20, // 50: geoledger.v1.GeoLedger.Resolve:input_type -> geoledger.v1.ResolveRequest
+	20, // 51: geoledger.v1.GeoLedger.Rebase:input_type -> geoledger.v1.ResolveRequest
+	21, // 52: geoledger.v1.GeoLedger.Restore:input_type -> geoledger.v1.RestoreRequest
+	4,  // 53: geoledger.v1.GeoLedger.ListMembers:input_type -> geoledger.v1.ProjectPageRequest
+	6,  // 54: geoledger.v1.GeoLedger.RemoveMember:input_type -> geoledger.v1.MemberRefRequest
+	7,  // 55: geoledger.v1.GeoLedger.ArchiveProject:input_type -> geoledger.v1.ArchiveProjectRequest
+	8,  // 56: geoledger.v1.GeoLedger.DeleteProject:input_type -> geoledger.v1.DeleteProjectRequest
+	23, // 57: geoledger.v1.GeoLedger.Info:output_type -> geoledger.v1.InfoReply
+	24, // 58: geoledger.v1.GeoLedger.CreateProject:output_type -> geoledger.v1.ProjectReply
+	25, // 59: geoledger.v1.GeoLedger.ListProjects:output_type -> geoledger.v1.ProjectsReply
+	24, // 60: geoledger.v1.GeoLedger.GetProject:output_type -> geoledger.v1.ProjectReply
+	28, // 61: geoledger.v1.GeoLedger.SetMember:output_type -> geoledger.v1.OkReply
+	24, // 62: geoledger.v1.GeoLedger.RenameProject:output_type -> geoledger.v1.ProjectReply
+	29, // 63: geoledger.v1.GeoLedger.RenameDataset:output_type -> geoledger.v1.DatasetReply
+	28, // 64: geoledger.v1.GeoLedger.DeleteDataset:output_type -> geoledger.v1.OkReply
+	29, // 65: geoledger.v1.GeoLedger.CreateDataset:output_type -> geoledger.v1.DatasetReply
+	30, // 66: geoledger.v1.GeoLedger.ListDatasets:output_type -> geoledger.v1.DatasetsReply
+	31, // 67: geoledger.v1.GeoLedger.CreateWorkspace:output_type -> geoledger.v1.WorkspaceReply
+	32, // 68: geoledger.v1.GeoLedger.ListWorkspaces:output_type -> geoledger.v1.WorkspacesReply
+	31, // 69: geoledger.v1.GeoLedger.GetWorkspace:output_type -> geoledger.v1.WorkspaceReply
+	33, // 70: geoledger.v1.GeoLedger.Save:output_type -> geoledger.v1.SaveReply
+	33, // 71: geoledger.v1.GeoLedger.SaveStream:output_type -> geoledger.v1.SaveReply
+	34, // 72: geoledger.v1.GeoLedger.Discard:output_type -> geoledger.v1.DiscardReply
+	35, // 73: geoledger.v1.GeoLedger.Features:output_type -> geoledger.v1.FeaturesReply
+	0,  // 74: geoledger.v1.GeoLedger.FeaturesStream:output_type -> geoledger.v1.DataChunk
+	57, // 75: geoledger.v1.GeoLedger.WorkspaceSummary:output_type -> geoledger.v1.ChangeSummaryReply
+	57, // 76: geoledger.v1.GeoLedger.CommitSummary:output_type -> geoledger.v1.ChangeSummaryReply
+	37, // 77: geoledger.v1.GeoLedger.Diff:output_type -> geoledger.v1.DiffReply
+	39, // 78: geoledger.v1.GeoLedger.Conflicts:output_type -> geoledger.v1.ConflictsReply
+	41, // 79: geoledger.v1.GeoLedger.History:output_type -> geoledger.v1.HistoryReply
+	42, // 80: geoledger.v1.GeoLedger.Commit:output_type -> geoledger.v1.CommitReply
+	44, // 81: geoledger.v1.GeoLedger.Audit:output_type -> geoledger.v1.AuditReply
+	45, // 82: geoledger.v1.GeoLedger.Publish:output_type -> geoledger.v1.PublishReply
+	46, // 83: geoledger.v1.GeoLedger.Resolve:output_type -> geoledger.v1.ResolveReply
+	47, // 84: geoledger.v1.GeoLedger.Rebase:output_type -> geoledger.v1.RebaseReply
+	31, // 85: geoledger.v1.GeoLedger.Restore:output_type -> geoledger.v1.WorkspaceReply
+	27, // 86: geoledger.v1.GeoLedger.ListMembers:output_type -> geoledger.v1.MembersReply
+	28, // 87: geoledger.v1.GeoLedger.RemoveMember:output_type -> geoledger.v1.OkReply
+	24, // 88: geoledger.v1.GeoLedger.ArchiveProject:output_type -> geoledger.v1.ProjectReply
+	28, // 89: geoledger.v1.GeoLedger.DeleteProject:output_type -> geoledger.v1.OkReply
+	57, // [57:90] is the sub-list for method output_type
+	24, // [24:57] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_geoledger_v1_geoledger_proto_init() }
@@ -3779,13 +4088,14 @@ func file_geoledger_v1_geoledger_proto_init() {
 	file_geoledger_v1_geoledger_proto_msgTypes[38].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[39].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[44].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[57].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_geoledger_v1_geoledger_proto_rawDesc), len(file_geoledger_v1_geoledger_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   54,
+			NumMessages:   58,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

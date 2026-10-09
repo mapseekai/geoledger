@@ -1,0 +1,17 @@
+[package]
+name = "geoledger-spatialite"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["load_extension"] }
+
+# This crate is the narrow native-extension loading boundary. Business crates
+# retain workspace unsafe_code=forbid; only this loader uses rusqlite's unsafe API.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

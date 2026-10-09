@@ -26,7 +26,7 @@ fn seed(app: &Application) -> Result<Seed, Box<dyn std::error::Error>> {
     let dataset = call(
         "alice",
         "create_dataset",
-        json!({"geometry_type":"point","project":p,"name":"roads"}),
+        json!({"geometry_type":"point","coordinate_dimension":3,"project":p,"name":"roads"}),
     )?["dataset"]
         .as_str()
         .ok_or("dataset")?
@@ -126,7 +126,7 @@ fn bulk(app: &Application, seed: &Seed) -> TestResult {
                     _ => format!("道路-{i:04}"),
                 };
                 json!({"dataset":seed.dataset,"feature_id":id,"feature":{"type":"Feature","id":id,
-                       "properties":{"i":i},"geometry":{"type":"Point","coordinates":[i % 180,i % 90]}}})
+                       "properties":{"i":i},"geometry":{"type":"Point","coordinates":[i % 180,i % 90,12]}}})
             })
             .collect();
         if batch == 10 {
@@ -275,7 +275,7 @@ fn damaged_exports_are_rejected_without_partial_writes() -> TestResult {
         .ok_or("row")?;
     lines.remove(dropped_row);
     let missing_row = lines.join("\n") + "\n";
-    let newer = text.replacen("\"format\":7", "\"format\":99", 1);
+    let newer = text.replacen("\"format\":8", "\"format\":99", 1);
     let target = Application::new(Storage::Sqlite(dir.path().join("target.sqlite3")));
     for (case, input, status) in [
         ("tampered", tampered.as_bytes(), 400),
@@ -355,8 +355,18 @@ fn postgis_and_sqlite_exchange_exports_both_ways() -> TestResult {
         let seed = seed(&sqlite)?;
         bulk(&sqlite, &seed)?;
         let (bytes, summary) = export(&sqlite)?;
-        let pg = Application::new(Storage::Postgis(target));
+        let pg = Application::new(Storage::Postgis(target.clone()));
         assert_eq!(pg.import_data(&mut Cursor::new(&bytes))?, summary);
+        let mut check = postgres::Client::connect(&target, postgres::NoTls)?;
+        let mutation = check.execute(
+            "UPDATE gl_history h SET geom=ST_Translate(geom,0.000000000001,0),valid_to=(SELECT min(revision) FROM gl_commits c WHERE c.project=h.project AND c.revision>h.valid_from) WHERE valid_to IS NULL AND geom IS NOT NULL AND EXISTS(SELECT 1 FROM gl_commits c WHERE c.project=h.project AND c.revision>h.valid_from)",
+            &[],
+        ).err().ok_or("native history mutation must fail")?;
+        assert_eq!(
+            mutation.as_db_error().map(|e| e.message()),
+            Some("immutable history")
+        );
+        drop(check);
         assert_eq!(pg.data_summary()?, summary);
         let (from_pg, pg_summary) = export(&pg)?;
         assert_eq!(pg_summary, summary);

@@ -2,7 +2,7 @@ import { GeoLedgerError } from "@geoledger/client";
 import { session } from "@/lib/session";
 import { clients } from "@/lib/clients";
 import { execute } from "@/lib/operations";
-import { body, failure, guard, HttpError, reply } from "@/lib/http";
+import { body, failure, guard, HttpError, reply, geoReply } from "@/lib/http";
 export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
@@ -12,7 +12,13 @@ export async function POST(request: Request) {
     if (!token) throw new HttpError(401, "请登录控制台。");
     const lease = clients().acquire(token);
     try {
-      return reply(await execute(lease.client, await body(request)));
+      const data = await execute(lease.client, await body(request));
+      return data &&
+        typeof data === "object" &&
+        "type" in data &&
+        data.type === "FeatureCollection"
+        ? geoReply(data)
+        : reply(data);
     } catch (error) {
       if (error instanceof GeoLedgerError && error.code === "unauthenticated") {
         auth.destroy();

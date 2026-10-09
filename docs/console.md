@@ -154,3 +154,11 @@
 GeoJSON 上传默认使用 WGS84 经纬度；显式声明 EPSG:3857 的文件会转换为 WGS84，并显示提示，属性数值和高度不被转换。未知坐标系会提示先转换，不猜测坐标系。文件中不符合数据集几何类型的要素会在开始分批保存之前报错。
 
 大文件在独立 Web Worker 中解析，保留属性数字精度；分批上传可写入同一工作区，不再限制累计 1000 个要素。服务端对自相交等拓扑问题返回警告并按原始坐标保存，导入界面显示警告数量及示例，审计记录保留对应要素标识和原因。
+
+工作区及版本历史的要素变更统计使用服务端聚合接口，单次请求返回各数据集的新增、删除、修改数量；无需为统计加载全部 GeoJSON 明细。同一页面同时发起的相同统计请求会合并，完成后不长期缓存，以保证刷新时反映数据集重命名与删除。
+
+要素查询参考 [OGC API Features Part 1](https://docs.ogc.org/is/17-069r4/17-069r4.html) 的集合响应与翻页方式：`GET /api/projects/{project}/collections/{dataset}/items` 返回 `application/geo+json`，正文为 `FeatureCollection`，包含真实 `features`、`numberReturned`、`timeStamp` 和 `self`/`next` 链接。控制台使用同一会话鉴权；未登录返回 401。`POST /api/console` 的 `features` 操作也返回同样格式，不再用 `geojson` 字符串包装要素。
+
+支持 `limit`（默认 100，1–1000）、`bbox`（WGS84 经度、纬度的四个数）、`after`、`featureId`、`revision`、`workspace`、`workspaceVersion`。后三者及 `after` 是 GeoLedger 扩展；发布数据的翻页链接固定 `revision`，草稿链接固定 `workspaceVersion`，草稿变化返回 409。`revision`/`workspaceVersion` 在正文中为十进制字符串；属性中的大整数仍是 JSON 数字，客户端应使用无损 JSON 解析器。未知和重复查询参数返回 400。为避免昂贵的额外全量计数，不提供 `numberMatched`。这是查询响应子集，不声明完整 OGC Core、HTML、OpenAPI 或一致性测试认证。
+
+创建数据集时通过标准 Select 选择二维（默认）或三维坐标，数据集列表显示维度；文件上传与手工编辑会在提交前检查维度，服务端仍会再次校验。

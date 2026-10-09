@@ -365,9 +365,19 @@ pub(super) fn create_dataset(t: &mut Transaction, s: &str, r: CreateDataset) -> 
             "geometry_type must be point, line or polygon",
         ));
     }
-    t.insert_dataset(&r.project, &d, &r.name, &r.geometry_type)?;
+    let dimension = if r.coordinate_dimension == 0 {
+        2
+    } else {
+        r.coordinate_dimension
+    };
+    if ![2, 3].contains(&dimension) {
+        return Err(Error::new(400, "coordinate_dimension must be 2 or 3"));
+    }
+    t.insert_dataset(&r.project, &d, &r.name, &r.geometry_type, dimension)?;
     audit(t, &r.project, s, "create_dataset", json!({"dataset":d}))?;
-    Ok(json!({"dataset":d,"name":r.name,"geometry_type":r.geometry_type}))
+    Ok(
+        json!({"dataset":d,"name":r.name,"geometry_type":r.geometry_type,"coordinate_dimension":dimension}),
+    )
 }
 pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Result<Value> {
     membership(t, &r.project, s, false)?;
@@ -376,7 +386,7 @@ pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Res
     Ok(json!(
         rows.iter()
             .map(|x| Ok(
-                json!({"dataset":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?,"geometry_type":x.get::<_,String>(2usize)?})
+                json!({"dataset":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?,"geometry_type":x.get::<_,String>(2usize)?,"coordinate_dimension":x.get::<_,i32>(3usize)?})
             ))
             .collect::<Result<Vec<_>>>()?
     ))
@@ -534,6 +544,8 @@ pub(super) struct CreateDataset {
     project: String,
     name: String,
     geometry_type: String,
+    #[serde(default)]
+    coordinate_dimension: i32,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -578,7 +590,9 @@ pub(super) fn rename_dataset(t: &mut Transaction, s: &str, r: RenameDataset) -> 
         "rename_dataset",
         json!({"dataset":r.dataset,"name":r.name}),
     )?;
-    Ok(json!({"dataset":r.dataset,"name":r.name,"geometry_type":row.get::<_,String>(0usize)?}))
+    Ok(
+        json!({"dataset":r.dataset,"name":r.name,"geometry_type":row.get::<_,String>(0usize)?,"coordinate_dimension":row.get::<_,i32>(2usize)?}),
+    )
 }
 pub(super) fn delete_dataset(
     t: &mut Transaction,

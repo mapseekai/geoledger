@@ -26,9 +26,10 @@ type Member struct {
 }
 
 type Dataset struct {
-	GeometryType string `json:"geometry_type"`
-	ID           string `json:"dataset"`
-	Name         string `json:"name"`
+	GeometryType        string `json:"geometry_type"`
+	CoordinateDimension uint32 `json:"coordinate_dimension"`
+	ID                  string `json:"dataset"`
+	Name                string `json:"name"`
 }
 
 type WorkspaceInfo struct {
@@ -173,4 +174,23 @@ type Publication struct {
 	ExpectedWorkspaceVersion int64  `json:"expected_workspace_version"`
 	RequestID                string `json:"request_id"`
 	Message                  string `json:"message"`
+}
+
+type ChangeCounts struct {
+	Added    int64 `json:"added"`
+	Deleted  int64 `json:"deleted"`
+	Modified int64 `json:"modified"`
+}
+type DatasetChangeCounts struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Added    int64  `json:"added"`
+	Deleted  int64  `json:"deleted"`
+	Modified int64  `json:"modified"`
+}
+type ChangeSummary struct {
+	Total    ChangeCounts          `json:"total"`
+	Datasets []DatasetChangeCounts `json:"datasets"`
+	Version  *int64                `json:"version,omitempty"`
+	Revision *int64                `json:"revision,omitempty"`
 }

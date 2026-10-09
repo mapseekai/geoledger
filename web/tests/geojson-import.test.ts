@@ -131,3 +131,21 @@ test("rejects unknown CRS, undeclared projected coordinates and mixed families",
     1,
   );
 });
+
+test("dataset coordinate dimension is enforced before uploading", () => {
+  const point = (coordinates: number[]) =>
+    JSON.stringify({ type: "Point", coordinates });
+  assert.equal(importGeojson(point([1, 2]), () => "xy", "point", 2).length, 1);
+  assert.equal(
+    importGeojson(point([1, 2, 3]), () => "xyz", "point", 3).length,
+    1,
+  );
+  assert.throws(
+    () => importGeojson(point([1, 2, 3]), () => "wrong", "point", 2),
+    /二维/,
+  );
+  assert.throws(
+    () => importGeojson(point([1, 2]), () => "wrong", "point", 3),
+    /三维/,
+  );
+});

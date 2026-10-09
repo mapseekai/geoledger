@@ -1,7 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
 import { call } from "@/lib/browser-api";
-import type { ChangeSummary as Summary } from "@/lib/change-summary";
+import {
+  sharedRequests,
+  type ChangeSummary as Summary,
+} from "@/lib/change-summary";
+const loadSummary = sharedRequests<Summary>();
 import { Button } from "./ui/button";
 import {
   Table,
@@ -35,10 +39,12 @@ export function ChangeSummary({
   const key = JSON.stringify([project, workspace, revision, refresh, retry]);
   useEffect(() => {
     let active = true;
-    call<Summary>(
-      workspace
-        ? { action: "workspaceSummary", project, workspace }
-        : { action: "commitSummary", project, revision },
+    loadSummary(key, () =>
+      call<Summary>(
+        workspace
+          ? { action: "workspaceSummary", project, workspace }
+          : { action: "commitSummary", project, revision },
+      ),
     )
       .then((value) => {
         if (active) setState({ key, value });

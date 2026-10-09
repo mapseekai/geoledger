@@ -127,6 +127,16 @@ class GeoLedgerStub(object):
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
                 response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.DataChunk.FromString,
                 _registered_method=True)
+        self.WorkspaceSummary = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/WorkspaceSummary',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.WorkspaceRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.ChangeSummaryReply.FromString,
+                _registered_method=True)
+        self.CommitSummary = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/CommitSummary',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.SummaryCommitRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.ChangeSummaryReply.FromString,
+                _registered_method=True)
         self.Diff = channel.unary_unary(
                 '/geoledger.v1.GeoLedger/Diff',
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.DiffRequest.SerializeToString,
@@ -310,6 +320,18 @@ class GeoLedgerServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def WorkspaceSummary(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CommitSummary(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Diff(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -480,6 +502,16 @@ def add_GeoLedgerServicer_to_server(servicer, server):
                     servicer.FeaturesStream,
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.FromString,
                     response_serializer=geoledger_dot_v1_dot_geoledger__pb2.DataChunk.SerializeToString,
+            ),
+            'WorkspaceSummary': grpc.unary_unary_rpc_method_handler(
+                    servicer.WorkspaceSummary,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.WorkspaceRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.ChangeSummaryReply.SerializeToString,
+            ),
+            'CommitSummary': grpc.unary_unary_rpc_method_handler(
+                    servicer.CommitSummary,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.SummaryCommitRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.ChangeSummaryReply.SerializeToString,
             ),
             'Diff': grpc.unary_unary_rpc_method_handler(
                     servicer.Diff,
@@ -1036,6 +1068,60 @@ class GeoLedger(object):
             '/geoledger.v1.GeoLedger/FeaturesStream',
             geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
             geoledger_dot_v1_dot_geoledger__pb2.DataChunk.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def WorkspaceSummary(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/WorkspaceSummary',
+            geoledger_dot_v1_dot_geoledger__pb2.WorkspaceRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.ChangeSummaryReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CommitSummary(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/CommitSummary',
+            geoledger_dot_v1_dot_geoledger__pb2.SummaryCommitRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.ChangeSummaryReply.FromString,
             options,
             channel_credentials,
             insecure,

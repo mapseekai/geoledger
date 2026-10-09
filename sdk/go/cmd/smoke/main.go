@@ -46,7 +46,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	dataset, err := client.CreateDataset(ctx, project.ID, "places", "point")
+	dataset, err := client.CreateDatasetWithDimension(ctx, project.ID, "places", "point", 3)
 	if err != nil {
 		return err
 	}
@@ -86,6 +86,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	summary, err := client.WorkspaceSummary(ctx, project.ID, receipt.Workspace)
+	if err != nil || summary.Total.Added != 1 {
+		return fmt.Errorf("workspace summary: %v %v", summary, err)
+	}
+	summary, err = client.CommitSummary(ctx, project.ID, receipt.Revision)
+	if err != nil || summary.Total.Added != 1 {
+		return fmt.Errorf("commit summary: %v %v", summary, err)
+	}
 	again, err := draft.Publish(ctx, "Go SDK")
 	if err != nil {
 		return err
@@ -110,7 +118,7 @@ func run() error {
 	if !errors.As(err, &own) || own.Code != "conflict" || own.Uncertain {
 		return fmt.Errorf("wrong error: %v", err)
 	}
-	_, err = client.CreateDataset(ctx, project.ID, "places", "point")
+	_, err = client.CreateDatasetWithDimension(ctx, project.ID, "places", "point", 3)
 	if !errors.As(err, &own) || own.Code != "conflict" {
 		return fmt.Errorf("wrong duplicate error: %v", err)
 	}

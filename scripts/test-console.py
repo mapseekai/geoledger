@@ -24,9 +24,9 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     def command(body):
-        response = page.evaluate('''async body => {const r=await fetch('/api/console',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.json()};}''', body)
+        response = page.evaluate('''async body => {const r=await fetch('/api/console',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.text()};}''', body)
         assert response['status'] == 200, (body['action'], response)
-        return response['data']
+        return json.loads(response['data'])
     page.goto(origin+'/projects')
     page.wait_for_url('**/login')
     page.screenshot(path=str(shots/'next-login.png'), full_page=True)
@@ -146,7 +146,7 @@ with sync_playwright() as p:
     assert command({'action':'project','project':project})['head']=='1'
     datasets=command({'action':'datasets','project':project})
     data=command({'action':'features','project':project,'dataset':datasets[0]['id']})
-    assert '18446744073709551615' in data['features'][0]['geojson']
+    assert data['type']=='FeatureCollection' and data['features'][0]['properties']['exact']==18446744073709551615
     for index in range(21):
         command({'action':'createDataset','geometryType':'point','project':project,'name':f'分页数据集 {index:02}'})
     page.goto(origin+'/datasets?project='+project)

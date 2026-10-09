@@ -348,8 +348,11 @@ func (c *Client) DeleteDataset(ctx context.Context, project, dataset, confirmNam
 	return call(c, ctx, c.rpc.DeleteDataset, &pb.DeleteDatasetRequest{Project: project, Dataset: dataset, ConfirmName: confirmName}, &r)
 }
 func (c *Client) CreateDataset(ctx context.Context, project, name, geometryType string) (Dataset, error) {
+	return c.CreateDatasetWithDimension(ctx, project, name, geometryType, 2)
+}
+func (c *Client) CreateDatasetWithDimension(ctx context.Context, project, name, geometryType string, coordinateDimension uint32) (Dataset, error) {
 	var r Dataset
-	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, GeometryType: geometryType}, &r)
+	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, GeometryType: geometryType, CoordinateDimension: coordinateDimension}, &r)
 	return r, e
 }
 func (c *Client) Datasets(ctx context.Context, project string, page Page) ([]Dataset, error) {
@@ -402,6 +405,16 @@ func (c *Client) History(ctx context.Context, project string, after int64, n int
 	}
 	e := call(c, ctx, c.rpc.History, &pb.HistoryRequest{Project: project, After: after, Limit: limit(n)}, &r)
 	return r.Commits, e
+}
+func (c *Client) WorkspaceSummary(ctx context.Context, project, workspace string) (ChangeSummary, error) {
+	var r ChangeSummary
+	e := call(c, ctx, c.rpc.WorkspaceSummary, &pb.WorkspaceRequest{Project: project, Workspace: workspace}, &r)
+	return r, e
+}
+func (c *Client) CommitSummary(ctx context.Context, project string, revision int64) (ChangeSummary, error) {
+	var r ChangeSummary
+	e := call(c, ctx, c.rpc.CommitSummary, &pb.SummaryCommitRequest{Project: project, Revision: revision}, &r)
+	return r, e
 }
 func (c *Client) Commit(ctx context.Context, project string, revision int64, page Page) (CommitChanges, error) {
 	var r CommitChanges

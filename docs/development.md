@@ -174,3 +174,15 @@ python3 scripts/test-console.py \
 5. 提交 Pull Request，说明问题、最终行为、验证命令与范围。主 [CI](../.github/workflows/ci.yml) 覆盖 Linux、Windows、Rust 最低版本、Web、双后端 SDK 联调、TLS 网关、依赖审计与协议生成一致性。
 
 协议以 `proto/geoledger/v1/geoledger.proto` 为统一来源，生成绑定按本页工具版本更新。存储结构变化使用显式格式版本，新库直接初始化当前结构，格式与恢复要求见 [存储接口](storage.md)。文档保持主题集中、仓库相对链接与当前行为说明；项目使用 [MIT 许可证](../LICENSE)。
+
+SQLite 原生空间存储要求 SpatiaLite 5。Ubuntu/Debian 安装 `libsqlite3-mod-spatialite`；自定义安装路径设置 `GL_SPATIALITE_EXTENSION`。测试与服务使用相同依赖，缺失时明确报错。`crates/spatialite` 仅封装受控的原生扩展加载，其他业务 crate 保持禁止 unsafe。
+
+原生空间存储的大文件验证是显式 opt-in：
+
+```sh
+GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --test native_large_file -- --ignored --nocapture
+```
+
+该用例在临时 SQLite/SpatiaLite 库保存、发布整份面数据，检查原生 BLOB 数量、变更统计、带 bbox 的全量分页，并逐要素对比原始属性与坐标；不会修改输入文件或运行中的业务库。耗时输出仅代表本机存储路径，不包含浏览器上传与网络传输。
+
+2026-10-09 本机隔离验证：SpatiaLite 5.1.0、release 构建，LUCC 文件 133,151,432 字节、9,384 个 MultiPolygon。保存 144.88 秒，发布 100.63 秒，提交统计 36.46 毫秒，带全范围 bbox 的完整分页与逐要素数值核对 12.53 秒。所有要素的坐标与属性数值一致（JSON 的 `112.0` 与 `112` 按精确数值等价比较），全部具有原生几何 BLOB。上述为单次本机存储验证，现有格式 7 业务库及服务保持不变。

@@ -79,14 +79,16 @@ class DeleteProjectRequest(_message.Message):
     def __init__(self, project: _Optional[str] = ..., confirm_name: _Optional[str] = ...) -> None: ...
 
 class DatasetRequest(_message.Message):
-    __slots__ = ("project", "name", "geometry_type")
+    __slots__ = ("project", "name", "geometry_type", "coordinate_dimension")
     PROJECT_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     GEOMETRY_TYPE_FIELD_NUMBER: _ClassVar[int]
+    COORDINATE_DIMENSION_FIELD_NUMBER: _ClassVar[int]
     project: str
     name: str
     geometry_type: str
-    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ...) -> None: ...
+    coordinate_dimension: int
+    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ...) -> None: ...
 
 class WorkspaceRequest(_message.Message):
     __slots__ = ("project", "workspace")
@@ -283,14 +285,16 @@ class OkReply(_message.Message):
     def __init__(self, ok: bool = ...) -> None: ...
 
 class DatasetReply(_message.Message):
-    __slots__ = ("dataset", "name", "geometry_type")
+    __slots__ = ("dataset", "name", "geometry_type", "coordinate_dimension")
     DATASET_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     GEOMETRY_TYPE_FIELD_NUMBER: _ClassVar[int]
+    COORDINATE_DIMENSION_FIELD_NUMBER: _ClassVar[int]
     dataset: str
     name: str
     geometry_type: str
-    def __init__(self, dataset: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ...) -> None: ...
+    coordinate_dimension: int
+    def __init__(self, dataset: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ...) -> None: ...
 
 class DatasetsReply(_message.Message):
     __slots__ = ("datasets",)
@@ -555,3 +559,47 @@ class DeleteDatasetRequest(_message.Message):
     dataset: str
     confirm_name: str
     def __init__(self, project: _Optional[str] = ..., dataset: _Optional[str] = ..., confirm_name: _Optional[str] = ...) -> None: ...
+
+class SummaryCommitRequest(_message.Message):
+    __slots__ = ("project", "revision")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    revision: int
+    def __init__(self, project: _Optional[str] = ..., revision: _Optional[int] = ...) -> None: ...
+
+class ChangeCounts(_message.Message):
+    __slots__ = ("added", "deleted", "modified")
+    ADDED_FIELD_NUMBER: _ClassVar[int]
+    DELETED_FIELD_NUMBER: _ClassVar[int]
+    MODIFIED_FIELD_NUMBER: _ClassVar[int]
+    added: int
+    deleted: int
+    modified: int
+    def __init__(self, added: _Optional[int] = ..., deleted: _Optional[int] = ..., modified: _Optional[int] = ...) -> None: ...
+
+class DatasetChangeCounts(_message.Message):
+    __slots__ = ("id", "name", "added", "deleted", "modified")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    ADDED_FIELD_NUMBER: _ClassVar[int]
+    DELETED_FIELD_NUMBER: _ClassVar[int]
+    MODIFIED_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    name: str
+    added: int
+    deleted: int
+    modified: int
+    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., added: _Optional[int] = ..., deleted: _Optional[int] = ..., modified: _Optional[int] = ...) -> None: ...
+
+class ChangeSummaryReply(_message.Message):
+    __slots__ = ("total", "datasets", "version", "revision")
+    TOTAL_FIELD_NUMBER: _ClassVar[int]
+    DATASETS_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    total: ChangeCounts
+    datasets: _containers.RepeatedCompositeFieldContainer[DatasetChangeCounts]
+    version: int
+    revision: int
+    def __init__(self, total: _Optional[_Union[ChangeCounts, _Mapping]] = ..., datasets: _Optional[_Iterable[_Union[DatasetChangeCounts, _Mapping]]] = ..., version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...

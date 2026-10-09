@@ -34,6 +34,7 @@ class Dataset:
     id: str
     name: str
     geometry_type: str
+    coordinate_dimension: int = 2
 
 @dataclass(frozen=True)
 class WorkspaceInfo:
@@ -112,6 +113,7 @@ _REQUESTS = {"RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDa
              "SetMember": "MemberRequest", "CreateDataset": "DatasetRequest", "ListDatasets": "ProjectPageRequest",
              "CreateWorkspace": "ProjectRequest", "ListWorkspaces": "ProjectPageRequest", "GetWorkspace": "WorkspaceRequest",
              "Save": "SaveRequest", "Discard": "VersionRequest", "Features": "FeaturesRequest", "Diff": "DiffRequest",
+             "WorkspaceSummary": "WorkspaceRequest", "CommitSummary": "SummaryCommitRequest",
              "Conflicts": "DiffRequest", "History": "HistoryRequest", "Commit": "CommitRequest", "Audit": "HistoryRequest",
              "Publish": "PublishRequest", "Resolve": "ResolveRequest", "Rebase": "ResolveRequest", "Restore": "RestoreRequest",
              "ListMembers": "ProjectPageRequest", "RemoveMember": "MemberRefRequest",
@@ -231,8 +233,8 @@ class Client:
     def delete_dataset(self, project: str, dataset: str, confirm_name: str) -> None:
         self._call("DeleteDataset", project=project, dataset=dataset, confirm_name=confirm_name)
 
-    def create_dataset(self, project: str, name: str, geometry_type: str) -> Dataset:
-        return Dataset(**self._call("CreateDataset", project=project, name=name, geometry_type=geometry_type))
+    def create_dataset(self, project: str, name: str, geometry_type: str, coordinate_dimension: int = 2) -> Dataset:
+        return Dataset(**self._call("CreateDataset", project=project, name=name, geometry_type=geometry_type, coordinate_dimension=coordinate_dimension))
 
     def datasets(self, project: str, *, after: str = "", limit: int = 100) -> list[Dataset]:
         return [Dataset(**r) for r in self._call("ListDatasets", project=project, after=after, limit=limit)["datasets"]]
@@ -252,6 +254,12 @@ class Client:
 
     def history(self, project: str, *, after: int = 0, limit: int = 100) -> list[dict[str, Any]]:
         return self._call("History", project=project, after=after, limit=limit)["commits"]
+
+    def workspace_summary(self, project: str, workspace: str) -> dict[str, Any]:
+        return self._call("WorkspaceSummary", project=project, workspace=workspace)
+
+    def commit_summary(self, project: str, revision: int) -> dict[str, Any]:
+        return self._call("CommitSummary", project=project, revision=revision)
 
     def commit(self, project: str, revision: int, *, after: str = "", limit: int = 100) -> dict[str, Any]:
         return self._call("Commit", project=project, revision=revision, after=after, limit=limit)

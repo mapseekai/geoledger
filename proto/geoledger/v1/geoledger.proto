@@ -25,6 +25,8 @@ service GeoLedger {
  rpc Features(FeaturesRequest) returns (FeaturesReply);
  // Concatenated chunks encode one snapshot-consistent FeaturesReply.
  rpc FeaturesStream(FeaturesRequest) returns (stream DataChunk);
+ rpc WorkspaceSummary(WorkspaceRequest) returns (ChangeSummaryReply);
+ rpc CommitSummary(SummaryCommitRequest) returns (ChangeSummaryReply);
  rpc Diff(DiffRequest) returns (DiffReply);
  rpc Conflicts(DiffRequest) returns (ConflictsReply);
  rpc History(HistoryRequest) returns (HistoryReply);
@@ -81,6 +83,8 @@ message DatasetRequest {
  string project = 1;
  string name = 2;
  string geometry_type = 3;
+ // 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
+ uint32 coordinate_dimension = 4;
 }
 message WorkspaceRequest {
  string project = 1;
@@ -184,6 +188,8 @@ message DatasetReply {
  string dataset = 1;
  string name = 2;
  string geometry_type = 3;
+ // 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
+ uint32 coordinate_dimension = 4;
 }
 message DatasetsReply {
  repeated DatasetReply datasets = 1;
@@ -311,3 +317,26 @@ message ErrorAny {
 message RenameProjectRequest { string project = 1; string name = 2; }
 message RenameDatasetRequest { string project = 1; string dataset = 2; string name = 3; }
 message DeleteDatasetRequest { string project = 1; string dataset = 2; string confirm_name = 3; }
+
+message SummaryCommitRequest {
+ string project = 1;
+ int64 revision = 2;
+}
+message ChangeCounts {
+ int64 added = 1;
+ int64 deleted = 2;
+ int64 modified = 3;
+}
+message DatasetChangeCounts {
+ string id = 1;
+ string name = 2;
+ int64 added = 3;
+ int64 deleted = 4;
+ int64 modified = 5;
+}
+message ChangeSummaryReply {
+ ChangeCounts total = 1;
+ repeated DatasetChangeCounts datasets = 2;
+ optional int64 version = 3;
+ optional int64 revision = 4;
+}

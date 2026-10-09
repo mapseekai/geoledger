@@ -8,7 +8,7 @@ COPY sdk/rust ./sdk/rust
 COPY proto ./proto
 RUN cargo build --release --locked --bins
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && rm -rf /var/lib/apt/lists/* && useradd --uid 10001 --create-home geoledger && mkdir /data && chown 10001:10001 /data
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libsqlite3-mod-spatialite && rm -rf /var/lib/apt/lists/* && useradd --uid 10001 --create-home geoledger && mkdir /data && chown 10001:10001 /data
 COPY --from=build /src/target/release/geoledger-server /src/target/release/gl /usr/local/bin/
 USER 10001:10001
 VOLUME /data

@@ -88,11 +88,35 @@ export function assertGeometryType(value: unknown, family: GeometryType): void {
     throw new Error(`此数据集只能存放${geometryLabels[family]}类型要素。`);
 }
 
+export function assertCoordinateDimension(
+  value: unknown,
+  dimension: 2 | 3,
+): void {
+  if (value === null) return;
+  if (Array.isArray(value)) {
+    if (
+      value.length &&
+      (typeof value[0] === "number" || isLosslessNumber(value[0]))
+    ) {
+      if (value.length !== dimension)
+        throw new Error(
+          `此数据集要求${dimension === 2 ? "二维（XY）" : "三维（XYZ）"}坐标。`,
+        );
+    } else value.forEach((part) => assertCoordinateDimension(part, dimension));
+  } else if (object(value)) {
+    if ("coordinates" in value)
+      assertCoordinateDimension(value.coordinates, dimension);
+    if ("geometries" in value)
+      assertCoordinateDimension(value.geometries, dimension);
+  }
+}
+
 /** Parse without rounding property values or numeric feature identifiers. */
 export function importGeojson(
   raw: string,
   createId: () => string = () => crypto.randomUUID(),
   family?: GeometryType,
+  dimension?: 2 | 3,
 ): ImportedFeature[] {
   let root: unknown;
   try {
@@ -130,6 +154,13 @@ export function importGeojson(
     if (family) {
       try {
         assertGeometryType(feature.geometry, family);
+      } catch (e) {
+        return fail((e as Error).message);
+      }
+    }
+    if (dimension) {
+      try {
+        assertCoordinateDimension(feature.geometry, dimension);
       } catch (e) {
         return fail((e as Error).message);
       }

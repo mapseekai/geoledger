@@ -126,6 +126,7 @@ export type GeometryType = "point" | "line" | "polygon";
 
 export interface Dataset {
   geometryType: GeometryType;
+  coordinateDimension: 2 | 3;
   id: string;
   name: string;
 }
@@ -260,3 +261,11 @@ export interface Publication {
   readonly requestId: string;
   readonly message: string;
 }
+
+export type ChangeCounts = { added: bigint; deleted: bigint; modified: bigint };
+export type ChangeSummary = {
+  total: ChangeCounts;
+  datasets: (ChangeCounts & { id: string; name: string })[];
+  version?: bigint;
+  revision?: bigint;
+};

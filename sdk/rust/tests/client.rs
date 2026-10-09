@@ -122,6 +122,18 @@ impl wire::geo_ledger_server::GeoLedger for Service {
     ) -> Result<Response<wire::FeaturesReply>, Status> {
         Err(Status::unimplemented("unused"))
     }
+    async fn workspace_summary(
+        &self,
+        _request: Request<wire::WorkspaceRequest>,
+    ) -> Result<Response<wire::ChangeSummaryReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn commit_summary(
+        &self,
+        _request: Request<wire::SummaryCommitRequest>,
+    ) -> Result<Response<wire::ChangeSummaryReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
     async fn diff(
         &self,
         _request: Request<wire::DiffRequest>,

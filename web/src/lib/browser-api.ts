@@ -1,3 +1,6 @@
+import { stringify } from "lossless-json";
+import { parseLosslessJson } from "./conflicts";
+import { featureItemsUrl } from "./feature-links";
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -9,12 +12,15 @@ export class ApiError extends Error {
   }
 }
 export async function call<T>(payload: Record<string, unknown>): Promise<T> {
+  if (payload.action === "features")
+    return send<T>(featureItemsUrl(payload), "GET", undefined, true);
   return send<T>("/api/console", "POST", payload);
 }
 export async function send<T>(
   path: string,
   method: string,
   payload?: unknown,
+  featureResponse = false,
 ): Promise<T> {
   try {
     const response = await fetch(path, {
@@ -25,9 +31,16 @@ export async function send<T>(
       body: payload === undefined ? undefined : JSON.stringify(payload),
       signal: AbortSignal.timeout(45_000),
     });
-    const data = await response.json();
+    const raw = await response.text();
+    const data =
+      featureResponse && response.ok
+        ? (parseLosslessJson(raw) as Record<string, unknown>)
+        : JSON.parse(raw);
     if (!response.ok) {
-      if (response.status === 401 && path === "/api/console") {
+      if (
+        response.status === 401 &&
+        (path === "/api/console" || path.startsWith("/api/projects/"))
+      ) {
         window.location.replace("/login?expired=1");
       }
       throw new ApiError(
@@ -36,6 +49,17 @@ export async function send<T>(
         data.error?.uncertain ?? response.status >= 500,
         data.error?.requestId,
       );
+    }
+    if (featureResponse) {
+      if (data.type !== "FeatureCollection" || !Array.isArray(data.features))
+        throw new Error("Invalid FeatureCollection");
+      return {
+        ...data,
+        features: data.features.map((f: { id: string }) => ({
+          id: String(f.id),
+          geojson: stringify(f)!,
+        })),
+      } as T;
     }
     return data as T;
   } catch (error) {
@@ -53,7 +77,12 @@ export type Project = {
 };
 export type Member = { subject: string; role: string };
 export type GeometryType = "point" | "line" | "polygon";
-export type Dataset = { id: string; name: string; geometryType: GeometryType };
+export type Dataset = {
+  id: string;
+  name: string;
+  geometryType: GeometryType;
+  coordinateDimension: 2 | 3;
+};
 export type Workspace = {
   id: string;
   baseRevision: string;

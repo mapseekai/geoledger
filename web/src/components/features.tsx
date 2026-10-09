@@ -12,6 +12,7 @@ import { featureText, pretty } from "@/lib/geojson";
 import {
   importBatch,
   assertGeometryType,
+  assertCoordinateDimension,
   geometryLabels,
   type ImportedFeature,
 } from "@/lib/geojson-import";
@@ -397,6 +398,7 @@ function useLayer(project: string, dataset: string, workspaceId: string) {
             project,
             dataset,
             workspace: workspaceId || undefined,
+            workspaceVersion: workspaceId ? version : undefined,
             revision: !workspaceId ? revision : undefined,
             after,
             limit: 100,
@@ -855,6 +857,7 @@ export function FeatureWorkspace({
       {edit && (
         <FeatureEditor
           geometryType={dataset.geometryType}
+          coordinateDimension={dataset.coordinateDimension}
           feature={edit}
           close={() => {
             setEdit(undefined);
@@ -1463,11 +1466,13 @@ function AttributeTable({
 }
 export function FeatureEditor({
   geometryType,
+  coordinateDimension,
   feature,
   close,
   save,
 }: {
   geometryType: Dataset["geometryType"];
+  coordinateDimension: 2 | 3;
   feature: Feature | "new";
   close: () => void;
   save: (features: ImportedFeature[], version?: string) => Promise<string>;
@@ -1515,6 +1520,10 @@ export function FeatureEditor({
             (async () => {
               const raw = featureText(String(form.get("geojson")), id);
               assertGeometryType(JSON.parse(raw).geometry, geometryType);
+              assertCoordinateDimension(
+                JSON.parse(raw).geometry,
+                coordinateDimension,
+              );
               await submit([{ id, raw }]);
             })(),
           );
@@ -1557,7 +1566,11 @@ export function FeatureEditor({
                         worker.terminate();
                         reject(new Error("GeoJSON 解析失败，请重试。"));
                       };
-                      worker.postMessage({ file, family: geometryType });
+                      worker.postMessage({
+                        file,
+                        family: geometryType,
+                        dimension: coordinateDimension,
+                      });
                     },
                   );
                   setUpload({ name: file.name, features });
@@ -1565,7 +1578,8 @@ export function FeatureEditor({
               }}
             />
             <p className="muted">
-              当前数据集类型：{geometryLabels[geometryType]}。支持
+              当前数据集类型：{geometryLabels[geometryType]}，
+              {coordinateDimension === 3 ? "三维（XYZ）" : "二维（XY）"}。支持
               Feature、FeatureCollection 和几何对象，不限制文件大小。 缺少 id
               时自动生成，已有同名要素将被更新。
             </p>

@@ -24,6 +24,8 @@ export type {
   DiscardResult,
   FeaturePage,
   Change,
+  ChangeCounts,
+  ChangeSummary,
   Diff,
   Conflict,
   Conflicts,
@@ -343,9 +345,10 @@ export class Client {
     project: string,
     name: string,
     geometryType: model.GeometryType,
+    coordinateDimension: 2 | 3 = 2,
   ): Promise<model.Dataset> {
     return this.#call(
-      (cb) => this.#rpc.createDataset({ project, name, geometryType }, cb),
+      (cb) => this.#rpc.createDataset({ project, name, geometryType, coordinateDimension }, cb),
       convert.decodeDataset,
     );
   }
@@ -440,6 +443,25 @@ export class Client {
     }, convert.decodeFeaturePage);
   }
 
+  workspaceSummary(
+    project: string,
+    workspace: string,
+  ): Promise<model.ChangeSummary> {
+    return this.#call(
+      (cb) => this.#rpc.workspaceSummary({ project, workspace }, cb),
+      convert.decodeChangeSummary,
+    );
+  }
+  commitSummary(
+    project: string,
+    version: bigint,
+  ): Promise<model.ChangeSummary> {
+    return this.#call(
+      (cb) =>
+        this.#rpc.commitSummary({ project, revision: revision(version) }, cb),
+      convert.decodeChangeSummary,
+    );
+  }
   history(project: string, after = 0n, limit = 100): Promise<model.Commit[]> {
     return this.#call<wire.HistoryReply, model.Commit[]>(
       (cb) =>

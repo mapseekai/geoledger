@@ -244,3 +244,40 @@ pub(super) fn audit_events(t: &mut Transaction, subject: &str, r: Audit) -> Resu
     let next = events.last().map(|e| e["id"].clone());
     Ok(json!({"events":events,"next_after":next}))
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SummaryCommit {
+    project: String,
+    revision: i64,
+}
+pub(super) fn workspace_summary(t: &mut Transaction, s: &str, r: Workspace) -> Result<Value> {
+    let (base, version, _) = workspace(t, s, &r.project, &r.workspace, None)?;
+    let mut result = change_summary(t.workspace_summary(&r.project, &r.workspace, base)?)?;
+    result["version"] = json!(version);
+    Ok(result)
+}
+pub(super) fn commit_summary(t: &mut Transaction, s: &str, r: SummaryCommit) -> Result<Value> {
+    membership(t, &r.project, s, false)?;
+    t.commit_exists(&r.project, r.revision)?
+        .ok_or_else(missing)?;
+    let mut result = change_summary(t.commit_summary(&r.project, r.revision)?)?;
+    result["revision"] = json!(r.revision);
+    Ok(result)
+}
+fn change_summary(rows: Vec<Row>) -> Result<Value> {
+    let mut total = [0_i64; 3];
+    let mut datasets = Vec::new();
+    for row in rows {
+        let added: i64 = row.get(2usize)?;
+        let deleted: i64 = row.get(3usize)?;
+        let modified: i64 = row.get(4usize)?;
+        total[0] += added;
+        total[1] += deleted;
+        total[2] += modified;
+        datasets.push(json!({"id":row.get::<_,String>(0usize)?,"name":row.get::<_,String>(1usize)?,"added":added,"deleted":deleted,"modified":modified}));
+    }
+    Ok(
+        json!({"total":{"added":total[0],"deleted":total[1],"modified":total[2]},"datasets":datasets}),
+    )
+}

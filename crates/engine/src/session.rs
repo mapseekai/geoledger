@@ -138,6 +138,11 @@ impl Client {
             Storage::Postgis(dsn) => Backend::Postgis(pool.connect(dsn, timeout)?),
             Storage::Sqlite(path) => {
                 let c = rusqlite::Connection::open(path).map_err(sqlite_error)?;
+                let extension = std::env::var_os("GL_SPATIALITE_EXTENSION")
+                    .unwrap_or_else(|| "mod_spatialite".into());
+                geoledger_spatialite::load(&c, std::path::Path::new(&extension)).map_err(|e| {
+                    Error::new(500, "cannot load SpatiaLite; install mod_spatialite or set GL_SPATIALITE_EXTENSION to its trusted library path").caused_by(e)
+                })?;
                 c.busy_timeout(timeout).map_err(sqlite_error)?;
                 c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;")
                     .map_err(sqlite_error)?;
@@ -168,36 +173,35 @@ impl Client {
                     }
                 })
                 .map_err(sqlite_error)?;
-                c.create_scalar_function("gl_intersects", 5, flags, |ctx| {
+                c.create_scalar_function("gl_spatial_collection", 1, flags, |ctx| {
                     let source: Option<String> = ctx.get(0usize)?;
-                    match source {
-                        None => Ok(false),
-                        Some(s) => crate::geometry::intersects(
-                            &s,
-                            [
-                                ctx.get(1usize)?,
-                                ctx.get(2usize)?,
-                                ctx.get(3usize)?,
-                                ctx.get(4usize)?,
-                            ],
-                        )
-                        .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e))),
+                    source
+                        .map(|s| crate::geometry::spatial_collection(&s))
+                        .transpose()
+                        .map(Option::flatten)
+                        .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))
+                })
+                .map_err(sqlite_error)?;
+                c.create_scalar_function("gl_check_empty_geometry", 1, flags, |ctx| {
+                    let source: Option<String> = ctx.get(0usize)?;
+                    let Some(source) = source else { return Ok(None::<String>); };
+                    let value: serde_json::Value = serde_json::from_str(&source)
+                        .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
+                    fn has_position(v: &serde_json::Value) -> bool {
+                        match v {
+                            serde_json::Value::Array(a) => a.iter().any(|v| v.is_number() || has_position(v)),
+                            serde_json::Value::Object(o) => ["coordinates", "geometries"].iter().any(|k| o.get(*k).is_some_and(has_position)),
+                            _ => false,
+                        }
                     }
-                })
-                .map_err(sqlite_error)?;
-                c.create_scalar_function("gl_bound", 2, flags, |ctx| {
-                    let source: Option<String> = ctx.get(0usize)?;
-                    let axis: u32 = ctx.get(1usize)?;
-                    let Some(s) = source else {
-                        return Ok(None::<f64>);
-                    };
-                    Ok(crate::geometry::bounds(&s)
-                        .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?
-                        .map(|r| {
-                            [r.min().x, r.min().y, r.max().x, r.max().y][axis.min(3) as usize]
-                        }))
-                })
-                .map_err(sqlite_error)?;
+                    if has_position(&value) {
+                        return Err(rusqlite::Error::UserFunctionError(Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "SpatiaLite cannot represent this geometry; coordinate dimensions must be consistent within a feature",
+                        ))));
+                    }
+                    Ok(None::<String>)
+                }).map_err(sqlite_error)?;
                 Backend::Sqlite(c)
             }
         };
@@ -370,11 +374,38 @@ impl Client {
                 .get::<_, bool>(0usize)?
         };
         if !exists {
+            if sqlite {
+                let initialized = t
+                    .query_one("SELECT InitSpatialMetaData(0, 'WGS84')", &[])?
+                    .get::<_, i32>(0usize)?;
+                if initialized != 1 {
+                    return Err(Error::new(500, "cannot initialize SpatiaLite metadata"));
+                }
+            }
             t.batch_execute(if sqlite {
                 include_str!("sqlite.sql")
             } else {
                 include_str!("postgis.sql")
             })?;
+            if sqlite {
+                for table in ["gl_history", "gl_workspace_changes"] {
+                    for (column, dimension) in [("geom", "XY"), ("geom_z", "XYZ")] {
+                        for sql in [
+                            format!(
+                                "SELECT RecoverGeometryColumn('{table}','{column}',4326,'GEOMETRY','{dimension}')"
+                            ),
+                            format!("SELECT CreateSpatialIndex('{table}','{column}')"),
+                        ] {
+                            if t.query_one(&sql, &[])?.get::<_, i32>(0usize)? != 1 {
+                                return Err(Error::new(
+                                    500,
+                                    "cannot register SpatiaLite geometry/index",
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             t.commit()?;
             return Ok(());
         }
@@ -428,6 +459,26 @@ impl SqlTransaction {
             Backend::Postgis(_) => format!("{sql} {lock}"),
         }
     }
+    /// Native columns are populated on every write; raw JSON remains the immutable snapshot.
+    pub(crate) fn geometry_columns(&self) -> &'static str {
+        match self.0.backend {
+            Backend::Sqlite(_) => "geom,geom_z",
+            Backend::Postgis(_) => "geom",
+        }
+    }
+    pub(crate) fn geometry_values(&self, source: &str) -> String {
+        match self.0.backend {
+            Backend::Postgis(_) => format!("ST_SetSRID(ST_GeomFromGeoJSON({source}),4326)"),
+            Backend::Sqlite(_) => {
+                let g = format!(
+                    "coalesce(SetSRID(GeomFromGeoJSON({source}),4326),SetSRID(GeomFromGeoJSON(gl_spatial_collection({source})),4326),gl_check_empty_geometry({source}))"
+                );
+                format!(
+                    "CASE WHEN CoordDimension({g})='XY' THEN {g} END,CASE WHEN CoordDimension({g})='XYZ' THEN {g} END"
+                )
+            }
+        }
+    }
     pub(crate) fn spatial_filter(&self, alias: &str, table: &str, enabled: bool) -> String {
         // Cast unused parameters too: PostgreSQL prepares a single typed parameter vector.
         if !enabled {
@@ -439,11 +490,11 @@ impl SqlTransaction {
             format!("{alias}.")
         };
         match self.0.backend {
-            Backend::Postgis(_) => format!(
-                "$7 AND ST_Intersects(ST_GeomFromGeoJSON({a}geom),ST_MakeEnvelope($8,$9,$10,$11,4326))"
-            ),
+            Backend::Postgis(_) => {
+                format!("$7 AND ST_Intersects({a}geom,ST_MakeEnvelope($8,$9,$10,$11,4326))")
+            }
             Backend::Sqlite(_) => format!(
-                "$7 AND {a}rowid IN (SELECT id FROM gl_{table}_spatial WHERE min_x<=$10 AND max_x>=$8 AND min_y<=$11 AND max_y>=$9) AND gl_intersects({a}geom,$8,$9,$10,$11)"
+                "$7 AND (({a}rowid IN (SELECT pkid FROM idx_gl_{table}_geom WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9) AND ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,4326))=1) OR ({a}rowid IN (SELECT pkid FROM idx_gl_{table}_geom_z WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9) AND ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,4326))=1))"
             ),
         }
     }
@@ -510,7 +561,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         let spatial_filter = self.spatial_filter("h", "history", r.bbox.is_some());
         let draft_spatial_filter = self.spatial_filter("", "workspace_changes", r.bbox.is_some());
         let sql = format!("WITH base AS MATERIALIZED (
-            SELECT h.feature_id,h.properties,h.geom FROM gl_history h
+            SELECT h.feature_id,h.properties,h.geometry_json FROM gl_history h
             WHERE h.project=$1 AND h.dataset=$2
               AND h.valid_from<=$3 AND (h.valid_to IS NULL OR h.valid_to>$3)
               AND h.properties IS NOT NULL AND h.feature_id>$5 AND {key_filter}
@@ -519,14 +570,14 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
                 WHERE c.project=h.project AND c.dataset=h.dataset AND c.feature_id=h.feature_id AND c.workspace=$4)
             ORDER BY h.feature_id LIMIT $12
           ), draft AS MATERIALIZED (
-            SELECT feature_id,properties,geom FROM gl_workspace_changes
+            SELECT feature_id,properties,geometry_json FROM gl_workspace_changes
             WHERE project=$1 AND dataset=$2 AND workspace=$4
               AND properties IS NOT NULL AND feature_id>$5 AND {key_filter}
               AND ({draft_spatial_filter})
             ORDER BY feature_id LIMIT $12
           ), page AS MATERIALIZED (
             SELECT * FROM base UNION ALL SELECT * FROM draft ORDER BY feature_id LIMIT $12
-          ) SELECT feature_id,properties,geom FROM page ORDER BY feature_id");
+          ) SELECT feature_id,properties,geometry_json FROM page ORDER BY feature_id");
         self.query(
             &sql,
             &[
@@ -552,11 +603,11 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         key: &str,
         revision: i64,
     ) -> Result<Option<Row>> {
-        self.query_opt("SELECT properties,geom FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=$3 AND valid_from<=$4 AND (valid_to IS NULL OR valid_to>$4)", &[&project, &dataset, &key, &revision])
+        self.query_opt("SELECT properties,geometry_json FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=$3 AND valid_from<=$4 AND (valid_to IS NULL OR valid_to>$4)", &[&project, &dataset, &key, &revision])
     }
     fn dataset_exists(&mut self, project: &str, dataset: &str) -> Result<Option<Row>> {
         self.query_opt(
-            "SELECT geometry_type,name FROM gl_datasets WHERE project=$1 AND id=$2",
+            "SELECT geometry_type,name,coordinate_dimension FROM gl_datasets WHERE project=$1 AND id=$2",
             &[&project, &dataset],
         )
     }
@@ -653,10 +704,17 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         dataset: &str,
         name: &str,
         geometry_type: &str,
+        coordinate_dimension: i32,
     ) -> Result<()> {
         self.execute(
-            "INSERT INTO gl_datasets VALUES($1,$2,$3,$4)",
-            &[&project, &dataset, &name, &geometry_type],
+            "INSERT INTO gl_datasets VALUES($1,$2,$3,$4,$5)",
+            &[
+                &project,
+                &dataset,
+                &name,
+                &geometry_type,
+                &coordinate_dimension,
+            ],
         )
     }
     fn rename_project(&mut self, project: &str, name: &str) -> Result<()> {
@@ -745,7 +803,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn list_datasets(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
         self.query(
-            "SELECT id,name,geometry_type FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
+            "SELECT id,name,geometry_type,coordinate_dimension FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
             &[&project, &after, &limit],
         )
     }
@@ -779,7 +837,13 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         properties: &Option<String>,
         geometry: &Option<&str>,
     ) -> Result<()> {
-        self.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(project,workspace,dataset,feature_id) DO UPDATE SET properties=excluded.properties,geom=excluded.geom", &[&project, &workspace, &dataset, &key, &properties, &geometry])
+        let updates = self
+            .geometry_columns()
+            .split(',')
+            .map(|c| format!("{c}=excluded.{c}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) VALUES($1,$2,$3,$4,$5,$6,{values}) ON CONFLICT(project,workspace,dataset,feature_id) DO UPDATE SET properties=excluded.properties,geometry_json=excluded.geometry_json,{updates}", columns=self.geometry_columns(), values=self.geometry_values("$6")), &[&project, &workspace, &dataset, &key, &properties, &geometry])
     }
     fn invalidate_resolutions(&mut self, project: &str, workspace: &str) -> Result<()> {
         self.execute("UPDATE gl_workspace_changes SET resolution_stale=true WHERE project=$1 AND workspace=$2 AND resolved_head IS NOT NULL", &[&project, &workspace])
@@ -808,6 +872,14 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
             &[&project, &workspace],
         )
     }
+    fn workspace_summary(&mut self, project: &str, workspace: &str, base: i64) -> Result<Vec<Row>> {
+        // Aggregate in primary-key dataset order before joining names. Grouping by
+        // names too makes SQLite sort full feature payloads into a temporary B-tree.
+        self.query("WITH counts AS MATERIALIZED (SELECT c.dataset,SUM(CASE WHEN b.properties IS NULL AND c.properties IS NOT NULL THEN 1 ELSE 0 END) AS added,SUM(CASE WHEN b.properties IS NOT NULL AND c.properties IS NULL THEN 1 ELSE 0 END) AS deleted,SUM(CASE WHEN b.properties IS NOT NULL AND c.properties IS NOT NULL THEN 1 ELSE 0 END) AS modified FROM gl_workspace_changes c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) WHERE c.project=$1 AND c.workspace=$2 AND (c.properties IS NOT NULL OR b.properties IS NOT NULL) GROUP BY c.dataset) SELECT c.dataset,d.name,c.added,c.deleted,c.modified FROM counts c JOIN gl_datasets d ON d.project=$1 AND d.id=c.dataset ORDER BY c.dataset", &[&project,&workspace,&base])
+    }
+    fn commit_summary(&mut self, project: &str, revision: i64) -> Result<Vec<Row>> {
+        self.query("WITH counts AS MATERIALIZED (SELECT dataset,SUM(CASE WHEN before_value IS NULL AND after_value IS NOT NULL THEN 1 ELSE 0 END) AS added,SUM(CASE WHEN before_value IS NOT NULL AND after_value IS NULL THEN 1 ELSE 0 END) AS deleted,SUM(CASE WHEN before_value IS NOT NULL AND after_value IS NOT NULL THEN 1 ELSE 0 END) AS modified FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (before_value IS NOT NULL OR after_value IS NOT NULL) GROUP BY dataset) SELECT c.dataset,d.name,c.added,c.deleted,c.modified FROM counts c JOIN gl_datasets d ON d.project=$1 AND d.id=c.dataset ORDER BY c.dataset", &[&project,&revision])
+    }
     fn diff_page(
         &mut self,
         project: &str,
@@ -817,7 +889,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         after_key: &str,
         limit: i64,
     ) -> Result<Vec<Row>> {
-        self.query("WITH batch AS MATERIALIZED (SELECT * FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($4,$5) ORDER BY dataset,feature_id LIMIT $6) SELECT c.dataset,c.feature_id,c.properties,c.geom,b.properties,b.geom FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &after_dataset, &after_key, &limit])
+        self.query("WITH batch AS MATERIALIZED (SELECT project,dataset,feature_id,properties,geometry_json,resolved_head,resolution_stale FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($4,$5) ORDER BY dataset,feature_id LIMIT $6) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,b.properties,b.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &after_dataset, &after_key, &limit])
     }
     fn history_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>> {
         self.query("SELECT c.revision,c.subject,c.message,c.created_at,c.workspace,w.base_revision FROM gl_commits c JOIN gl_workspaces w ON w.project=c.project AND w.id=c.workspace WHERE c.project=$1 AND c.revision>$2 ORDER BY c.revision LIMIT $3", &[&project, &after, &limit])
@@ -853,7 +925,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         after_dataset: &str,
         after_key: &str,
     ) -> Result<Vec<Row>> {
-        self.query("WITH batch AS MATERIALIZED (SELECT * FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT 32) SELECT c.dataset,c.feature_id,c.properties,c.geom,c.resolved_head,c.resolution_stale,b.properties,b.geom,o.properties,o.geom FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &current, &after_dataset, &after_key])
+        self.query("WITH batch AS MATERIALIZED (SELECT project,dataset,feature_id,properties,geometry_json,resolved_head,resolution_stale FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT 32) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,c.resolved_head,c.resolution_stale,b.properties,b.geometry_json,o.properties,o.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &current, &after_dataset, &after_key])
     }
     fn stage_merge(
         &mut self,
@@ -892,7 +964,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.execute("UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL", &[&project, &revision])
     }
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM gl_merge_stage", &[&project, &revision])
+        self.execute(&format!("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,{columns}) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry'),{values} FROM gl_merge_stage", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(after_value,'geometry')")), &[&project, &revision])
     }
     fn advance_head(&mut self, project: &str, revision: i64) -> Result<()> {
         self.execute(
@@ -936,7 +1008,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         )
     }
     fn replace_deltas_with_merge(&mut self, project: &str, workspace: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom) SELECT $1,$2,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry') FROM gl_merge_stage", &[&project, &workspace])
+        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) SELECT $1,$2,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry'),{values} FROM gl_merge_stage", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(after_value,'geometry')")), &[&project, &workspace])
     }
     fn advance_base(&mut self, project: &str, workspace: &str, revision: i64) -> Result<()> {
         self.execute(
@@ -951,7 +1023,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         )
     }
     fn restore_deltas(&mut self, project: &str, revision: i64, workspace: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom) SELECT project,$3,dataset,feature_id,gl_json_field(before_value,'properties'),gl_json_field(before_value,'geometry') FROM gl_commit_changes WHERE project=$1 AND revision=$2", &[&project, &revision, &workspace])
+        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) SELECT project,$3,dataset,feature_id,gl_json_field(before_value,'properties'),gl_json_field(before_value,'geometry'),{values} FROM gl_commit_changes WHERE project=$1 AND revision=$2", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(before_value,'geometry')")), &[&project, &revision, &workspace])
     }
     fn commit(self: Box<Self>) -> Result<()> {
         SqlTransaction::commit(*self)

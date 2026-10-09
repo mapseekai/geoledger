@@ -25,9 +25,9 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     def command(body):
-        response = page.evaluate('''async body => {const r=await fetch('/api/console',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.json()};}''', body)
+        response = page.evaluate('''async body => {const r=await fetch('/api/console',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.text()};}''', body)
         assert response['status'] == 200, (body['action'], response)
-        return response['data']
+        return json.loads(response['data'])
     page.goto(origin+'/projects')
     page.wait_for_url('**/login')
     page.screenshot(path=str(shots/'next-login.png'), full_page=True)
@@ -106,14 +106,14 @@ with sync_playwright() as p:
         if not after: break
     assert len(rows)==130,len(rows)
     exact=next(row for row in rows if row['id']=='18446744073709551615')
-    assert '18446744073709551615' in exact['geojson']
-    assert json.loads(exact['geojson'])['properties']['exact']==18446744073709551615
-    assert len(json.loads(exact['geojson'])['properties']['padding'])==args.feature_bytes
+    assert exact['type']=='Feature'
+    assert exact['properties']['exact']==18446744073709551615
+    assert len(exact['properties']['padding'])==args.feature_bytes
     assert command({'action':'info'})['maxFeatureBytes']==0
     current=command({'action':'workspace','project':project,'workspace':workspace})
     command({'action':'publish','project':project,'workspace':workspace,'version':current['version'],'requestId':str(uuid.uuid4()),'message':'large GeoJSON browser validation'})
     published=command({'action':'features','project':project,'dataset':dataset,'featureId':'18446744073709551615'})
-    assert len(json.loads(published['features'][0]['geojson'])['properties']['padding'])==args.feature_bytes
+    assert len(published['features'][0]['properties']['padding'])==args.feature_bytes
     page.get_by_role('button',name='添加要素',exact=True).click()
     page.set_viewport_size({'width':390,'height':844})
     expect(page.get_by_label('上传 GeoJSON 文件',exact=True)).to_be_visible()

@@ -29,8 +29,8 @@ with sync_playwright() as playwright:
  browser=playwright.chromium.launch(headless=True,executable_path=a.chromium,args=['--no-sandbox','--disable-dev-shm-usage'])
  page=browser.new_page(viewport={'width':1600,'height':1000});page.on('pageerror',lambda e:report['page_errors'].append(str(e)))
  def response(r):
-  if '/api/console' not in r.url or r.request.method!='POST':return
-  body=r.request.post_data_json or {};action=body.get('action')
+  if '/api/console' not in r.url and '/items' not in r.url:return
+  body=(r.request.post_data_json or {}) if r.request.method=='POST' else {'action':'features'};action=body.get('action')
   if action in ['save','features']:
    entry={'elapsed':elapsed(),'status':r.status,'duration_ms':round(r.request.timing['responseEnd']-r.request.timing['requestStart'],2)}
    if action=='save':
@@ -47,9 +47,9 @@ with sync_playwright() as playwright:
  page.on('requestfinished',lambda request: response(request.response()) if request.response() else None)
  page.goto(a.url+'/login');page.get_by_label('访问令牌',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
  def call(body):
-  r=page.evaluate('''async body=>{const t=performance.now();const r=await fetch('/api/console',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.json(),ms:performance.now()-t}}''',body)
+  r=page.evaluate('''async body=>{const t=performance.now();const r=await fetch('/api/console',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.text(),ms:performance.now()-t}}''',body)
   if r['status']!=200:raise RuntimeError(json.dumps(r,ensure_ascii=False))
-  return r['data']
+  return json.loads(r['data'])
  try:
   if a.resume_report:
    project=report['project'];dataset=report['dataset'];publication=report['publication']
@@ -92,7 +92,7 @@ with sync_playwright() as playwright:
    if revision:body['revision']=revision
    data=call(body);revision=data['revision'];pages+=1
    for feature in data['features']:
-    assert feature['id'] not in seen;seen.add(feature['id']);digest=signature(json.loads(feature['geojson']));returned[digest]+=1;count+=1
+    assert feature['id'] not in seen;seen.add(feature['id']);digest=signature(feature);returned[digest]+=1;count+=1
     if expected:assert digest==expected[feature['id']],'Query changed feature '+feature['id']
    after=data.get('nextAfter')
    if not after:break

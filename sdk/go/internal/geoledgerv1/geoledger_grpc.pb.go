@@ -19,37 +19,39 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GeoLedger_Info_FullMethodName            = "/geoledger.v1.GeoLedger/Info"
-	GeoLedger_CreateProject_FullMethodName   = "/geoledger.v1.GeoLedger/CreateProject"
-	GeoLedger_ListProjects_FullMethodName    = "/geoledger.v1.GeoLedger/ListProjects"
-	GeoLedger_GetProject_FullMethodName      = "/geoledger.v1.GeoLedger/GetProject"
-	GeoLedger_SetMember_FullMethodName       = "/geoledger.v1.GeoLedger/SetMember"
-	GeoLedger_RenameProject_FullMethodName   = "/geoledger.v1.GeoLedger/RenameProject"
-	GeoLedger_RenameDataset_FullMethodName   = "/geoledger.v1.GeoLedger/RenameDataset"
-	GeoLedger_DeleteDataset_FullMethodName   = "/geoledger.v1.GeoLedger/DeleteDataset"
-	GeoLedger_CreateDataset_FullMethodName   = "/geoledger.v1.GeoLedger/CreateDataset"
-	GeoLedger_ListDatasets_FullMethodName    = "/geoledger.v1.GeoLedger/ListDatasets"
-	GeoLedger_CreateWorkspace_FullMethodName = "/geoledger.v1.GeoLedger/CreateWorkspace"
-	GeoLedger_ListWorkspaces_FullMethodName  = "/geoledger.v1.GeoLedger/ListWorkspaces"
-	GeoLedger_GetWorkspace_FullMethodName    = "/geoledger.v1.GeoLedger/GetWorkspace"
-	GeoLedger_Save_FullMethodName            = "/geoledger.v1.GeoLedger/Save"
-	GeoLedger_SaveStream_FullMethodName      = "/geoledger.v1.GeoLedger/SaveStream"
-	GeoLedger_Discard_FullMethodName         = "/geoledger.v1.GeoLedger/Discard"
-	GeoLedger_Features_FullMethodName        = "/geoledger.v1.GeoLedger/Features"
-	GeoLedger_FeaturesStream_FullMethodName  = "/geoledger.v1.GeoLedger/FeaturesStream"
-	GeoLedger_Diff_FullMethodName            = "/geoledger.v1.GeoLedger/Diff"
-	GeoLedger_Conflicts_FullMethodName       = "/geoledger.v1.GeoLedger/Conflicts"
-	GeoLedger_History_FullMethodName         = "/geoledger.v1.GeoLedger/History"
-	GeoLedger_Commit_FullMethodName          = "/geoledger.v1.GeoLedger/Commit"
-	GeoLedger_Audit_FullMethodName           = "/geoledger.v1.GeoLedger/Audit"
-	GeoLedger_Publish_FullMethodName         = "/geoledger.v1.GeoLedger/Publish"
-	GeoLedger_Resolve_FullMethodName         = "/geoledger.v1.GeoLedger/Resolve"
-	GeoLedger_Rebase_FullMethodName          = "/geoledger.v1.GeoLedger/Rebase"
-	GeoLedger_Restore_FullMethodName         = "/geoledger.v1.GeoLedger/Restore"
-	GeoLedger_ListMembers_FullMethodName     = "/geoledger.v1.GeoLedger/ListMembers"
-	GeoLedger_RemoveMember_FullMethodName    = "/geoledger.v1.GeoLedger/RemoveMember"
-	GeoLedger_ArchiveProject_FullMethodName  = "/geoledger.v1.GeoLedger/ArchiveProject"
-	GeoLedger_DeleteProject_FullMethodName   = "/geoledger.v1.GeoLedger/DeleteProject"
+	GeoLedger_Info_FullMethodName             = "/geoledger.v1.GeoLedger/Info"
+	GeoLedger_CreateProject_FullMethodName    = "/geoledger.v1.GeoLedger/CreateProject"
+	GeoLedger_ListProjects_FullMethodName     = "/geoledger.v1.GeoLedger/ListProjects"
+	GeoLedger_GetProject_FullMethodName       = "/geoledger.v1.GeoLedger/GetProject"
+	GeoLedger_SetMember_FullMethodName        = "/geoledger.v1.GeoLedger/SetMember"
+	GeoLedger_RenameProject_FullMethodName    = "/geoledger.v1.GeoLedger/RenameProject"
+	GeoLedger_RenameDataset_FullMethodName    = "/geoledger.v1.GeoLedger/RenameDataset"
+	GeoLedger_DeleteDataset_FullMethodName    = "/geoledger.v1.GeoLedger/DeleteDataset"
+	GeoLedger_CreateDataset_FullMethodName    = "/geoledger.v1.GeoLedger/CreateDataset"
+	GeoLedger_ListDatasets_FullMethodName     = "/geoledger.v1.GeoLedger/ListDatasets"
+	GeoLedger_CreateWorkspace_FullMethodName  = "/geoledger.v1.GeoLedger/CreateWorkspace"
+	GeoLedger_ListWorkspaces_FullMethodName   = "/geoledger.v1.GeoLedger/ListWorkspaces"
+	GeoLedger_GetWorkspace_FullMethodName     = "/geoledger.v1.GeoLedger/GetWorkspace"
+	GeoLedger_Save_FullMethodName             = "/geoledger.v1.GeoLedger/Save"
+	GeoLedger_SaveStream_FullMethodName       = "/geoledger.v1.GeoLedger/SaveStream"
+	GeoLedger_Discard_FullMethodName          = "/geoledger.v1.GeoLedger/Discard"
+	GeoLedger_Features_FullMethodName         = "/geoledger.v1.GeoLedger/Features"
+	GeoLedger_FeaturesStream_FullMethodName   = "/geoledger.v1.GeoLedger/FeaturesStream"
+	GeoLedger_WorkspaceSummary_FullMethodName = "/geoledger.v1.GeoLedger/WorkspaceSummary"
+	GeoLedger_CommitSummary_FullMethodName    = "/geoledger.v1.GeoLedger/CommitSummary"
+	GeoLedger_Diff_FullMethodName             = "/geoledger.v1.GeoLedger/Diff"
+	GeoLedger_Conflicts_FullMethodName        = "/geoledger.v1.GeoLedger/Conflicts"
+	GeoLedger_History_FullMethodName          = "/geoledger.v1.GeoLedger/History"
+	GeoLedger_Commit_FullMethodName           = "/geoledger.v1.GeoLedger/Commit"
+	GeoLedger_Audit_FullMethodName            = "/geoledger.v1.GeoLedger/Audit"
+	GeoLedger_Publish_FullMethodName          = "/geoledger.v1.GeoLedger/Publish"
+	GeoLedger_Resolve_FullMethodName          = "/geoledger.v1.GeoLedger/Resolve"
+	GeoLedger_Rebase_FullMethodName           = "/geoledger.v1.GeoLedger/Rebase"
+	GeoLedger_Restore_FullMethodName          = "/geoledger.v1.GeoLedger/Restore"
+	GeoLedger_ListMembers_FullMethodName      = "/geoledger.v1.GeoLedger/ListMembers"
+	GeoLedger_RemoveMember_FullMethodName     = "/geoledger.v1.GeoLedger/RemoveMember"
+	GeoLedger_ArchiveProject_FullMethodName   = "/geoledger.v1.GeoLedger/ArchiveProject"
+	GeoLedger_DeleteProject_FullMethodName    = "/geoledger.v1.GeoLedger/DeleteProject"
 )
 
 // GeoLedgerClient is the client API for GeoLedger service.
@@ -80,6 +82,8 @@ type GeoLedgerClient interface {
 	Features(ctx context.Context, in *FeaturesRequest, opts ...grpc.CallOption) (*FeaturesReply, error)
 	// Concatenated chunks encode one snapshot-consistent FeaturesReply.
 	FeaturesStream(ctx context.Context, in *FeaturesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error)
+	WorkspaceSummary(ctx context.Context, in *WorkspaceRequest, opts ...grpc.CallOption) (*ChangeSummaryReply, error)
+	CommitSummary(ctx context.Context, in *SummaryCommitRequest, opts ...grpc.CallOption) (*ChangeSummaryReply, error)
 	Diff(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*DiffReply, error)
 	Conflicts(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*ConflictsReply, error)
 	History(ctx context.Context, in *HistoryRequest, opts ...grpc.CallOption) (*HistoryReply, error)
@@ -295,6 +299,26 @@ func (c *geoLedgerClient) FeaturesStream(ctx context.Context, in *FeaturesReques
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type GeoLedger_FeaturesStreamClient = grpc.ServerStreamingClient[DataChunk]
 
+func (c *geoLedgerClient) WorkspaceSummary(ctx context.Context, in *WorkspaceRequest, opts ...grpc.CallOption) (*ChangeSummaryReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangeSummaryReply)
+	err := c.cc.Invoke(ctx, GeoLedger_WorkspaceSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *geoLedgerClient) CommitSummary(ctx context.Context, in *SummaryCommitRequest, opts ...grpc.CallOption) (*ChangeSummaryReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangeSummaryReply)
+	err := c.cc.Invoke(ctx, GeoLedger_CommitSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *geoLedgerClient) Diff(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*DiffReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DiffReply)
@@ -453,6 +477,8 @@ type GeoLedgerServer interface {
 	Features(context.Context, *FeaturesRequest) (*FeaturesReply, error)
 	// Concatenated chunks encode one snapshot-consistent FeaturesReply.
 	FeaturesStream(*FeaturesRequest, grpc.ServerStreamingServer[DataChunk]) error
+	WorkspaceSummary(context.Context, *WorkspaceRequest) (*ChangeSummaryReply, error)
+	CommitSummary(context.Context, *SummaryCommitRequest) (*ChangeSummaryReply, error)
 	Diff(context.Context, *DiffRequest) (*DiffReply, error)
 	Conflicts(context.Context, *DiffRequest) (*ConflictsReply, error)
 	History(context.Context, *HistoryRequest) (*HistoryReply, error)
@@ -529,6 +555,12 @@ func (UnimplementedGeoLedgerServer) Features(context.Context, *FeaturesRequest) 
 }
 func (UnimplementedGeoLedgerServer) FeaturesStream(*FeaturesRequest, grpc.ServerStreamingServer[DataChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method FeaturesStream not implemented")
+}
+func (UnimplementedGeoLedgerServer) WorkspaceSummary(context.Context, *WorkspaceRequest) (*ChangeSummaryReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WorkspaceSummary not implemented")
+}
+func (UnimplementedGeoLedgerServer) CommitSummary(context.Context, *SummaryCommitRequest) (*ChangeSummaryReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CommitSummary not implemented")
 }
 func (UnimplementedGeoLedgerServer) Diff(context.Context, *DiffRequest) (*DiffReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Diff not implemented")
@@ -896,6 +928,42 @@ func _GeoLedger_FeaturesStream_Handler(srv interface{}, stream grpc.ServerStream
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type GeoLedger_FeaturesStreamServer = grpc.ServerStreamingServer[DataChunk]
 
+func _GeoLedger_WorkspaceSummary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WorkspaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).WorkspaceSummary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_WorkspaceSummary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).WorkspaceSummary(ctx, req.(*WorkspaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GeoLedger_CommitSummary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SummaryCommitRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).CommitSummary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_CommitSummary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).CommitSummary(ctx, req.(*SummaryCommitRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GeoLedger_Diff_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DiffRequest)
 	if err := dec(in); err != nil {
@@ -1200,6 +1268,14 @@ var GeoLedger_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Features",
 			Handler:    _GeoLedger_Features_Handler,
+		},
+		{
+			MethodName: "WorkspaceSummary",
+			Handler:    _GeoLedger_WorkspaceSummary_Handler,
+		},
+		{
+			MethodName: "CommitSummary",
+			Handler:    _GeoLedger_CommitSummary_Handler,
 		},
 		{
 			MethodName: "Diff",

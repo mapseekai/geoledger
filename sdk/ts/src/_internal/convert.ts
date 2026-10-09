@@ -59,6 +59,7 @@ export function decodeDataset(v: wire.DatasetReply): Dataset {
     id: v.dataset,
     name: v.name,
     geometryType: v.geometryType as Dataset["geometryType"],
+    coordinateDimension: (v.coordinateDimension || 2) as 2 | 3,
   };
 }
 export function decodeWorkspaceInfo(v: wire.WorkspaceReply): WorkspaceInfo {
@@ -186,5 +187,22 @@ export function decodeRebaseResult(v: wire.RebaseReply): RebaseResult {
     baseRevision: BigInt(v.baseRevision),
     version: BigInt(v.version),
     changes: BigInt(v.changes),
+  };
+}
+
+export function decodeChangeSummary(
+  v: wire.ChangeSummaryReply,
+): import("../models").ChangeSummary {
+  const counts = (c: wire.ChangeCounts) => ({
+    added: BigInt(c.added),
+    deleted: BigInt(c.deleted),
+    modified: BigInt(c.modified),
+  });
+  if (!v.total) throw new Error("Missing summary total");
+  return {
+    total: counts(v.total),
+    datasets: v.datasets.map((d) => ({ id: d.id, name: d.name, ...counts(d) })),
+    version: v.version === undefined ? undefined : BigInt(v.version),
+    revision: v.revision === undefined ? undefined : BigInt(v.revision),
   };
 }

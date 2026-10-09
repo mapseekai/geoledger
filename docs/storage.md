@@ -39,7 +39,7 @@
 | workspace_state | base_revision:i64, version:i64, status:text |
 | feature_page | feature_id:text, properties:text, geometry:text? |
 | feature_at | properties:text?, geometry:text? |
-| dataset_exists | geometry_type:text, name:text |
+| dataset_exists | geometry_type:text, name:text, coordinate_dimension:i32 |
 | commit_exists | 存在时返回单行标记 |
 | advance_workspace | version:i64 |
 | list_projects | project:text, name:text, head:i64, state:text, role:text |
@@ -47,7 +47,7 @@
 | list_members | subject:text, role:text（仅有效成员，按 subject 排序） |
 | owned_projects | count:i64（subject 为有效 owner 且未删除的项目数） |
 | owner_summary | owner_count:i64, target_is_owner:i64（0/1） |
-| list_datasets | dataset:text, name:text, geometry_type:text |
+| list_datasets | dataset:text, name:text, geometry_type:text, coordinate_dimension:i32 |
 | list_workspaces | workspace:text, base_revision:i64, version:i64, status:text |
 | has_resolution | bool |
 | count_deltas / count_commit_changes | count:i64 |
@@ -64,11 +64,15 @@ properties/detail/payload/result 为精确 JSON 文本，geometry 为规范化�
 
 ## SQLite 与 PostGIS
 
-SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读事务使用 query_only 和一致快照。RTree 先筛选候选，再以共同几何实现做精确相交判断。写入排队有总期限，超过期限返回 busy/deadline。
+SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读事务使用 query_only 和一致快照。RTree 先筛选候选，再以 SpatiaLite 的 ST_Intersects 做精确相交判断。写入排队有总期限，超过期限返回 busy/deadline。
 
-PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。几何的规范 GeoJSON 与属性 JSON 文本保留跨后端一致性，PostGIS 在 `ST_GeomFromGeoJSON(geom)` 上创建 GiST 表达式索引；bbox 使用 PostGIS 空间查询。几何合法性在共同应用层校验。
+PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。`geom` 使用原生 `geometry` 类型（SRID 4326，兼容 XY/XYZ），直接创建 GiST 索引；bbox 直接查询几何列，不在查询时解析 GeoJSON。几何结构在共同应用层校验，自相交等拓扑问题仍作为警告，保持原始坐标。
 
-当前格式为 7，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
+当前格式为 8，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
+
+SQLite 必须加载 SpatiaLite 5 扩展，使用注册的 `geom`（XY）和 `geom_z`（XYZ）几何 BLOB 列与各自的标准 RTree 索引；两个维度共用业务表，单个要素按维度写入对应列。数据集创建时声明不可变的 `coordinate_dimension`（2 或 3，默认 2），所有要素坐标必须匹配，混合维度返回明确的参数错误。嵌套集合仅在派生的空间表示中展平，快照保持原样。扩展加载失败时启动失败。默认加载 `mod_spatialite`，可通过 `GL_SPATIALITE_EXTENSION` 指定管理员安装的可信库路径。扩展加载后立即关闭动态加载权限。
+
+两个后端的 `geometry_json` 保留原始几何快照，用于精确响应、版本比较和逻辑导出；空间过滤使用原生几何列。SpatiaLite 不表示空几何集合，因此这类要素仅保留快照、不进入空间索引，仍参与普通分页与计数。导入在同一事务内重建原生几何与索引；备份包含原生几何、空间元数据与索引。格式 8 只初始化新库，不自动升级格式 7；旧库需继续由对应版本服务读取。
 
 ## 新后端验收
 

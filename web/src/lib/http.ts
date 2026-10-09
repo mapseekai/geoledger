@@ -1,5 +1,5 @@
 import "server-only";
-import { GeoLedgerError } from "@geoledger/client";
+import { GeoLedgerError, stringifyJson } from "@geoledger/client";
 import { ZodError } from "zod";
 import { configuration } from "./config";
 import { encode } from "./operations";
@@ -68,6 +68,23 @@ export function reply(data: unknown, status = 200) {
       "cache-control": "no-store",
     },
   });
+}
+export function geoReply(data: unknown) {
+  return new Response(stringifyJson(data), {
+    headers: {
+      "content-type": "application/geo+json; charset=utf-8",
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+export function guardRead(request: Request) {
+  const origin = request.headers.get("origin");
+  if (
+    (origin && origin !== configuration().origin) ||
+    request.headers.get("sec-fetch-site") === "cross-site"
+  )
+    throw new HttpError(403, "请求来源不匹配。");
 }
 export function failure(error: unknown) {
   if (error instanceof HttpError)

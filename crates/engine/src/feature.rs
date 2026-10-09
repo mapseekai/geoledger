@@ -207,7 +207,21 @@ pub(super) fn validate_dataset_geometry(
     d: &str,
     v: &Stored,
 ) -> Result<()> {
-    let family: String = t.dataset_exists(p, d)?.ok_or_else(missing)?.get(0usize)?;
+    let dataset = t.dataset_exists(p, d)?.ok_or_else(missing)?;
+    let family: String = dataset.get(0usize)?;
+    let dimension: i32 = dataset.get(2usize)?;
+    fn matching_dimension(value: &Value, dimension: i32) -> bool {
+        match value {
+            Value::Array(a) if a.first().is_some_and(Value::is_number) => {
+                a.len() == dimension as usize
+            }
+            Value::Array(a) => a.iter().all(|v| matching_dimension(v, dimension)),
+            Value::Object(o) => ["coordinates", "geometries"]
+                .iter()
+                .all(|key| o.get(*key).is_none_or(|v| matching_dimension(v, dimension))),
+            _ => true,
+        }
+    }
     fn matches(v: &Value, family: &str) -> bool {
         match v.get("type").and_then(Value::as_str) {
             Some("Point" | "MultiPoint") => family == "point",
@@ -222,6 +236,12 @@ pub(super) fn validate_dataset_geometry(
     }
     if let Some(g) = &v.geometry {
         let value: Value = codec::stored(g)?;
+        if !matching_dimension(&value, dimension) {
+            return Err(Error::new(
+                400,
+                &format!("dataset {d} requires {dimension}-dimensional coordinates"),
+            ));
+        }
         if !matches(&value, &family) {
             return Err(Error::new(
                 400,

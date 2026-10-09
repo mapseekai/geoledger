@@ -31,7 +31,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 7;
+pub const FORMAT_VERSION: i32 = 8;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
@@ -202,6 +202,8 @@ impl Application {
                 | "get_workspace"
                 | "features"
                 | "diff"
+                | "workspace_summary"
+                | "commit_summary"
                 | "conflicts"
                 | "history"
                 | "audit"
@@ -230,6 +232,8 @@ impl Application {
             Command::Save(r) => save(&mut t, subject, r),
             Command::Discard(r) => discard(&mut t, subject, r),
             Command::Features(r) => features(&mut t, subject, r),
+            Command::WorkspaceSummary(r) => workspace_summary(&mut t, subject, r),
+            Command::CommitSummary(r) => commit_summary(&mut t, subject, r),
             Command::Diff(r) => diff(&mut t, subject, r),
             Command::Conflicts(r) => list_conflicts(&mut t, subject, r),
             Command::Resolve(r) => resolve(&mut t, subject, r),
@@ -326,6 +330,8 @@ enum Command {
     Save(Save),
     Discard(Version),
     Features(Features),
+    WorkspaceSummary(Workspace),
+    CommitSummary(SummaryCommit),
     Diff(Diff),
     Conflicts(Diff),
     Resolve(Rebase),

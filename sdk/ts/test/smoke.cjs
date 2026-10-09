@@ -11,7 +11,7 @@ const client = new Client(
 (async () => {
   try {
     const project = await client.createProject("ts-" + randomUUID());
-    const dataset = await client.createDataset(project.id, "places", "point");
+    const dataset = await client.createDataset(project.id, "places", "point", 3);
     const draft = await client.createWorkspace(project.id);
     const feature = {
       type: "Feature",
@@ -36,6 +36,15 @@ const client = new Client(
     assert.equal(draft.info.version, 4n);
     const receipt = await draft.publish("TypeScript SDK");
     assert.deepEqual(await draft.publish("TypeScript SDK"), receipt);
+    assert.equal(
+      (await client.workspaceSummary(project.id, receipt.workspace)).total
+        .added,
+      1n,
+    );
+    assert.equal(
+      (await client.commitSummary(project.id, receipt.revision)).total.added,
+      1n,
+    );
     assert.deepEqual(
       (
         await client.features(project.id, dataset.id, {
@@ -59,19 +68,30 @@ const client = new Client(
         e instanceof GeoLedgerError && e.code === "conflict" && !e.uncertain,
     );
     await assert.rejects(
-      client.createDataset(project.id, "places", "point"),
+      client.createDataset(project.id, "places", "point", 3),
       (e) => e.code === "conflict",
     );
     assert.equal(parseJson("9007199254740993.0"), 9007199254740993n);
     await client.setMember(project.id, "sdk-viewer", "viewer");
     assert.ok(
-      (await client.members(project.id)).some((m) => m.subject === "sdk-viewer"),
+      (await client.members(project.id)).some(
+        (m) => m.subject === "sdk-viewer",
+      ),
     );
     await client.removeMember(project.id, "sdk-viewer");
-    assert.equal((await client.archiveProject(project.id, true)).state, "archived");
-    assert.equal((await client.archiveProject(project.id, false)).state, "active");
+    assert.equal(
+      (await client.archiveProject(project.id, true)).state,
+      "archived",
+    );
+    assert.equal(
+      (await client.archiveProject(project.id, false)).state,
+      "active",
+    );
     await client.deleteProject(project.id, project.name);
-    await assert.rejects(client.project(project.id), (e) => e.code === "not_found");
+    await assert.rejects(
+      client.project(project.id),
+      (e) => e.code === "not_found",
+    );
     console.log(
       "TypeScript SDK: business promises, bigint GeoJSON, automatic draft versions, publish retry OK",
     );

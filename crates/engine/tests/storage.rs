@@ -29,7 +29,7 @@ fn inner(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
     let d = call(
         "alice",
         "create_dataset",
-        json!({"geometry_type":"point","name":"roads"}),
+        json!({"geometry_type":"point","name":"roads","coordinate_dimension":3}),
     )?["dataset"]
         .as_str()
         .ok_or("dataset")?
@@ -95,9 +95,28 @@ fn inner(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn sqlite_contract() -> Result<(), Box<dyn std::error::Error>> {
     let dir = tempfile::tempdir()?;
-    scenario(&Application::new(Storage::Sqlite(
-        dir.path().join("test.db"),
-    )))
+    let path = dir.path().join("test.db");
+    scenario(&Application::new(Storage::Sqlite(path.clone())))?;
+    let c = rusqlite::Connection::open(path)?;
+    let extension =
+        std::env::var_os("GL_SPATIALITE_EXTENSION").unwrap_or_else(|| "mod_spatialite".into());
+    geoledger_spatialite::load(&c, std::path::Path::new(&extension))?;
+    let (count, z, srid): (i64, f64, i32) = c.query_row(
+        "SELECT count(*), ST_Z(geom_z), ST_SRID(geom_z) FROM gl_history WHERE typeof(geom_z)='blob' AND geom IS NULL", [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!((count, z, srid), (2, 3.0, 4326));
+    for table in ["gl_history", "gl_workspace_changes"] {
+        for column in ["geom", "geom_z"] {
+            assert_eq!(
+                c.query_row("SELECT CheckSpatialIndex(?1,?2)", [table, column], |row| {
+                    row.get::<_, i32>(0)
+                })?,
+                1
+            );
+        }
+    }
+    Ok(())
 }
 #[test]
 #[ignore = "requires isolated geoledger_test PostGIS database"]
@@ -174,8 +193,10 @@ fn deletion_rolls_back_with_audit_and_purges_storage_atomically()
         "gl_history",
         "gl_idempotency",
         "gl_purge",
-        "gl_history_spatial",
-        "gl_workspace_changes_spatial",
+        "idx_gl_history_geom",
+        "idx_gl_history_geom_z",
+        "idx_gl_workspace_changes_geom",
+        "idx_gl_workspace_changes_geom_z",
     ] {
         assert_eq!(
             connection.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r

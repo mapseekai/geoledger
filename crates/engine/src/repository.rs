@@ -110,6 +110,7 @@ pub trait RepositoryTransaction: Send {
         dataset: &str,
         name: &str,
         geometry_type: &str,
+        coordinate_dimension: i32,
     ) -> Result<()>;
     fn rename_project(&mut self, project: &str, name: &str) -> Result<()>;
     fn rename_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()>;
@@ -156,6 +157,8 @@ pub trait RepositoryTransaction: Send {
         key: &str,
     ) -> Result<()>;
     fn count_deltas(&mut self, project: &str, workspace: &str) -> Result<Row>;
+    fn workspace_summary(&mut self, project: &str, workspace: &str, base: i64) -> Result<Vec<Row>>;
+    fn commit_summary(&mut self, project: &str, revision: i64) -> Result<Vec<Row>>;
     fn diff_page(
         &mut self,
         project: &str,

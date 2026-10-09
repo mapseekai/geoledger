@@ -281,6 +281,7 @@ export function Datasets({
     [create, setCreate] = useState(false),
     [refresh, setRefresh] = useState(0);
   const [geometryType, setGeometryType] = useState<GeometryType>("point");
+  const [coordinateDimension, setCoordinateDimension] = useState<2 | 3>(2);
   const [manage, setManage] = useState<{ item: Dataset; remove: boolean }>();
   const page = usePage<Dataset>(
     async (after) =>
@@ -346,7 +347,8 @@ export function Datasets({
                     </Button>
                   </TableCell>
                   <TableCell>
-                    {{ point: "点", line: "线", polygon: "面" }[d.geometryType]}
+                    {{ point: "点", line: "线", polygon: "面" }[d.geometryType]}{" "}
+                    · {d.coordinateDimension === 3 ? "三维" : "二维"}
                   </TableCell>
                   <TableCell className="mono muted">{d.id}</TableCell>
                   <TableCell className="cell-actions">
@@ -429,6 +431,7 @@ export function Datasets({
               project: project.id,
               name,
               geometryType,
+              coordinateDimension,
             });
             setCreate(false);
             setRefresh((n) => n + 1);
@@ -453,8 +456,23 @@ export function Datasets({
               </SelectItem>
             </SelectContent>
           </Select>
+          <Label htmlFor="coordinate-dimension">坐标维度</Label>
+          <Select
+            value={String(coordinateDimension)}
+            onValueChange={(value) =>
+              setCoordinateDimension(Number(value) as 2 | 3)
+            }
+          >
+            <SelectTrigger id="coordinate-dimension" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              <SelectItem value="2">二维（XY）</SelectItem>
+              <SelectItem value="3">三维（XYZ）</SelectItem>
+            </SelectContent>
+          </Select>
           <p className="muted">
-            创建后不可更改类型；后续新增和修改必须使用相同类型。
+            创建后不可更改类型和维度；后续新增和修改必须与数据集一致。
           </p>
         </NameDialog>
       )}

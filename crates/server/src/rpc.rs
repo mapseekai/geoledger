@@ -383,6 +383,18 @@ impl pb::geo_ledger_server::GeoLedger for Service {
     ) -> std::result::Result<tonic::Response<pb::FeaturesReply>, tonic::Status> {
         self.call(request, "features").await
     }
+    async fn workspace_summary(
+        &self,
+        request: tonic::Request<pb::WorkspaceRequest>,
+    ) -> std::result::Result<tonic::Response<pb::ChangeSummaryReply>, tonic::Status> {
+        self.call(request, "workspace_summary").await
+    }
+    async fn commit_summary(
+        &self,
+        request: tonic::Request<pb::SummaryCommitRequest>,
+    ) -> std::result::Result<tonic::Response<pb::ChangeSummaryReply>, tonic::Status> {
+        self.call(request, "commit_summary").await
+    }
     async fn diff(
         &self,
         request: tonic::Request<pb::DiffRequest>,

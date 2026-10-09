@@ -302,6 +302,7 @@ async fn grpc_deadline_busy_and_unauthenticated_paths() -> TestResult {
         let mut client = client.clone();
         let mut request = rpc_request(
             pb::DatasetRequest {
+                coordinate_dimension: 2,
                 geometry_type: "point".into(),
                 project: project.clone(),
                 name: "roads".into(),
@@ -344,6 +345,7 @@ async fn grpc_deadline_busy_and_unauthenticated_paths() -> TestResult {
         match client
             .create_dataset(rpc_request(
                 pb::DatasetRequest {
+                    coordinate_dimension: 2,
                     geometry_type: "point".into(),
                     project: project.clone(),
                     name: "roads".into(),

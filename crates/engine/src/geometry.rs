@@ -1,6 +1,10 @@
 //! Identical validation and GeoJSON preservation on both storage backends.
-use crate::{Error, Result, bad, geometry_shape};
-use geo::{BoundingRect, Intersects, Validation};
+#[cfg(any(test, feature = "fuzzing"))]
+use crate::Error;
+use crate::{Result, bad, geometry_shape};
+use geo::Validation;
+#[cfg(any(test, feature = "fuzzing"))]
+use geo::{BoundingRect, Intersects};
 use serde_json::Value;
 
 pub(crate) fn geometry(value: &Value) -> Result<geo::Geometry<f64>> {
@@ -12,9 +16,16 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<String>> {
         return Ok(None);
     }
     geometry_shape(value)?;
-    fn positions(value: &Value) -> Result<()> {
+    fn positions(value: &Value, dimension: &mut Option<usize>) -> Result<()> {
         if let Some(a) = value.as_array() {
             if a.first().is_some_and(Value::is_number) {
+                if dimension.is_some_and(|d| d != a.len()) {
+                    return Err(crate::Error::new(
+                        400,
+                        "all coordinates within a feature must use the same dimension (XY or XYZ)",
+                    ));
+                }
+                *dimension = Some(a.len());
                 let x = a[0].as_f64().ok_or_else(bad)?;
                 let y = a[1].as_f64().ok_or_else(bad)?;
                 if !(-180.0..=180.0).contains(&x) || !(-90.0..=90.0).contains(&y) {
@@ -22,21 +33,47 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<String>> {
                 }
             } else {
                 for v in a {
-                    positions(v)?;
+                    positions(v, dimension)?;
                 }
             }
         } else if let Some(o) = value.as_object() {
             for key in ["coordinates", "geometries"] {
                 if let Some(v) = o.get(key) {
-                    positions(v)?;
+                    positions(v, dimension)?;
                 }
             }
         }
         Ok(())
     }
     structure(value)?;
-    positions(value)?;
+    positions(value, &mut None)?;
     Ok(Some(value.to_string()))
+}
+/// SpatiaLite's JSON parser cannot read nested/empty collection members.
+/// Flatten only the derived spatial representation; version snapshots stay exact.
+pub(crate) fn spatial_collection(source: &str) -> Result<Option<String>> {
+    let value: Value = serde_json::from_str(source).map_err(crate::Error::stored_json)?;
+    fn collect(value: Value, out: &mut Vec<Value>) {
+        if value["type"] == "GeometryCollection" {
+            if let Some(parts) = value["geometries"].as_array() {
+                for part in parts {
+                    collect(part.clone(), out);
+                }
+            }
+        } else if value["coordinates"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+        {
+            out.push(value);
+        }
+    }
+    let mut parts = Vec::new();
+    collect(value, &mut parts);
+    Ok(match parts.len() {
+        0 => None,
+        1 => parts.pop().map(|v| v.to_string()),
+        _ => Some(serde_json::json!({"type":"GeometryCollection","geometries":parts}).to_string()),
+    })
 }
 /// Topology is diagnostic: preserve source coordinates rather than repairing boundaries.
 pub(crate) fn topology_warning(value: &Value) -> Result<Option<String>> {
@@ -48,10 +85,12 @@ pub(crate) fn topology_warning(value: &Value) -> Result<Option<String>> {
         .err()
         .map(|e| e.to_string()))
 }
+#[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn bounds(source: &str) -> Result<Option<geo::Rect<f64>>> {
     let v: Value = serde_json::from_str(source).map_err(Error::stored_json)?;
     Ok(geometry(&v)?.bounding_rect())
 }
+#[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn intersects(source: &str, bbox: [f64; 4]) -> Result<bool> {
     let v: Value = serde_json::from_str(source).map_err(Error::stored_json)?;
     let rect = geo::Rect::new(

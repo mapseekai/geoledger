@@ -124,7 +124,10 @@ async fn default_service_rpc_http_twenty_writers_restart_and_authentication() ->
         400
     );
     let project = client.create_project("parallel").await?.id;
-    let dataset = client.create_dataset(&project, "points", "point").await?.id;
+    let dataset = client
+        .create_dataset_with_dimension(&project, "points", "point", 3)
+        .await?
+        .id;
     let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(20));
     let mut jobs = Vec::new();
     for i in 0..20 {
@@ -205,7 +208,7 @@ async fn large_streams_and_http_preserve_atomic_saves_without_four_mib_cap() -> 
     assert_eq!(client.info().await?.max_request_bytes, 0);
     let project = client.create_project("large streaming").await?.id;
     let dataset = client
-        .create_dataset(&project, "large features", "point")
+        .create_dataset_with_dimension(&project, "large features", "point", 3)
         .await?
         .id;
     let workspace = client.create_workspace(&project).await?.info().id.clone();

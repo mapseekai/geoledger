@@ -1,6 +1,6 @@
 //! Explicit capacity probe. Seeds through SQL so timings exclude public API ingestion.
 use geoledger_engine::{Application, Storage};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     sync::{Arc, Barrier},
     time::{Duration, Instant},
@@ -52,27 +52,18 @@ fn million_features_twenty_distinct_writers() -> Result<(), Box<dyn std::error::
         let mut c = ::postgres::Client::connect(dsn.as_deref().ok_or("dsn")?, ::postgres::NoTls)?;
         let mut tx = c.transaction()?;
         tx.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,1,$2,'capacity-0','SQL fixture')",&[&p,&w])?;
-        tx.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom) SELECT $1,$2,lpad(i::text,7,'0'),1,$3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)::text||',0]}' FROM generate_series(1,1000000) AS s(i)",&[&p,&d,&props])?;
+        tx.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT $1,$2,lpad(i::text,7,'0'),1,$3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)::text||',0]}',ST_SetSRID(ST_MakePoint(i%180,0),4326) FROM generate_series(1,1000000) AS s(i)",&[&p,&d,&props])?;
         tx.execute("UPDATE gl_projects SET head=1 WHERE id=$1", &[&p])?;
         tx.commit()?;
         c.batch_execute("ANALYZE gl_history;")?;
     } else {
         let mut c = rusqlite::Connection::open(&path)?;
-        c.create_scalar_function(
-            "gl_bound",
-            2,
-            rusqlite::functions::FunctionFlags::SQLITE_UTF8
-                | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
-            |ctx| {
-                let v: Value = serde_json::from_str(&ctx.get::<String>(0)?)
-                    .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
-                let axis: u32 = ctx.get(1)?;
-                Ok(v["coordinates"][(axis % 2) as usize].as_f64())
-            },
-        )?;
+        let extension =
+            std::env::var_os("GL_SPATIALITE_EXTENSION").unwrap_or_else(|| "mod_spatialite".into());
+        geoledger_spatialite::load(&c, std::path::Path::new(&extension))?;
         let tx = c.transaction()?;
         tx.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES(?1,1,?2,'capacity-0','SQL fixture')",[&p,&w])?;
-        tx.execute("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom) SELECT ?1,?2,printf('%07d',i),1,?3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)||',0]}' FROM n",[&p,&d,&props])?;
+        tx.execute("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT ?1,?2,printf('%07d',i),1,?3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)||',0]}',MakePoint(i%180,0,4326) FROM n",[&p,&d,&props])?;
         tx.execute("UPDATE gl_projects SET head=1 WHERE id=?1", [&p])?;
         tx.commit()?;
         c.execute_batch("ANALYZE;")?;

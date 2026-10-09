@@ -35,7 +35,7 @@ jobs:
       - name: Toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev postgresql-client
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite postgresql-client
           rustup toolchain install 1.92.0 --profile minimal
           rustup default 1.92.0
           curl -fsSL -o "$RUNNER_TEMP/k6.tgz" "https://github.com/grafana/k6/releases/download/$K6_VERSION/k6-$K6_VERSION-linux-amd64.tar.gz"

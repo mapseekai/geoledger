@@ -719,6 +719,7 @@ dependencies = [
  "geo",
  "geojson",
  "geoledger-core",
+ "geoledger-spatialite",
  "native-tls",
  "postgres",
  "postgres-native-tls",
@@ -775,6 +776,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "geoledger-spatialite"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "rusqlite",
 ]
 
 [[package]]

@@ -646,7 +646,7 @@ fn preserves_geometry_direction_z_and_requires_explicit_delete() -> TestResult {
     f.d = f.call(
         &f.alice,
         "create_dataset",
-        json!({"name":"lines","geometry_type":"line"}),
+        json!({"name":"lines","geometry_type":"line","coordinate_dimension":3}),
     )?["dataset"]
         .as_str()
         .unwrap()
@@ -1177,7 +1177,15 @@ fn workspace_over_thousand_features_can_publish_and_restore() -> TestResult {
             json!({"workspace":w,"expected_workspace_version":batch,"edits":edits}),
         )?;
     }
+    assert_eq!(
+        f.call(&f.alice, "workspace_summary", json!({"workspace":w}))?["total"]["added"],
+        1001
+    );
     let result = f.publish(&f.alice, &w, 11)?;
+    assert_eq!(
+        f.call(&f.viewer, "commit_summary", json!({"revision":1}))?["total"]["added"],
+        1001
+    );
     assert_eq!(result["changes"], 1001);
     let undo = f.call(&f.alice, "restore", json!({"revision":1}))?;
     let undo = undo["workspace"].as_str().ok_or("workspace")?;
@@ -1234,5 +1242,169 @@ fn topology_warnings_preserve_original_polygon_through_publication() -> TestResu
                 .as_array()
                 .is_some_and(|w| !w.is_empty()))
     );
+    Ok(())
+}
+
+#[test]
+fn summaries_count_mixed_datasets_and_follow_rename_delete_and_authorization() -> TestResult {
+    let f = Fixture::new()?;
+    let seed = f.ws(&f.alice);
+    f.call(&f.alice,"save",json!({"workspace":seed,"expected_workspace_version":0,"edits":[f.edit("removed",json!({}),Value::Null),f.edit("changed",json!({"n":1}),Value::Null)]}))?;
+    f.publish(&f.alice, &seed, 1)?;
+    let d2 = f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"name":"other","geometry_type":"point"}),
+    )?["dataset"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let w = f.ws(&f.alice);
+    assert_eq!(
+        f.call(&f.alice, "workspace_summary", json!({"workspace":w}))?["datasets"],
+        json!([])
+    );
+    let mut other = f.edit("new", json!({"payload":"x".repeat(128*1024)}), Value::Null);
+    other["dataset"] = json!(d2);
+    f.call(&f.alice,"save",json!({"workspace":w,"expected_workspace_version":0,"edits":[{"dataset":f.d,"feature_id":"removed","feature":null},f.edit("changed",json!({"n":2}),Value::Null),other]}))?;
+    let draft = f.call(&f.alice, "workspace_summary", json!({"workspace":w}))?;
+    assert_eq!(draft["version"], 1);
+    assert_eq!(draft["total"], json!({"added":1,"deleted":1,"modified":1}));
+    assert_eq!(draft["datasets"].as_array().unwrap().len(), 2);
+    assert!(draft.to_string().len() < 700);
+    assert!(
+        f.call("outsider", "workspace_summary", json!({"workspace":w}))
+            .is_err()
+    );
+    f.publish(&f.alice, &w, 1)?;
+    let commit = f.call(&f.viewer, "commit_summary", json!({"revision":2}))?;
+    assert_eq!(commit["total"], draft["total"]);
+    assert_eq!(commit["datasets"], draft["datasets"]);
+    assert!(
+        f.call("outsider", "commit_summary", json!({"revision":2}))
+            .is_err()
+    );
+    assert!(
+        f.call(&f.alice, "commit_summary", json!({"revision":999}))
+            .is_err()
+    );
+    f.call(
+        &f.alice,
+        "rename_dataset",
+        json!({"dataset":d2,"name":"renamed"}),
+    )?;
+    let renamed = f.call(&f.viewer, "commit_summary", json!({"revision":2}))?;
+    assert!(
+        renamed["datasets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["name"] == "renamed")
+    );
+    f.call(
+        &f.alice,
+        "delete_dataset",
+        json!({"dataset":d2,"confirm_name":"renamed"}),
+    )?;
+    let remaining = f.call(&f.viewer, "commit_summary", json!({"revision":2}))?;
+    assert_eq!(
+        remaining["total"],
+        json!({"added":0,"deleted":1,"modified":1})
+    );
+    assert_eq!(remaining["datasets"].as_array().unwrap().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn native_geometry_preserves_nested_collections_and_empty_features() -> TestResult {
+    let mut f = Fixture::new()?;
+    f.d = f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"name":"xyz","geometry_type":"point","coordinate_dimension":3}),
+    )?["dataset"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for geometry in [
+        json!({"type":"MultiPoint","coordinates":[]}),
+        json!({"type":"GeometryCollection","geometries":[]}),
+        json!({"type":"GeometryCollection","geometries":[{"type":"MultiPoint","coordinates":[]},{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2,3]}]}]}),
+    ] {
+        let w = f.ws(&f.alice);
+        f.save(&f.alice, &w, 0, json!({}), geometry.clone())?;
+        assert_eq!(f.get(&f.alice, Some(&w))["geometry"], geometry);
+        f.publish(&f.alice, &w, 1)?;
+        assert_eq!(f.get(&f.alice, None)["geometry"], geometry);
+    }
+    let w = f.ws(&f.alice);
+    let mixed = json!({"type":"MultiPoint","coordinates":[[1,2],[3,4,5]]});
+    assert_eq!(
+        f.save(&f.alice, &w, 0, json!({}), mixed)
+            .unwrap_err()
+            .status,
+        400
+    );
+    Ok(())
+}
+
+#[test]
+fn datasets_fix_coordinate_dimension_and_reject_mismatched_edits_atomically() -> TestResult {
+    let mut f = Fixture::new()?;
+    let datasets = f.call(&f.alice, "list_datasets", json!({}))?;
+    assert_eq!(datasets[0]["coordinate_dimension"], 2);
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "create_dataset",
+            json!({"name":"bad dimension","geometry_type":"point","coordinate_dimension":4})
+        )
+        .unwrap_err()
+        .status,
+        400
+    );
+    let w = f.ws(&f.alice);
+    assert_eq!(
+        f.save(
+            &f.alice,
+            &w,
+            0,
+            json!({}),
+            json!({"type":"Point","coordinates":[1,2,3]})
+        )
+        .unwrap_err()
+        .status,
+        400
+    );
+    assert_eq!(
+        f.call(&f.alice, "get_workspace", json!({"workspace":w}))?["version"],
+        0
+    );
+    f.save(&f.alice, &w, 0, json!({}), point(1., 2.))?;
+    f.publish(&f.alice, &w, 1)?;
+    let xyz = f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"name":"three dimensional","geometry_type":"point","coordinate_dimension":3}),
+    )?;
+    assert_eq!(xyz["coordinate_dimension"], 3);
+    f.d = xyz["dataset"].as_str().unwrap().to_owned();
+    let w = f.ws(&f.alice);
+    assert_eq!(
+        f.save(&f.alice, &w, 0, json!({}), point(1., 2.))
+            .unwrap_err()
+            .status,
+        400
+    );
+    let geometry = json!({"type":"Point","coordinates":[1,2,3.123456789012345]});
+    f.save(&f.alice, &w, 0, json!({}), geometry.clone())?;
+    f.publish(&f.alice, &w, 1)?;
+    assert_eq!(f.get(&f.alice, None)["geometry"], geometry);
+    let renamed = f.call(
+        &f.alice,
+        "rename_dataset",
+        json!({"dataset":f.d,"name":"renamed xyz"}),
+    )?;
+    assert_eq!(renamed["coordinate_dimension"], 3);
     Ok(())
 }

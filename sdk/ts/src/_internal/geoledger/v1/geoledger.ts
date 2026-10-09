@@ -76,6 +76,8 @@ export interface DatasetRequest {
   project: string;
   name: string;
   geometryType: string;
+  /** 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset. */
+  coordinateDimension: number;
 }
 
 export interface WorkspaceRequest {
@@ -199,6 +201,8 @@ export interface DatasetReply {
   dataset: string;
   name: string;
   geometryType: string;
+  /** 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset. */
+  coordinateDimension: number;
 }
 
 export interface DatasetsReply {
@@ -361,6 +365,32 @@ export interface DeleteDatasetRequest {
   project: string;
   dataset: string;
   confirmName: string;
+}
+
+export interface SummaryCommitRequest {
+  project: string;
+  revision: string;
+}
+
+export interface ChangeCounts {
+  added: string;
+  deleted: string;
+  modified: string;
+}
+
+export interface DatasetChangeCounts {
+  id: string;
+  name: string;
+  added: string;
+  deleted: string;
+  modified: string;
+}
+
+export interface ChangeSummaryReply {
+  total?: ChangeCounts | undefined;
+  datasets: DatasetChangeCounts[];
+  version?: string | undefined;
+  revision?: string | undefined;
 }
 
 function createBaseDataChunk(): DataChunk {
@@ -1133,7 +1163,7 @@ export const DeleteProjectRequest: MessageFns<DeleteProjectRequest> = {
 };
 
 function createBaseDatasetRequest(): DatasetRequest {
-  return { project: "", name: "", geometryType: "" };
+  return { project: "", name: "", geometryType: "", coordinateDimension: 0 };
 }
 
 export const DatasetRequest: MessageFns<DatasetRequest> = {
@@ -1146,6 +1176,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     }
     if (message.geometryType !== "") {
       writer.uint32(26).string(message.geometryType);
+    }
+    if (message.coordinateDimension !== 0) {
+      writer.uint32(32).uint32(message.coordinateDimension);
     }
     return writer;
   },
@@ -1187,6 +1220,14 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
             message.geometryType = reader.string();
             continue;
           }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.coordinateDimension = reader.uint32();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1208,6 +1249,11 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
         : isSet(object.geometry_type)
         ? globalThis.String(object.geometry_type)
         : "",
+      coordinateDimension: isSet(object.coordinateDimension)
+        ? globalThis.Number(object.coordinateDimension)
+        : isSet(object.coordinate_dimension)
+        ? globalThis.Number(object.coordinate_dimension)
+        : 0,
     };
   },
 
@@ -1222,6 +1268,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     if (message.geometryType !== "") {
       obj.geometryType = message.geometryType;
     }
+    if (message.coordinateDimension !== 0) {
+      obj.coordinateDimension = Math.round(message.coordinateDimension);
+    }
     return obj;
   },
 
@@ -1233,6 +1282,7 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     message.project = object.project ?? "";
     message.name = object.name ?? "";
     message.geometryType = object.geometryType ?? "";
+    message.coordinateDimension = object.coordinateDimension ?? 0;
     return message;
   },
 };
@@ -3255,7 +3305,7 @@ export const OkReply: MessageFns<OkReply> = {
 };
 
 function createBaseDatasetReply(): DatasetReply {
-  return { dataset: "", name: "", geometryType: "" };
+  return { dataset: "", name: "", geometryType: "", coordinateDimension: 0 };
 }
 
 export const DatasetReply: MessageFns<DatasetReply> = {
@@ -3268,6 +3318,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     }
     if (message.geometryType !== "") {
       writer.uint32(26).string(message.geometryType);
+    }
+    if (message.coordinateDimension !== 0) {
+      writer.uint32(32).uint32(message.coordinateDimension);
     }
     return writer;
   },
@@ -3309,6 +3362,14 @@ export const DatasetReply: MessageFns<DatasetReply> = {
             message.geometryType = reader.string();
             continue;
           }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.coordinateDimension = reader.uint32();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3330,6 +3391,11 @@ export const DatasetReply: MessageFns<DatasetReply> = {
         : isSet(object.geometry_type)
         ? globalThis.String(object.geometry_type)
         : "",
+      coordinateDimension: isSet(object.coordinateDimension)
+        ? globalThis.Number(object.coordinateDimension)
+        : isSet(object.coordinate_dimension)
+        ? globalThis.Number(object.coordinate_dimension)
+        : 0,
     };
   },
 
@@ -3344,6 +3410,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     if (message.geometryType !== "") {
       obj.geometryType = message.geometryType;
     }
+    if (message.coordinateDimension !== 0) {
+      obj.coordinateDimension = Math.round(message.coordinateDimension);
+    }
     return obj;
   },
 
@@ -3355,6 +3424,7 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     message.dataset = object.dataset ?? "";
     message.name = object.name ?? "";
     message.geometryType = object.geometryType ?? "";
+    message.coordinateDimension = object.coordinateDimension ?? 0;
     return message;
   },
 };
@@ -6087,6 +6157,446 @@ export const DeleteDatasetRequest: MessageFns<DeleteDatasetRequest> = {
   },
 };
 
+function createBaseSummaryCommitRequest(): SummaryCommitRequest {
+  return { project: "", revision: "0" };
+}
+
+export const SummaryCommitRequest: MessageFns<SummaryCommitRequest> = {
+  encode(message: SummaryCommitRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.project !== "") {
+      writer.uint32(10).string(message.project);
+    }
+    if (message.revision !== "0") {
+      writer.uint32(16).int64(message.revision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SummaryCommitRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSummaryCommitRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.project = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.revision = reader.int64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SummaryCommitRequest {
+    return {
+      project: isSet(object.project) ? globalThis.String(object.project) : "",
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "0",
+    };
+  },
+
+  toJSON(message: SummaryCommitRequest): unknown {
+    const obj: any = {};
+    if (message.project !== "") {
+      obj.project = message.project;
+    }
+    if (message.revision !== "0") {
+      obj.revision = message.revision;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SummaryCommitRequest>, I>>(base?: I): SummaryCommitRequest {
+    return SummaryCommitRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SummaryCommitRequest>, I>>(object: I): SummaryCommitRequest {
+    const message = createBaseSummaryCommitRequest();
+    message.project = object.project ?? "";
+    message.revision = object.revision ?? "0";
+    return message;
+  },
+};
+
+function createBaseChangeCounts(): ChangeCounts {
+  return { added: "0", deleted: "0", modified: "0" };
+}
+
+export const ChangeCounts: MessageFns<ChangeCounts> = {
+  encode(message: ChangeCounts, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.added !== "0") {
+      writer.uint32(8).int64(message.added);
+    }
+    if (message.deleted !== "0") {
+      writer.uint32(16).int64(message.deleted);
+    }
+    if (message.modified !== "0") {
+      writer.uint32(24).int64(message.modified);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ChangeCounts {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseChangeCounts();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.added = reader.int64().toString();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.deleted = reader.int64().toString();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.modified = reader.int64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ChangeCounts {
+    return {
+      added: isSet(object.added) ? globalThis.String(object.added) : "0",
+      deleted: isSet(object.deleted) ? globalThis.String(object.deleted) : "0",
+      modified: isSet(object.modified) ? globalThis.String(object.modified) : "0",
+    };
+  },
+
+  toJSON(message: ChangeCounts): unknown {
+    const obj: any = {};
+    if (message.added !== "0") {
+      obj.added = message.added;
+    }
+    if (message.deleted !== "0") {
+      obj.deleted = message.deleted;
+    }
+    if (message.modified !== "0") {
+      obj.modified = message.modified;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ChangeCounts>, I>>(base?: I): ChangeCounts {
+    return ChangeCounts.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ChangeCounts>, I>>(object: I): ChangeCounts {
+    const message = createBaseChangeCounts();
+    message.added = object.added ?? "0";
+    message.deleted = object.deleted ?? "0";
+    message.modified = object.modified ?? "0";
+    return message;
+  },
+};
+
+function createBaseDatasetChangeCounts(): DatasetChangeCounts {
+  return { id: "", name: "", added: "0", deleted: "0", modified: "0" };
+}
+
+export const DatasetChangeCounts: MessageFns<DatasetChangeCounts> = {
+  encode(message: DatasetChangeCounts, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.id !== "") {
+      writer.uint32(10).string(message.id);
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.added !== "0") {
+      writer.uint32(24).int64(message.added);
+    }
+    if (message.deleted !== "0") {
+      writer.uint32(32).int64(message.deleted);
+    }
+    if (message.modified !== "0") {
+      writer.uint32(40).int64(message.modified);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DatasetChangeCounts {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseDatasetChangeCounts();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.id = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.added = reader.int64().toString();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.deleted = reader.int64().toString();
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.modified = reader.int64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): DatasetChangeCounts {
+    return {
+      id: isSet(object.id) ? globalThis.String(object.id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      added: isSet(object.added) ? globalThis.String(object.added) : "0",
+      deleted: isSet(object.deleted) ? globalThis.String(object.deleted) : "0",
+      modified: isSet(object.modified) ? globalThis.String(object.modified) : "0",
+    };
+  },
+
+  toJSON(message: DatasetChangeCounts): unknown {
+    const obj: any = {};
+    if (message.id !== "") {
+      obj.id = message.id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.added !== "0") {
+      obj.added = message.added;
+    }
+    if (message.deleted !== "0") {
+      obj.deleted = message.deleted;
+    }
+    if (message.modified !== "0") {
+      obj.modified = message.modified;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<DatasetChangeCounts>, I>>(base?: I): DatasetChangeCounts {
+    return DatasetChangeCounts.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DatasetChangeCounts>, I>>(object: I): DatasetChangeCounts {
+    const message = createBaseDatasetChangeCounts();
+    message.id = object.id ?? "";
+    message.name = object.name ?? "";
+    message.added = object.added ?? "0";
+    message.deleted = object.deleted ?? "0";
+    message.modified = object.modified ?? "0";
+    return message;
+  },
+};
+
+function createBaseChangeSummaryReply(): ChangeSummaryReply {
+  return { total: undefined, datasets: [], version: undefined, revision: undefined };
+}
+
+export const ChangeSummaryReply: MessageFns<ChangeSummaryReply> = {
+  encode(message: ChangeSummaryReply, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.total !== undefined) {
+      ChangeCounts.encode(message.total, writer.uint32(10).fork()).join();
+    }
+    for (const v of message.datasets) {
+      DatasetChangeCounts.encode(v!, writer.uint32(18).fork()).join();
+    }
+    if (message.version !== undefined) {
+      writer.uint32(24).int64(message.version);
+    }
+    if (message.revision !== undefined) {
+      writer.uint32(32).int64(message.revision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ChangeSummaryReply {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseChangeSummaryReply();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.total = ChangeCounts.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.datasets.push(DatasetChangeCounts.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.version = reader.int64().toString();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.revision = reader.int64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ChangeSummaryReply {
+    return {
+      total: isSet(object.total) ? ChangeCounts.fromJSON(object.total) : undefined,
+      datasets: globalThis.Array.isArray(object?.datasets)
+        ? object.datasets.map((e: any) => DatasetChangeCounts.fromJSON(e))
+        : [],
+      version: isSet(object.version) ? globalThis.String(object.version) : undefined,
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
+    };
+  },
+
+  toJSON(message: ChangeSummaryReply): unknown {
+    const obj: any = {};
+    if (message.total !== undefined) {
+      obj.total = ChangeCounts.toJSON(message.total);
+    }
+    if (message.datasets?.length) {
+      obj.datasets = message.datasets.map((e) => DatasetChangeCounts.toJSON(e));
+    }
+    if (message.version !== undefined) {
+      obj.version = message.version;
+    }
+    if (message.revision !== undefined) {
+      obj.revision = message.revision;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ChangeSummaryReply>, I>>(base?: I): ChangeSummaryReply {
+    return ChangeSummaryReply.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ChangeSummaryReply>, I>>(object: I): ChangeSummaryReply {
+    const message = createBaseChangeSummaryReply();
+    message.total = (object.total !== undefined && object.total !== null)
+      ? ChangeCounts.fromPartial(object.total)
+      : undefined;
+    message.datasets = object.datasets?.map((e) => DatasetChangeCounts.fromPartial(e)) || [];
+    message.version = object.version ?? undefined;
+    message.revision = object.revision ?? undefined;
+    return message;
+  },
+};
+
 /**
  * GeoJSON remains UTF-8 text to preserve exact 64-bit property numbers.
  * A missing Edit.feature is an explicit deletion. No client-supplied identity.
@@ -6258,6 +6768,24 @@ export const GeoLedgerService = {
     responseSerialize: (value: DataChunk): Buffer => Buffer.from(DataChunk.encode(value).finish()),
     responseDeserialize: (value: Buffer): DataChunk => DataChunk.decode(value),
   },
+  workspaceSummary: {
+    path: "/geoledger.v1.GeoLedger/WorkspaceSummary" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: WorkspaceRequest): Buffer => Buffer.from(WorkspaceRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): WorkspaceRequest => WorkspaceRequest.decode(value),
+    responseSerialize: (value: ChangeSummaryReply): Buffer => Buffer.from(ChangeSummaryReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ChangeSummaryReply => ChangeSummaryReply.decode(value),
+  },
+  commitSummary: {
+    path: "/geoledger.v1.GeoLedger/CommitSummary" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: SummaryCommitRequest): Buffer => Buffer.from(SummaryCommitRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SummaryCommitRequest => SummaryCommitRequest.decode(value),
+    responseSerialize: (value: ChangeSummaryReply): Buffer => Buffer.from(ChangeSummaryReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ChangeSummaryReply => ChangeSummaryReply.decode(value),
+  },
   diff: {
     path: "/geoledger.v1.GeoLedger/Diff" as const,
     requestStream: false as const,
@@ -6399,6 +6927,8 @@ export interface GeoLedgerServer extends UntypedServiceImplementation {
   features: handleUnaryCall<FeaturesRequest, FeaturesReply>;
   /** Concatenated chunks encode one snapshot-consistent FeaturesReply. */
   featuresStream: handleServerStreamingCall<FeaturesRequest, DataChunk>;
+  workspaceSummary: handleUnaryCall<WorkspaceRequest, ChangeSummaryReply>;
+  commitSummary: handleUnaryCall<SummaryCommitRequest, ChangeSummaryReply>;
   diff: handleUnaryCall<DiffRequest, DiffReply>;
   conflicts: handleUnaryCall<DiffRequest, ConflictsReply>;
   history: handleUnaryCall<HistoryRequest, HistoryReply>;
@@ -6668,6 +7198,36 @@ export interface GeoLedgerClient extends Client {
     metadata?: Metadata,
     options?: Partial<CallOptions>,
   ): ClientReadableStream<DataChunk>;
+  workspaceSummary(
+    request: WorkspaceRequest,
+    callback: (error: ServiceError | null, response: ChangeSummaryReply) => void,
+  ): ClientUnaryCall;
+  workspaceSummary(
+    request: WorkspaceRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ChangeSummaryReply) => void,
+  ): ClientUnaryCall;
+  workspaceSummary(
+    request: WorkspaceRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ChangeSummaryReply) => void,
+  ): ClientUnaryCall;
+  commitSummary(
+    request: SummaryCommitRequest,
+    callback: (error: ServiceError | null, response: ChangeSummaryReply) => void,
+  ): ClientUnaryCall;
+  commitSummary(
+    request: SummaryCommitRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ChangeSummaryReply) => void,
+  ): ClientUnaryCall;
+  commitSummary(
+    request: SummaryCommitRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ChangeSummaryReply) => void,
+  ): ClientUnaryCall;
   diff(request: DiffRequest, callback: (error: ServiceError | null, response: DiffReply) => void): ClientUnaryCall;
   diff(
     request: DiffRequest,

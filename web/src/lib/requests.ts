@@ -35,6 +35,7 @@ const variants = {
     ...project,
     name: text(256),
     geometryType: z.enum(["point", "line", "polygon"]),
+    coordinateDimension: z.union([z.literal(2), z.literal(3)]).default(2),
   },
   workspaces: { ...project, ...page },
   createWorkspace: project,
@@ -45,6 +46,16 @@ const variants = {
     ...project,
     dataset: id,
     ...page,
+    limit: z.number().int().min(1).max(1000).optional(),
+    bbox: z
+      .tuple([
+        z.number().finite(),
+        z.number().finite(),
+        z.number().finite(),
+        z.number().finite(),
+      ])
+      .optional(),
+    workspaceVersion: revision.optional(),
     workspace: id.optional(),
     revision: revision.optional(),
     featureId: featureId.optional(),

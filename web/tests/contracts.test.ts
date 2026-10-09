@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Client } from "@geoledger/client";
+import { Client, stringifyJson } from "@geoledger/client";
 import { execute, encode } from "../src/lib/operations";
 import {
   featureText,
@@ -118,7 +118,7 @@ test("BFF uses business SDK with exact revisions and immutable publication", asy
     9007199254740993n,
   );
 });
-test("BFF transports feature JSON as text and never converts property integers to strings", async () => {
+test("BFF returns FeatureCollection and preserves numeric GeoJSON properties", async () => {
   const client = {
     features: async () => ({
       revision: 5n,
@@ -136,9 +136,10 @@ test("BFF transports feature JSON as text and never converts property integers t
     action: "features",
     project: "p",
     dataset: "d",
-  })) as { features: { geojson: string }[] };
-  assert.match(result.features[0].geojson, /"big":18446744073709551615/);
-  assert.match(result.features[0].geojson, /"geojson":"untouched"/);
+  })) as { type: string; features: unknown[] };
+  assert.equal(result.type, "FeatureCollection");
+  assert.match(stringifyJson(result.features[0]), /"big":18446744073709551615/);
+  assert.match(stringifyJson(result.features[0]), /"geojson":"untouched"/);
 });
 test("invalid actions, extra upstream addresses, missing delete values and unsafe revisions fail closed", () => {
   for (const value of [

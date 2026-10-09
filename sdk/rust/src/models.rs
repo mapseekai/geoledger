@@ -31,6 +31,7 @@ pub struct Member {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Dataset {
     pub geometry_type: String,
+    pub coordinate_dimension: u32,
     #[serde(rename = "dataset")]
     pub id: String,
     pub name: String,
@@ -201,4 +202,26 @@ fn required_feature<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Value>, D::Error> {
     Option::<Value>::deserialize(deserializer)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChangeCounts {
+    pub added: i64,
+    pub deleted: i64,
+    pub modified: i64,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DatasetChangeCounts {
+    pub id: String,
+    pub name: String,
+    pub added: i64,
+    pub deleted: i64,
+    pub modified: i64,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChangeSummary {
+    pub total: ChangeCounts,
+    pub datasets: Vec<DatasetChangeCounts>,
+    pub version: Option<i64>,
+    pub revision: Option<i64>,
 }

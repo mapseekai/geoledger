@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite
           rustup toolchain install 1.92.0 --profile minimal
       - name: Toolchain (Windows)
         if: runner.os == 'Windows'

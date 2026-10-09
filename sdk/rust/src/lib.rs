@@ -399,6 +399,16 @@ impl Client {
                     .await?
                     .into_inner(),
             )?,
+            "workspace_summary" => serde_json::to_value(
+                rpc.workspace_summary(serde_json::from_value::<pb::WorkspaceRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "commit_summary" => serde_json::to_value(
+                rpc.commit_summary(serde_json::from_value::<pb::SummaryCommitRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
             "commit" => serde_json::to_value(
                 rpc.commit(serde_json::from_value::<pb::CommitRequest>(value)?)
                     .await?
@@ -561,10 +571,20 @@ impl Client {
         name: &str,
         geometry_type: &str,
     ) -> Result<Dataset, Error> {
+        self.create_dataset_with_dimension(project, name, geometry_type, 2)
+            .await
+    }
+    pub async fn create_dataset_with_dimension(
+        &self,
+        project: &str,
+        name: &str,
+        geometry_type: &str,
+        coordinate_dimension: u32,
+    ) -> Result<Dataset, Error> {
         decode(
             self.execute(
                 "create_dataset",
-                json!({"project":project,"name":name,"geometry_type":geometry_type}),
+                json!({"project":project,"name":name,"geometry_type":geometry_type,"coordinate_dimension":coordinate_dimension}),
             )
             .await?,
         )
@@ -640,6 +660,32 @@ impl Client {
             )
             .await?["commits"]
                 .take(),
+        )
+    }
+    pub async fn workspace_summary(
+        &self,
+        project: &str,
+        workspace: &str,
+    ) -> Result<ChangeSummary, Error> {
+        decode(
+            self.execute(
+                "workspace_summary",
+                json!({"project":project,"workspace":workspace}),
+            )
+            .await?,
+        )
+    }
+    pub async fn commit_summary(
+        &self,
+        project: &str,
+        revision: i64,
+    ) -> Result<ChangeSummary, Error> {
+        decode(
+            self.execute(
+                "commit_summary",
+                json!({"project":project,"revision":revision}),
+            )
+            .await?,
         )
     }
     pub async fn commit(
