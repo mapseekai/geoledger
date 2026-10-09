@@ -4,9 +4,9 @@
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
-## [Unreleased]
+## [0.3.0-alpha.1] - 2026-10-09
 
-计划作为 `0.3.0-alpha.1` 发布：服务端统一为 `geoledger-server` + 远程 `gl` CLI + 四语言 SDK + 独立 Web 控制台，并补齐生产运行所需的安全、运维与数据生命周期能力。
+`0.3.0-alpha.1`：服务端统一为 `geoledger-server` + 远程 `gl` CLI + 四语言 SDK + 独立 Web 控制台，并补齐生产运行所需的安全、运维与数据生命周期能力。
 
 ### Breaking
 
