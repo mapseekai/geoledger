@@ -13,7 +13,6 @@ if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
   cargo test --locked -p geoledger-engine --lib postgis_audit_cursor -- --ignored --test-threads=1
   GL_CONFORMANCE_BACKEND=postgis cargo test --locked -p geoledger-engine --test conformance -- --test-threads=1
   cargo test --locked -p geoledger-engine --test storage -- --ignored --test-threads=1
-  cargo test --locked -p geoledger-engine --test upgrade -- --ignored
   cargo test --locked -p geoledger-engine --test portable -- --ignored
   cargo test --locked -p geoledger-engine --test multi_instance -- --ignored
 else

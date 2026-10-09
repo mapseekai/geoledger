@@ -46,6 +46,6 @@ GeoLedger 处于 `0.x` 预发布阶段。安全修复发布在最新的预发布
 - [Dependabot](.github/dependabot.yml) 每周提交依赖更新；GitHub Actions 固定到 commit SHA，Dockerfile 基础镜像固定 digest。
 - 发布产物附 SHA256、SBOM 和构建来源证明，容器镜像使用 cosign 无密钥签名，见 [开发指南](docs/development.md#依赖与发布)。
 
-## 协议与存储兼容承诺
+## 协议与存储契约
 
-`geoledger.v1` 协议、HTTP `/api/v1` 与存储格式的兼容规则见 [API 兼容性与弃用](docs/api.md#兼容性与弃用)。
+`geoledger.v1` 协议、HTTP `/api/v1` 与存储格式的版本规则见 [当前版本契约](docs/api.md#当前版本契约)。

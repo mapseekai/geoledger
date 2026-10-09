@@ -44,7 +44,7 @@ curl --fail http://127.0.0.1:7881/ready
 ./target/debug/gl --token-file ./geoledger-data/admin-credentials.json info
 ```
 
-就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 6 等服务信息。首次启动会创建数据目录、数据库和私有管理员令牌文件。
+就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 6 等服务信息。首次启动直接创建格式 6 的数据库、服务端摘要文件 `tokens.json` 和客户端凭证文件 `admin-credentials.json`。CLI 和控制台使用客户端凭证中的令牌。
 
 ### Web 开发服务
 
@@ -73,7 +73,7 @@ cargo build --release --locked --bins
 docker compose up --build -d
 ```
 
-部署配置、持久化、TLS、身份与备份见 [生产运行](docs/production.md)。
+服务端、CLI、SDK 和 Web 控制台按同一发布版本部署。格式 6 的已有数据库可直接沿用；新环境可通过当前格式的备份恢复或逻辑导入导出搬迁完整数据。版本关系见 [当前版本契约](docs/api.md#当前版本契约)，部署配置、持久化、TLS、身份与备份见 [生产运行](docs/production.md)。
 
 ## 贡献
 

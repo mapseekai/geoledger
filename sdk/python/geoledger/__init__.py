@@ -22,7 +22,7 @@ class Project:
     name: str
     head: int
     role: str
-    state: str = "active"  # active, archived (read-only) or deleted
+    state: str  # active, archived (read-only) or deleted
 
 @dataclass(frozen=True)
 class Member:

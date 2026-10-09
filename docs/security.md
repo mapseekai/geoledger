@@ -53,7 +53,7 @@ geoledger-server tokens --out ./server-tokens.json --client-out ./team-credentia
 
 客户端凭证文件格式为 `[{"subject": "...", "token": "..."}]`，权限 0600，交给对应用户后从服务器删除。手工计算摘要：`printf %s "$TOKEN" | sha256sum`。
 
-旧版明文条目（`{"subject","token"}`）仍可读取，启动时输出警告；使用 `geoledger-server hash-tokens --input old.json --out new.json` 转换为摘要格式。
+服务端身份文件使用 `token_sha256` 摘要字段；`geoledger-server tokens` 同时生成服务端摘要文件和客户端凭证文件。
 
 首次启动且数据目录没有令牌文件时，服务创建摘要格式的 `tokens.json` 和明文 `admin-credentials.json`（0600）。把后者交给运维人员后删除。生产环境可设置 `GL_BOOTSTRAP_ADMIN=false`，要求预先提供令牌文件。
 

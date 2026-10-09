@@ -107,7 +107,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 | GL_DATA_TIMEOUT_SECS | backup、export、import、verify 命令的期限，默认 3600 |
 | RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
-启动时校验显式配置，确保使用指定存储和身份文件。新库自动初始化为格式 6；已有库必须匹配当前格式，旧格式的库启动时返回 409 并提示先备份再执行 `geoledger-server migrate`。服务启动从不修改已有库的结构，升级步骤见 [格式升级](#格式升级)。
+启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 6；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
 
 根目录 [.env.example](../.env.example) 提供当前服务配置模板，列出服务端和 `gl` 的全部 `GL_*` 参数及默认值，[check-env.py](../scripts/check-env.py) 在 `check.sh` 中校验它与代码一致。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
 
@@ -162,16 +162,13 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 [deploy/monitoring](../deploy/monitoring/prometheus-rules.yaml) 提供对应的 Prometheus 告警规则（实例不可达、内部错误、5xx 比例、繁忙比例、执行槽耗尽、p95 延迟、连接池等待超时、认证失败激增、排空卡住）及 `promtool test rules` 单元测试，[抓取示例](../deploy/monitoring/prometheus-scrape.example.yaml) 使用单独的监控令牌（不加入任何项目）。阈值按实测基线调整；磁盘使用率告警来自 node_exporter 等主机监控。
 
-### 格式升级
+### 存储格式
 
-存储格式变化随版本说明公布。升级由运维显式执行，服务启动从不自动迁移：
+当前存储格式为 6，包含项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
 
-1. 停止全部服务实例，按下文备份数据库（SQLite 数据目录或 PostgreSQL 一致性备份）。
-2. 使用新版本二进制和与服务相同的 `GL_*` 存储配置执行 `geoledger-server migrate --check`，输出当前格式与目标格式，不做修改；有待执行的升级时退出码为 3。
-3. 执行 `geoledger-server migrate`。迁移在单个事务内完成，失败时整体回滚，库保持原格式。
-4. 启动新版本服务，检查 `/ready`、项目列表与历史查询。
-
-格式 5 → 6 增加成员移除标记、项目状态（active/archived/deleted）和成员索引，已有项目全部为 active、成员全部保留。迁移只向前进行；回退版本时恢复第 1 步的备份。
+- 同格式部署沿用原数据目录，启动后检查 `/ready`、项目列表与历史查询。
+- 存储格式变化时，使用独立的新数据库，通过当前 CLI 或 SDK 导入源业务要素。
+- 当前格式的完整数据可以通过下文的备份恢复、逻辑导出与导入在环境之间搬迁。
 
 ### 项目与成员治理
 

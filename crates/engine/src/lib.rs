@@ -143,10 +143,6 @@ impl Application {
     pub fn policy(&self) -> &Policy {
         &self.policy
     }
-    /// Explicit upgrade of an existing database: (stored version, current version).
-    pub fn upgrade(&self, dry_run: bool) -> Result<(i32, i32)> {
-        self.storage.upgrade(dry_run, self.timeout)
-    }
     /// Stream a logical export of the whole database (consistent snapshot; the
     /// server may keep running).
     pub fn export_data(&self, out: &mut dyn std::io::Write) -> Result<DataSummary> {

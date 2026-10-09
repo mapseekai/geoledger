@@ -38,7 +38,7 @@ for _ in $(seq 100); do
   kill -0 "$pid" 2>/dev/null || { cat "$work/server.log" >&2; exit 1; }
   sleep 0.1
 done
-token=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print((d[0] if isinstance(d,list) else d)["token"])' "$work/data/admin-credentials.json")
+token=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d[0]["token"])' "$work/data/admin-credentials.json")
 summary=${GL_LOAD_SUMMARY:-$work/summary.json}
 status=0
 GL_BASE_URL=$base GL_TOKEN=$token "$k6" run --quiet --summary-export "$summary" scripts/load/http.js || status=$?

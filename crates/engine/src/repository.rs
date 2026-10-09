@@ -15,15 +15,6 @@ pub trait StorageBackend: Send + Sync {
     fn pool_stats(&self) -> Option<crate::PoolStats> {
         None
     }
-    /// Explicitly upgrade an existing database to the current format, returning
-    /// (stored version, current version). `dry_run` only reports.
-    fn upgrade(&self, dry_run: bool, timeout: Duration) -> Result<(i32, i32)> {
-        let _ = (dry_run, timeout);
-        Err(crate::Error::new(
-            409,
-            "this storage backend has no upgrade path",
-        ))
-    }
     /// Write every table to `out` from one consistent snapshot (see `DataSummary`).
     fn export(
         &self,

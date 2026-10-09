@@ -163,7 +163,7 @@ python3 scripts/test-console.py \
 
 [Dependabot](../.github/dependabot.yml) 每周为 Cargo、npm（web、sdk/ts）、Go、pip、GitHub Actions 与 Dockerfile 基础镜像提出更新。Actions 固定到完整 commit SHA 并在注释中标注版本；Dockerfile 基础镜像固定 digest，由 Dependabot 刷新。
 
-发布流程：更新 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml`（PEP 440 形式，如 `0.3.0a1`）的版本，把 [CHANGELOG](../CHANGELOG.md) 的 `Unreleased` 段落改为同名版本，合并后在 main 上推送 `vX.Y.Z` 标签。发布 workflow（`.github/workflows/release.yml`）校验标签与各包版本一致，构建 Linux x86_64/aarch64 与 Windows x86_64 二进制（含 SHA256、源码 SBOM 和构建来源证明）、多架构服务与控制台镜像（推送到 GHCR，附 SBOM 与 provenance，cosign 无密钥签名），创建 GitHub Release，并在配置凭证时发布 npm/PyPI SDK、为 Go 模块打 `sdk/go/vX.Y.Z` 标签。协议兼容性由 CI 的 `buf breaking` 对比目标分支检查，规则见 [兼容性与弃用](api.md#兼容性与弃用)；漏洞处理见 [安全策略](../SECURITY.md)。
+发布流程：更新 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml`（PEP 440 形式，如 `0.3.0a1`）的版本，把 [CHANGELOG](../CHANGELOG.md) 的 `Unreleased` 段落改为同名版本，合并后在 main 上推送 `vX.Y.Z` 标签。发布 workflow（`.github/workflows/release.yml`）校验标签与各包版本一致，构建 Linux x86_64/aarch64 与 Windows x86_64 二进制（含 SHA256、源码 SBOM 和构建来源证明）、多架构服务与控制台镜像（推送到 GHCR，附 SBOM 与 provenance，cosign 无密钥签名），创建 GitHub Release，并在配置凭证时发布 npm/PyPI SDK、为 Go 模块打 `sdk/go/vX.Y.Z` 标签。协议由 CI 验证生成代码与 SDK 联调，规则见 [当前版本契约](api.md#当前版本契约)；漏洞处理见 [安全策略](../SECURITY.md)。
 
 ## 贡献流程
 
@@ -171,6 +171,6 @@ python3 scripts/test-console.py \
 2. 获取仓库，阅读 [AGENTS.md](../AGENTS.md)，创建针对单个问题的工作分支。
 3. 保持 core、Application、存储适配器和传输层的职责；业务操作统一经过 Application，SQL 封装在 session 适配器。
 4. 为行为修改增加对应回归，运行 `scripts/check.sh`；Web 修改完成 Web 检查及相关浏览器场景，PostGIS 修改完成隔离库回归。
-5. 提交 Pull Request，说明问题、最终行为、验证命令与范围。主 [CI](../.github/workflows/ci.yml) 覆盖 Linux、Windows、Rust 最低版本、Web、双后端 SDK 联调、TLS 网关、依赖审计与 proto 兼容性。
+5. 提交 Pull Request，说明问题、最终行为、验证命令与范围。主 [CI](../.github/workflows/ci.yml) 覆盖 Linux、Windows、Rust 最低版本、Web、双后端 SDK 联调、TLS 网关、依赖审计与协议生成一致性。
 
-协议以 `proto/geoledger/v1/geoledger.proto` 为统一来源，生成绑定按本页工具版本更新。存储结构变化使用显式格式版本和前向迁移（`geoledger-server migrate`），格式与恢复要求见 [存储接口](storage.md)。文档保持主题集中、仓库相对链接与当前行为说明；项目使用 [MIT 许可证](../LICENSE)。
+协议以 `proto/geoledger/v1/geoledger.proto` 为统一来源，生成绑定按本页工具版本更新。存储结构变化使用显式格式版本，新库直接初始化当前结构，格式与恢复要求见 [存储接口](storage.md)。文档保持主题集中、仓库相对链接与当前行为说明；项目使用 [MIT 许可证](../LICENSE)。

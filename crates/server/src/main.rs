@@ -136,20 +136,6 @@ enum Command {
         #[arg(required = true)]
         subjects: Vec<String>,
     },
-    /// Convert a legacy plaintext token file into the hashed format.
-    HashTokens {
-        #[arg(long)]
-        input: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
-    },
-    /// Upgrade an existing database to the current storage format. Stop the
-    /// server and take a backup first. Never runs automatically.
-    Migrate {
-        /// Only report the stored and current format; exit 3 when an upgrade is pending.
-        #[arg(long)]
-        check: bool,
-    },
     /// Write a portable logical export (JSON lines with per-table digests and a
     /// checksum) of the configured database. Safe while the server runs.
     Export {
@@ -239,18 +225,6 @@ fn application(args: &Args, storage: Storage) -> Application {
             .then_some(args.max_projects_per_subject),
     })
 }
-async fn migrate(app: Application, check: bool) -> Result<(), BoxError> {
-    let (from, to) = tokio::task::spawn_blocking(move || app.upgrade(check)).await??;
-    if from == to {
-        println!("storage format {to} is current");
-    } else if check {
-        println!("storage format {from}; upgrade to {to} pending (run `geoledger-server migrate`)");
-        std::process::exit(3);
-    } else {
-        println!("storage upgraded from format {from} to {to}");
-    }
-    Ok(())
-}
 fn loopback(addr: SocketAddr) -> SocketAddr {
     match addr.ip() {
         std::net::IpAddr::V4(ip) if ip.is_unspecified() => {
@@ -297,13 +271,6 @@ enum AuthSource {
 }
 fn load_tokens(path: &Path) -> Result<Authenticator, BoxError> {
     let tokens = Tokens::from_json(&read(path)?)?;
-    if tokens.legacy_entries() > 0 {
-        tracing::warn!(
-            path = %path.display(),
-            entries = tokens.legacy_entries(),
-            "token file contains plaintext tokens; convert with `geoledger-server hash-tokens`"
-        );
-    }
     Ok(Authenticator::Tokens(tokens))
 }
 fn load_jwks(bytes: &[u8], issuer: &str, audience: &str) -> Result<Authenticator, BoxError> {
@@ -332,11 +299,9 @@ async fn run(args: Args) -> Result<(), BoxError> {
             }
             return Ok(());
         }
-        Some(Command::HashTokens { input, out }) => return hash_tokens(&input, &out),
         Some(Command::Probe { ref url }) => return probe(&args, url.clone()).await,
         Some(
-            Command::Migrate { .. }
-            | Command::Export { .. }
+            Command::Export { .. }
             | Command::Import { .. }
             | Command::Verify { .. }
             | Command::Backup { .. }
@@ -394,9 +359,6 @@ async fn run(args: Args) -> Result<(), BoxError> {
             .with_timeout(Duration::from_secs(args.data_timeout_secs.max(1)))
     };
     match &args.command {
-        Some(Command::Migrate { check }) => {
-            return migrate(application(&args, storage), *check).await;
-        }
         Some(Command::Export { output }) => {
             return data::export(data_app(), output.clone()).await;
         }
@@ -822,26 +784,6 @@ fn tokens(
     }
     create_private(path, &data)?;
     Ok(issued)
-}
-fn hash_tokens(input: &Path, out: &Path) -> Result<(), BoxError> {
-    let entries: Vec<serde_json::Value> = serde_json::from_slice(&read(input)?)?;
-    let mut converted = Vec::new();
-    for mut entry in entries {
-        let object = entry
-            .as_object_mut()
-            .ok_or("token entries must be objects")?;
-        if let Some(token) = object.remove("token") {
-            let token = token.as_str().ok_or("token must be a string")?;
-            object.insert(
-                "token_sha256".into(),
-                geoledger_server::sha256_hex(token).into(),
-            );
-        }
-        converted.push(entry);
-    }
-    let data = serde_json::to_vec_pretty(&converted)?;
-    Tokens::from_json(&data)?;
-    create_private(out, &data)
 }
 async fn shutdown() {
     #[cfg(unix)]

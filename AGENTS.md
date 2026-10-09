@@ -25,10 +25,9 @@ protoc, the pinned Go plugins, grpcio-tools and ts-proto; see docs/development.m
 Opt-in PostGIS tests use GL_TEST_DATABASE_URL and require database geoledger_test.
 Keep fixtures in disposable test environments. Capacity tests are explicit opt-in.
 
-Target the current storage and protocol only: no legacy readers or command
-aliases. The server never upgrades storage at startup. Structural storage changes
-require a new format version plus a forward-only migration in
-crates/engine/src/migrations for both backends, applied only by the operator
-command `geoledger-server migrate` after a backup and covered by
-crates/engine/tests/upgrade.rs. Document measured validation separately from deployment claims.
+Target the current storage and protocol only: no legacy readers, command aliases,
+or upgrades from old storage formats. Initialize fresh databases directly at the
+current format. Structural storage changes require a new format version.
+Keep current-format backup, restore, import/export and transaction rollback.
+Document measured validation separately from deployment claims.
 Do not commit credentials, database files, generated build caches or test logs.

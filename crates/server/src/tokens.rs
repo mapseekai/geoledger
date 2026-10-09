@@ -1,6 +1,4 @@
-//! Static bearer credentials. The server file stores SHA-256 digests of high-entropy
-//! tokens; legacy plaintext entries remain readable for compatibility and are flagged
-//! so operators can convert them with `geoledger-server hash-tokens`.
+//! Static bearer credentials stored as SHA-256 digests of high-entropy tokens.
 use crate::{Error, Result, bad, text};
 use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
@@ -11,7 +9,6 @@ use subtle::ConstantTimeEq;
 /// Operator-provided secrets are neither serializable nor Debug-printable.
 pub struct Tokens {
     entries: Vec<Token>,
-    legacy: usize,
 }
 struct Token {
     digest: [u8; 32],
@@ -22,10 +19,8 @@ struct Token {
 #[serde(deny_unknown_fields)]
 struct Entry {
     subject: String,
-    /// Legacy plaintext credential (format before 0.3.0-alpha.2).
-    token: Option<String>,
     /// Lowercase hex SHA-256 of the bearer token.
-    token_sha256: Option<String>,
+    token_sha256: String,
     /// RFC 3339 expiry; expired entries are rejected without a restart.
     expires_at: Option<String>,
     /// Revoked entries stay in the file for audit but never authenticate.
@@ -68,33 +63,11 @@ impl Tokens {
         }
         let mut digests = BTreeSet::new();
         let mut out = Vec::new();
-        let mut legacy = 0;
         for e in entries {
             text(&e.subject, 128)?;
-            let digest = match (&e.token, &e.token_sha256) {
-                (Some(token), None) => {
-                    if token.len() < 43
-                        || token.len() > 256
-                        || !token.bytes().all(|b| b.is_ascii_graphic())
-                    {
-                        return Err(Error::new(
-                            400,
-                            "plaintext tokens must be 43-256 printable ASCII characters",
-                        ));
-                    }
-                    legacy += 1;
-                    Sha256::digest(token.as_bytes()).into()
-                }
-                (None, Some(hex)) => parse_hex(hex).ok_or_else(|| {
-                    Error::new(400, "token_sha256 must be 64 lowercase hex characters")
-                })?,
-                _ => {
-                    return Err(Error::new(
-                        400,
-                        "each entry requires exactly one of token_sha256 or token",
-                    ));
-                }
-            };
+            let digest = parse_hex(&e.token_sha256).ok_or_else(|| {
+                Error::new(400, "token_sha256 must be 64 lowercase hex characters")
+            })?;
             if !digests.insert(digest) {
                 return Err(Error::new(400, "tokens must be unique"));
             }
@@ -115,14 +88,7 @@ impl Tokens {
                 });
             }
         }
-        Ok(Self {
-            entries: out,
-            legacy,
-        })
-    }
-    /// Number of plaintext (legacy) entries; reported as a startup warning.
-    pub fn legacy_entries(&self) -> usize {
-        self.legacy
+        Ok(Self { entries: out })
     }
     pub(crate) fn authenticate(&self, headers: &HeaderMap) -> Option<String> {
         if headers.get_all("authorization").iter().count() != 1 {
@@ -160,31 +126,27 @@ mod tests {
         h
     }
     #[test]
-    fn hashed_legacy_expired_and_disabled_entries()
-    -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn hashed_expired_and_disabled_entries() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
         let fresh = "a".repeat(43);
         let old = "b".repeat(43);
         let revoked = "c".repeat(43);
-        let legacy = "d".repeat(43);
         let file = serde_json::json!([
             {"subject":"alice","token_sha256":sha256_hex(&fresh),"expires_at":"2999-01-01T00:00:00Z"},
             {"subject":"alice","token_sha256":sha256_hex(&old),"expires_at":"2001-01-01T00:00:00Z"},
             {"subject":"bob","token_sha256":sha256_hex(&revoked),"disabled":true},
-            {"subject":"carol","token":legacy},
         ]);
         let tokens = Tokens::from_json(&serde_json::to_vec(&file)?)?;
-        assert_eq!(tokens.legacy_entries(), 1);
         assert_eq!(tokens.authenticate(&headers(&fresh)), Some("alice".into()));
         assert_eq!(tokens.authenticate(&headers(&old)), None);
         assert_eq!(tokens.authenticate(&headers(&revoked)), None);
-        assert_eq!(tokens.authenticate(&headers(&legacy)), Some("carol".into()));
         assert_eq!(tokens.authenticate(&headers("unknown")), None);
         for invalid in [
             serde_json::json!([{"subject":"x","token_sha256":"ABC"}]),
             serde_json::json!([{"subject":"x"}]),
-            serde_json::json!([{"subject":"x","token":"short"}]),
+            serde_json::json!([{"subject":"x","token":fresh}]),
             serde_json::json!([{"subject":"x","token_sha256":sha256_hex(&fresh),"expires_at":"tomorrow"}]),
-            serde_json::json!([{"subject":"x","token_sha256":sha256_hex(&fresh)},{"subject":"y","token":fresh}]),
+            serde_json::json!([{"subject":"x","token_sha256":sha256_hex(&fresh)},{"subject":"y","token_sha256":sha256_hex(&fresh)}]),
         ] {
             assert!(
                 Tokens::from_json(&serde_json::to_vec(&invalid)?).is_err(),

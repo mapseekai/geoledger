@@ -53,7 +53,11 @@ async fn large_conflicts_fit_trailers_and_keep_paginated_details() -> TestResult
     app.execute("review", "publish", json!({"project":project,"workspace":workspaces[0],"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"first"}))?;
 
     let tokens = Tokens::from_json(
-        br#"[{"subject":"review","token":"test-only-credential-not-for-deployment-123456789"}]"#,
+        format!(
+            r#"[{{"subject":"review","token_sha256":"{}"}}]"#,
+            geoledger_server::sha256_hex("test-only-credential-not-for-deployment-123456789")
+        )
+        .as_bytes(),
     )?;
     let service = Service::new(app, Authentication::new(Authenticator::Tokens(tokens)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

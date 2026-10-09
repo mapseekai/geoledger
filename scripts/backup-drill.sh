@@ -49,7 +49,7 @@ field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])'
 
 echo "== seed (SQLite, $base)"
 start "$work/live"
-token=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print((d[0] if isinstance(d,list) else d)["token"])' "$work/live/admin-credentials.json")
+token=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d[0]["token"])' "$work/live/admin-credentials.json")
 project=$(call create_project '{"name":"drill"}' | field project)
 dataset=$(call create_dataset "{\"project\":\"$project\",\"name\":\"roads\"}" | field dataset)
 for i in 1 2 3; do

@@ -186,19 +186,3 @@ jobs:
         env:
           GL_AUDIT_REQUIRE_ALL: '1'
         run: ./scripts/audit.sh
-  proto-compatibility:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
-        with:
-          input: proto
-          lint: false
-          format: false
-          push: false
-          breaking: true
-          breaking_against: ${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }},subdir=proto

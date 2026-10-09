@@ -175,7 +175,7 @@ function Members({ project, refresh }: { project: Project; refresh: number }) {
 }
 function Lifecycle({ project }: { project: Project }) {
   const task = useAction();
-  const [state, setState] = useState(project.state ?? "active");
+  const [state, setState] = useState(project.state);
   const archived = state === "archived";
   return (
     <Panel toolbar={<PanelTitle title="项目状态" />}>
@@ -196,7 +196,7 @@ function Lifecycle({ project }: { project: Project }) {
                   project: project.id,
                   archived: !archived,
                 });
-                setState(next.state ?? "active");
+                setState(next.state);
               })
             }
           >

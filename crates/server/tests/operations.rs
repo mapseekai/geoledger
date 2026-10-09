@@ -21,8 +21,13 @@ fn service(
 ) -> Result<Service, Box<dyn std::error::Error + Send + Sync>> {
     let app = Application::new(Storage::Sqlite(dir.join("ops.sqlite3")));
     app.migrate()?;
-    let tokens =
-        Tokens::from_json(format!(r#"[{{"subject":"ops","token":"{TOKEN}"}}]"#).as_bytes())?;
+    let tokens = Tokens::from_json(
+        format!(
+            r#"[{{"subject":"ops","token_sha256":"{}"}}]"#,
+            geoledger_server::sha256_hex(TOKEN)
+        )
+        .as_bytes(),
+    )?;
     Ok(Service::new(app, Authentication::new(Authenticator::Tokens(tokens))).with_limits(limits))
 }
 async fn send(

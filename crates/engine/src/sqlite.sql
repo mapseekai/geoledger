@@ -1,10 +1,13 @@
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=5));
-INSERT INTO gl_format VALUES(true,5);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=6));
+INSERT INTO gl_format VALUES(true,6);
 CREATE TABLE gl_projects (
- id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0));
+ id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0),
+ state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
 CREATE TABLE gl_project_members (
  project text REFERENCES gl_projects(id), subject text NOT NULL,
- role text NOT NULL CHECK(role IN ('owner','editor','viewer')), PRIMARY KEY(project,subject));
+ role text NOT NULL CHECK(role IN ('owner','editor','viewer')), removed boolean NOT NULL DEFAULT false,
+ PRIMARY KEY(project,subject));
+CREATE INDEX gl_project_members_subject ON gl_project_members(subject,project);
 CREATE TABLE gl_datasets (
  project text REFERENCES gl_projects(id), id text NOT NULL, name text NOT NULL,
  PRIMARY KEY(project,id), UNIQUE(project,name));

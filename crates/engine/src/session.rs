@@ -349,26 +349,8 @@ impl Client {
         self.transaction = true;
         Ok(SqlTransaction(self))
     }
-    /// Create a fresh database (base format 5 plus every migration) or verify
-    /// that an existing one is at the current format. Never upgrades data.
-    pub fn migrate(self) -> Result<()> {
-        self.prepare(false).map(drop)
-    }
-    /// Explicit, operator-triggered upgrade of an existing database. Returns
-    /// (current version, target version); `dry_run` only reports.
-    pub fn upgrade(self, dry_run: bool) -> Result<(i32, i32)> {
-        let Some((from, mut t)) = self.prepare(true)? else {
-            return Err(Error::new(500, "unexpected fresh database"));
-        };
-        if !dry_run && from < FORMAT_VERSION {
-            t.apply_migrations(from)?;
-            t.commit()?;
-        }
-        Ok((from, FORMAT_VERSION))
-    }
-    /// Returns the open transaction and the stored version for an existing
-    /// database, or None after creating a fresh one.
-    fn prepare(mut self, upgrade: bool) -> Result<Option<(i32, SqlTransaction)>> {
+    /// Initialize a fresh current-format database or validate an existing one.
+    pub fn migrate(mut self) -> Result<()> {
         let sqlite = matches!(self.backend, Backend::Sqlite(_));
         if sqlite {
             self.batch_execute("PRAGMA journal_mode=WAL;")?;
@@ -388,74 +370,26 @@ impl Client {
                 .get::<_, bool>(0usize)?
         };
         if !exists {
-            if upgrade {
-                return Err(Error::new(
-                    404,
-                    "no GeoLedger database to upgrade; start the server to initialize one",
-                ));
-            }
             t.batch_execute(if sqlite {
                 include_str!("sqlite.sql")
             } else {
                 include_str!("postgis.sql")
             })?;
-            // Fresh databases run the same migrations as upgrades, so every
-            // initialization exercises the upgrade path.
-            t.apply_migrations(5)?;
             t.commit()?;
-            return Ok(None);
+            return Ok(());
         }
         let version = t
             .query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
             .get::<_, i32>(0usize)?;
-        if version > FORMAT_VERSION {
-            return Err(Error::new(
-                409,
-                "storage format is newer than this server; upgrade the server",
-            ));
-        }
-        if version < FORMAT_VERSION && !upgrade {
-            return Err(Error::new(
-                409,
-                "storage format predates this server; back up, then run `geoledger-server migrate`",
-            ));
-        }
-        if version < 5 {
-            return Err(Error::new(
-                409,
-                "storage format predates the oldest upgradable format (5); export and import into a fresh database",
-            ));
-        }
-        Ok(Some((version, t)))
-    }
-}
-impl SqlTransaction {
-    fn apply_migrations(&mut self, from: i32) -> Result<()> {
-        let sqlite = matches!(self.0.backend, Backend::Sqlite(_));
-        for (version, sqlite_sql, postgis_sql) in MIGRATIONS {
-            if *version > from {
-                self.batch_execute(if sqlite { sqlite_sql } else { postgis_sql })?;
-            }
-        }
-        let version = self
-            .query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
-            .get::<_, i32>(0usize)?;
         if version != FORMAT_VERSION {
             return Err(Error::new(
-                500,
-                "migration left an unexpected format version",
+                409,
+                "storage format must match this server; initialize a fresh database",
             ));
         }
         Ok(())
     }
 }
-/// (target version, SQLite script, PostgreSQL script). Each script must leave
-/// gl_format.version at its target version.
-const MIGRATIONS: &[(i32, &str, &str)] = &[(
-    6,
-    include_str!("migrations/0006.sqlite.sql"),
-    include_str!("migrations/0006.postgis.sql"),
-)];
 impl Drop for Client {
     fn drop(&mut self) {
         if self.transaction {
@@ -982,9 +916,6 @@ impl StorageBackend for SqlStorage {
     }
     fn pool_stats(&self) -> Option<crate::PoolStats> {
         matches!(self.storage, Storage::Postgis(_)).then(|| self.pool.stats())
-    }
-    fn upgrade(&self, dry_run: bool, timeout: Duration) -> Result<(i32, i32)> {
-        Client::open(&self.storage, &self.pool, timeout)?.upgrade(dry_run)
     }
     fn export(
         &self,

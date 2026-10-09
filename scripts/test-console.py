@@ -12,12 +12,7 @@ parser.add_argument('--token-file', required=True)
 parser.add_argument('--chromium')
 parser.add_argument('--screenshots', default='artifacts')
 args = parser.parse_args()
-credentials = Path(args.token_file)
-entries = json.loads(credentials.read_text())
-if 'token' not in entries[0]:
-    # Server token files hold digests only; bootstrap writes plaintext beside them.
-    entries = json.loads(credentials.with_name('admin-credentials.json').read_text())
-token = entries[0]['token']
+token = json.loads(Path(args.token_file).read_text())[0]['token']
 shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
 origin = args.url.rstrip('/')

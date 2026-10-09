@@ -49,7 +49,7 @@ export type Project = {
   head: string;
   role: string;
   /** active, archived (read-only) or deleted */
-  state?: string;
+  state: string;
 };
 export type Member = { subject: string; role: string };
 export type Dataset = { id: string; name: string };

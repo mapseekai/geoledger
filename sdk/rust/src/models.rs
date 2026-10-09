@@ -19,7 +19,6 @@ pub struct Project {
     pub head: i64,
     pub role: String,
     /// `active`, `archived` (read-only) or `deleted`.
-    #[serde(default)]
     pub state: String,
 }
 

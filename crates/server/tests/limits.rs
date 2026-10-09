@@ -23,8 +23,13 @@ const TOKEN: &str = "test-only-limits-credential-0123456789-abcdefghijkl";
 fn service(db: &std::path::Path, limits: Limits) -> Result<Service, BoxError> {
     let app = Application::new(Storage::Sqlite(db.to_owned()));
     app.migrate()?;
-    let tokens =
-        Tokens::from_json(format!(r#"[{{"subject":"ops","token":"{TOKEN}"}}]"#).as_bytes())?;
+    let tokens = Tokens::from_json(
+        format!(
+            r#"[{{"subject":"ops","token_sha256":"{}"}}]"#,
+            geoledger_server::sha256_hex(TOKEN)
+        )
+        .as_bytes(),
+    )?;
     Ok(Service::new(app, Authentication::new(Authenticator::Tokens(tokens))).with_limits(limits))
 }
 async fn send(

@@ -20,7 +20,7 @@ async fn members_archive_delete_and_admin_over_grpc_and_http() -> TestResult {
         });
     app.migrate()?;
     let tokens = Tokens::from_json(
-        format!(r#"[{{"subject":"alice","token":"{ALICE}"}},{{"subject":"bob","token":"{BOB}"}},{{"subject":"root","token":"{ROOT}"}}]"#)
+        format!(r#"[{{"subject":"alice","token_sha256":"{}"}},{{"subject":"bob","token_sha256":"{}"}},{{"subject":"root","token_sha256":"{}"}}]"#, geoledger_server::sha256_hex(ALICE), geoledger_server::sha256_hex(BOB), geoledger_server::sha256_hex(ROOT))
             .as_bytes(),
     )?;
     let service = Service::new(app, Authentication::new(Authenticator::Tokens(tokens)));

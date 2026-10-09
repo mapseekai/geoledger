@@ -224,16 +224,10 @@ SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布�
 Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 最大 16 KiB、最多 256 个属性；EPSG:4326，XY/XYZ。
 标识采用有效文本字符，属性键和值使用 U+0000 以外的 JSON 文本；服务统一校验输入并返回业务错误。容量配置见 [生产运行](production.md)。
 
-## 兼容性与弃用
+## 当前版本契约
 
-`0.x` 预发布期间仍按以下规则演进，破坏性变化写在 [CHANGELOG](../CHANGELOG.md) 的 **Breaking** 小节并附迁移步骤。
+服务端、CLI、四语言 SDK 和 Web 控制台按同一发布版本部署，协议以 [geoledger.proto](../proto/geoledger/v1/geoledger.proto) 为统一来源。CI 检查生成代码的可复现性，并通过真实服务验证各 SDK。
 
-**gRPC `geoledger.v1`。** 同一主版本内只做向后兼容的增量变化：新增 RPC、新增可选字段、新增枚举值。已发布的字段编号与名称不复用、不改类型、不改语义；删除的字段编号以 `reserved` 保留。CI 的 `buf breaking` 将每个 Pull Request 的 `proto/` 与目标分支比较。无法兼容的变化发布为并行的 `geoledger.v2` 包，`v1` 在至少一个次版本周期内与 `v2` 同时提供。
+当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-**弃用流程。** 要移除的 RPC、字段或 HTTP 方法先标记 `deprecated = true`，在 CHANGELOG 的 **Deprecated** 小节和本页说明替代方式，至少保留一个次版本（且不少于 3 个月）后才在新的主协议版本中移除。服务端对弃用调用照常执行。
-
-**HTTP `/api/v1`。** 方法名与 gRPC 一一对应，遵循相同的增量规则；响应可能增加字段，客户端应忽略未知字段。错误码与 HTTP 状态的对应关系（上表）属于兼容承诺。
-
-**SDK。** SDK 与服务端版本号一致。较新的服务端接受较旧 SDK 的请求；较新的 SDK 连接较旧服务端时，新增方法返回服务端的未知方法错误，其余方法照常工作。
-
-**存储格式。** 结构变化提升格式版本，并提供仅向前的迁移，由运维在备份后执行 `geoledger-server migrate`；服务启动从不修改已有库。跨版本或跨后端迁移使用与后端无关的 `export`/`import`，见 [备份与恢复](production.md#备份与恢复)。
+当前存储格式为 6，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。

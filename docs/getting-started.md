@@ -121,7 +121,7 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 ./target/debug/geoledger-server --storage postgis --data-dir ./geoledger-data
 ```
 
-启动时初始化空库并校验格式 6；格式 5 的已有库先备份，再运行 `geoledger-server --storage postgis migrate` 升级（见 [格式升级](production.md#格式升级)）。连接默认 `sslmode=verify-full`，私有 CA 通过 `sslrootcert=<PEM 文件>` 指定；本机无 TLS 的开发库使用 `sslmode=disable`，参数说明见 [PostgreSQL TLS](security.md#postgresql-tls)。后端配置选择相应数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`（见 [备份与恢复](production.md#备份与恢复)）。两种后端沿用相同的 CLI、SDK 与控制台流程。
+启动时直接将空库初始化为格式 6，并校验已有库的当前格式（见 [存储格式](production.md#存储格式)）。连接默认 `sslmode=verify-full`，私有 CA 通过 `sslrootcert=<PEM 文件>` 指定；本机无 TLS 的开发库使用 `sslmode=disable`，参数说明见 [PostgreSQL TLS](security.md#postgresql-tls)。后端配置选择相应数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`（见 [备份与恢复](production.md#备份与恢复)）。两种后端沿用相同的 CLI、SDK 与控制台流程。
 
 ## 配置团队身份
 

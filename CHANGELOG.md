@@ -1,6 +1,6 @@
 # 变更记录
 
-本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)（`0.x` 预发布期间，次版本可能包含破坏性变化，均列在 **Breaking**）。兼容承诺见 [API 兼容性与弃用](docs/api.md#兼容性与弃用)，漏洞报告见 [安全策略](SECURITY.md)。
+本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)（`0.x` 预发布期间，次版本可能包含破坏性变化，均列在 **Breaking**）。版本契约见 [当前版本契约](docs/api.md#当前版本契约)，漏洞报告见 [安全策略](SECURITY.md)。
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
@@ -10,9 +10,9 @@
 
 ### Breaking
 
-- **存储格式 5 → 6**：已有库须先备份，再用新版本执行 `geoledger-server migrate`；旧格式的库启动时返回 409 并提示迁移。回滚方式为恢复备份。
+- **存储格式 6**：新库直接创建当前结构，已有库按当前格式校验。格式变化使用独立新库和当前接口导入源业务要素。
 - **PostgreSQL 连接默认 `sslmode=verify-full`**，拒绝 `prefer`/`allow`；无 TLS 的数据库须显式 `sslmode=disable`，非回环主机还需 `GL_DATABASE_ALLOW_PLAINTEXT=true`。
-- **令牌文件改为哈希存储**：首次启动生成 `tokens.json`（摘要）与 `admin-credentials.json`（明文，交给运维）；客户端使用后者。旧的明文令牌文件仍可读取并记录警告，`geoledger-server hash-tokens` 可转换。
+- **令牌文件改为哈希存储**：首次启动生成 `tokens.json`（摘要）与 `admin-credentials.json`（明文，交给运维）；客户端使用后者。服务端只读取摘要格式，客户端使用独立凭证文件。
 - **SDK 与 `gl` 拒绝以明文 `http://` 向非回环主机发送凭证**，需要 `GL_ALLOW_INSECURE_TRANSPORT=true` 或对应的 `allowInsecure` 选项显式放行。
 - **控制台会话改为服务端存储**：重启控制台会使用户重新登录，多实例部署需会话粘滞。
 - 第三方存储后端：`RepositoryTransaction` 新增必需方法（成员移除、项目状态等）。
@@ -32,11 +32,10 @@
 
 - 成员管理：`list_members`、`remove_member`（软删除，审计）；项目归档与删除；平台管理员 `GL_ADMIN_SUBJECTS`、项目创建策略与每身份配额。
 - 数据生命周期：`geoledger-server export`/`import`/`verify`（与后端无关的逻辑导出，SQLite ⇄ PostgreSQL 互通），SQLite 在线 `backup` 与 `restore`，`scripts/backup-drill.sh` 恢复演练，systemd 备份 timer。
-- 显式存储迁移 `geoledger-server migrate [--check]`。
 - 可观测性：带 request ID 的结构化访问日志、按 operation 的指标、连接池指标、gRPC 标准健康检查、`GL_HEALTH_LISTEN`、`geoledger-server probe` 与容器 HEALTHCHECK、控制台 `/api/health`。
 - 有界优雅停机：先让 `/ready` 返回 503，再在 `GL_SHUTDOWN_TIMEOUT_SECS` 内排空。
 - 部署参考：nginx/Caddy TLS 网关、`deploy/compose.production.yaml`（TLS PostGIS + 网关 + 控制台）、`scripts/make-test-certs.sh`。
-- 发布 workflow（多架构镜像与签名、二进制、SBOM、SDK 发布）；CI 增加依赖审计与 `buf breaking` 检查，删除失效的 Windows workflow；`SECURITY.md`、本变更记录与 API 兼容策略。
+- 发布 workflow（多架构镜像与签名、二进制、SBOM、SDK 发布）；CI 增加依赖审计与协议生成一致性检查，删除失效的 Windows workflow；`SECURITY.md`、本变更记录与当前版本契约。
 - Prometheus 告警规则与抓取示例 `deploy/monitoring/`（含 promtool 规则测试）。
 - 测试：编解码与几何的 cargo-fuzz 目标、多实例并发发布、超时/429/鉴权失败路径集成用例、k6 负载脚本 `scripts/load-test.sh`，以及每日运行它们的 nightly workflow。
 
