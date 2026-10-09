@@ -18,3 +18,8 @@
 
 任务不会发布或覆盖 latest。存储格式变化仍需遵循版本契约，更新镜像不会
 自动迁移旧数据库。工作流输入版本必须与标签下包版本一致。
+
+也可通过推送 `dockerhub-v0.3.0-alpha.1` 标签触发；目标命名空间默认使用
+GitHub 仓库 owner，实际构建源始终是对应的 `v0.3.0-alpha.1` 标签。
+这条路径使用 GitHub Actions 构建机，不是 Docker Build Cloud。认证仍需要
+上述仓库 Secrets；失败后配置 Secrets，再在 Actions 中重新运行失败任务。
