@@ -64,7 +64,7 @@ with sync_playwright() as p:
     for button in conflict.get_by_role('button').all():expect(button).to_have_attribute('data-slot','button')
     second=conflict.get_by_role('button').nth(1);second.click();expect(second).to_have_attribute('aria-current','true')
     page.screenshot(path='/tmp/geoledger-shadcn-conflict.png',full_page=True)
-    page.get_by_role('dialog').get_by_role('button',name='关闭',exact=True).click()
+    page.get_by_role('dialog').get_by_role('button',name='取消',exact=True).click()
     page.set_viewport_size({'width':390,'height':844})
     table.click();expect(page.get_by_role('tabpanel',name='表格',exact=True)).to_be_visible()
     page.screenshot(path='/tmp/geoledger-shadcn-mobile.png',full_page=True)

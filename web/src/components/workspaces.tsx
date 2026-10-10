@@ -6,11 +6,11 @@ import {
   type Project,
   type Workspace,
 } from "@/lib/browser-api";
-import { pretty } from "@/lib/geojson";
 import { readPublication, type Publication } from "@/lib/publication";
 import {
+  Copy,
+  Crosshair,
   Ellipsis,
-  FileDiff,
   GitBranch,
   GitMerge,
   Plus,
@@ -20,9 +20,14 @@ import {
   TriangleAlert,
   Upload,
 } from "lucide-react";
+import { toast } from "sonner";
+import { ChangeList, type ChangePage } from "./change-list";
+import { UpdateDialog } from "./update-dialog";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Confirm,
+  CopyButton,
+  copyText,
   Empty,
   ErrorBox,
   Loading,
@@ -66,40 +71,47 @@ import {
 
 export function Inspector({
   title,
+  meta,
   description,
   summary,
+  project,
   load,
   close,
+  beforeLabel,
+  afterLabel,
 }: {
   title: string;
-  description: string;
+  meta?: ReactNode;
+  description?: string;
   summary?: ReactNode;
-  load: (
-    after: string,
-  ) => Promise<{ rows: { cursor: string; json: string }[]; next?: string }>;
+  project: string;
+  load: (after: string) => Promise<ChangePage>;
   close: () => void;
+  beforeLabel?: string;
+  afterLabel?: string;
 }) {
-  const page = usePage(load, 0);
   return (
-    <Modal title={title} description={description} close={close}>
-      {summary}
-      <ErrorBox message={page.error} />
-      {page.busy ? (
-        <Loading />
-      ) : page.rows.length ? (
-        <div className="inspect-list">
-          {page.rows.map((r) => (
-            <pre key={r.cursor} className="json-view">
-              {pretty(r.json)}
-            </pre>
-          ))}
-        </div>
-      ) : (
-        <Empty icon={FileDiff} title="没有变更记录">
-          当前页面没有内容。
-        </Empty>
-      )}
-      {page.footer}
+    <Modal
+      title={title}
+      meta={meta}
+      description={description}
+      size="lg"
+      close={close}
+      footer={
+        <Button variant="outline" onClick={close}>
+          关闭
+        </Button>
+      }
+    >
+      <div className="dialog-stack">
+        {summary}
+        <ChangeList
+          project={project}
+          load={load}
+          beforeLabel={beforeLabel}
+          afterLabel={afterLabel}
+        />
+      </div>
     </Modal>
   );
 }
@@ -122,6 +134,7 @@ export function Workspaces({
     workspace: Workspace;
     mode: "resolve" | "rebase";
   }>();
+  const [syncing, setSyncing] = useState<Workspace>();
   const [lookup, setLookup] = useState<Workspace>();
   const [lookupId, setLookupId] = useState("");
   const [selectedProject, setSelectedProject] = useState(project.id);
@@ -233,24 +246,42 @@ export function Workspaces({
   const selectWorkspace = (workspace: Workspace) => {
     setSelected(workspace);
   };
-  const workspaceActions = (workspace: Workspace): ReactNode => (
-    <div className="row-actions">
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setInspect({ workspace })}
-      >
-        变更
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setResolve({ workspace, mode: "resolve" })}
-      >
-        冲突
-      </Button>
-      {workspace.status === "open" && writable && (
-        <>
+  const behindBy = (workspace: Workspace) => {
+    try {
+      const gap =
+        BigInt(currentGraphProject.head) - BigInt(workspace.baseRevision);
+      return gap > 0n ? gap.toString() : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const workspaceActions = (workspace: Workspace): ReactNode => {
+    const open = workspace.status === "open";
+    const editable = open && writable;
+    const behind = open ? behindBy(workspace) : undefined;
+    return (
+      <div className="row-actions">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setInspect({ workspace })}
+        >
+          变更
+        </Button>
+        {editable && behind && (
+          <Tip label={`落后 ${behind} 个版本`}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="is-attention"
+              onClick={() => setSyncing(workspace)}
+            >
+              <RefreshCcw />
+              更新
+            </Button>
+          </Tip>
+        )}
+        {editable && (
           <Button
             variant="outline"
             size="sm"
@@ -259,45 +290,53 @@ export function Workspaces({
             <Upload />
             发布
           </Button>
-          <DropdownMenu>
-            <Tip label="更多操作">
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`更多操作 ${workspace.id}`}
-                >
-                  <Ellipsis />
-                </Button>
-              </DropdownMenuTrigger>
-            </Tip>
-            <DropdownMenuContent align="end" className="menu">
-              <DropdownMenuItem
-                onSelect={() => setResolve({ workspace, mode: "resolve" })}
+        )}
+        <DropdownMenu>
+          <Tip label="更多操作">
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`更多操作 ${workspace.id}`}
               >
-                <GitMerge />
-                解决冲突
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => setResolve({ workspace, mode: "rebase" })}
-              >
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+          </Tip>
+          <DropdownMenuContent align="end" className="menu">
+            <DropdownMenuItem
+              onSelect={() => setResolve({ workspace, mode: "resolve" })}
+            >
+              <GitMerge />
+              {editable ? "解决冲突" : "查看冲突"}
+            </DropdownMenuItem>
+            {editable && (
+              <DropdownMenuItem onSelect={() => setSyncing(workspace)}>
                 <RefreshCcw />
-                更新基准
+                更新工作区
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                onSelect={() => setDiscard(workspace)}
-              >
-                <Trash2 />
-                丢弃工作区
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </>
-      )}
-    </div>
-  );
+            )}
+            <DropdownMenuItem onSelect={() => copyText(workspace.id)}>
+              <Copy />
+              复制标识
+            </DropdownMenuItem>
+            {editable && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setDiscard(workspace)}
+                >
+                  <Trash2 />
+                  丢弃工作区
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
 
   return (
     <>
@@ -389,6 +428,9 @@ export function Workspaces({
                       setSelected(workspace);
                       setRefresh((value) => value + 1);
                       page.reset();
+                      toast.success("已创建工作区", {
+                        description: workspace.id,
+                      });
                     })
                   }
                 >
@@ -419,7 +461,7 @@ export function Workspaces({
               <Loading />
             ) : rows.length ? (
               <Table aria-label="工作区列表">
-                <TableCaption className="caption-top p-3 text-left font-medium">
+                <TableCaption className="sr-only">
                   工作区列表与数据集变更
                 </TableCaption>
                 <TableHeader>
@@ -445,25 +487,36 @@ export function Workspaces({
                           <span className="mono" title={workspace.id}>
                             {short(workspace.id)}
                           </span>
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            className="copy-id"
-                            onClick={() => {
-                              setSelected(workspace);
-                              setView("graph");
-                            }}
-                            aria-label={`选择工作区 ${workspace.id}`}
-                          >
-                            选择
-                          </Button>
+                          <CopyButton value={workspace.id} label="复制标识" />
+                          <Tip label="在版本图中定位">
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="copy-button"
+                              onClick={() => {
+                                setSelected(workspace);
+                                setView("graph");
+                              }}
+                              aria-label={`选择工作区 ${workspace.id}`}
+                            >
+                              <Crosshair />
+                            </Button>
+                          </Tip>
                         </span>
                       </TableCell>
                       <TableCell className="mono">
-                        <Badge variant="outline" className="revision-tag">
-                          r{workspace.baseRevision}
-                        </Badge>
-                        <span className="muted"> / </span>v{workspace.version}
+                        <span className="rev-cell">
+                          <Badge variant="outline" className="revision-tag">
+                            r{workspace.baseRevision}
+                          </Badge>
+                          <span className="muted">v{workspace.version}</span>
+                          {workspace.status === "open" &&
+                            behindBy(workspace) && (
+                              <Badge variant="outline" className="behind-badge">
+                                落后 {behindBy(workspace)}
+                              </Badge>
+                            )}
+                        </span>
                       </TableCell>
                       <TableCell>
                         <StatusBadge value={workspace.status} />
@@ -493,14 +546,23 @@ export function Workspaces({
       {inspect && (
         <Inspector
           key={"workspace" in inspect ? inspect.workspace.id : inspect.revision}
+          project={project.id}
           title={
             "workspace" in inspect ? "工作区变更" : `版本 r${inspect.revision}`
           }
-          description={
-            "workspace" in inspect
-              ? `工作区 ${inspect.workspace.id}`
-              : (inspect.commit?.message ?? "版本变更")
+          meta={
+            "workspace" in inspect ? (
+              <Badge variant="outline" className="meta-chip">
+                <span className="mono">{short(inspect.workspace.id)}</span>
+                <CopyButton value={inspect.workspace.id} label="复制标识" />
+              </Badge>
+            ) : undefined
           }
+          description={
+            "workspace" in inspect ? undefined : inspect.commit?.message
+          }
+          beforeLabel={"workspace" in inspect ? "基线" : "之前"}
+          afterLabel={"workspace" in inspect ? "工作区" : "之后"}
           summary={
             <ChangeSummary
               project={project.id}
@@ -520,13 +582,12 @@ export function Workspaces({
                 project: project.id,
                 workspace: inspect.workspace.id,
                 after,
-                limit: 20,
+                limit: 50,
               });
               return {
                 rows: result.changes,
-                identity: result.version,
                 next:
-                  result.changes.length === 20
+                  result.changes.length === 50
                     ? result.changes.at(-1)!.cursor
                     : undefined,
               };
@@ -536,12 +597,12 @@ export function Workspaces({
               project: project.id,
               revision: inspect.revision,
               after,
-              limit: 20,
+              limit: 50,
             });
             return {
               rows: result.changes,
               next:
-                result.changes.length === 20
+                result.changes.length === 50
                   ? result.changes.at(-1)!.cursor
                   : undefined,
             };
@@ -570,7 +631,12 @@ export function Workspaces({
       {discard && (
         <Confirm
           title="丢弃工作区"
-          description="工作区的未发布编辑将被丢弃。已发布的历史版本不会改变。"
+          description={
+            <>
+              <span className="mono">{short(discard.id)}</span>{" "}
+              的未发布编辑将被丢弃
+            </>
+          }
           action="确认丢弃"
           busy={task.busy}
           error={task.error}
@@ -586,9 +652,25 @@ export function Workspaces({
                 version: discard.version,
               });
               setDiscard(undefined);
+              toast.success("已丢弃工作区");
               await update();
             })
           }
+        />
+      )}
+      {syncing && (
+        <UpdateDialog
+          project={project.id}
+          workspace={syncing}
+          close={() => setSyncing(undefined)}
+          complete={() => {
+            setSyncing(undefined);
+            void update();
+          }}
+          resolve={() => {
+            setResolve({ workspace: syncing, mode: "rebase" });
+            setSyncing(undefined);
+          }}
         />
       )}
       {resolve && (

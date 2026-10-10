@@ -1,6 +1,5 @@
 "use client";
 import {
-  ApiError,
   call,
   type Dataset,
   type Feature,
@@ -28,12 +27,7 @@ import {
   type Layer,
   type LayerItem,
 } from "@/lib/map";
-import {
-  publication,
-  readPublication,
-  releasePublication,
-  type Publication,
-} from "@/lib/publication";
+import { readPublication, type Publication } from "@/lib/publication";
 import {
   ArrowLeft,
   ArrowRight,
@@ -65,6 +59,8 @@ import {
   type ReactNode,
 } from "react";
 import { Confirm, ErrorBox, Modal, Notice, Tip, useMedia } from "./common";
+import { PublishDialog } from "./publish-dialog";
+import { toast } from "sonner";
 import { MapView, kindColors, type MapHandle } from "./map-view";
 import { short, useAction } from "./resource-shared";
 import { Badge } from "./ui/badge";
@@ -892,7 +888,11 @@ export function FeatureWorkspace({
       {remove && (
         <Confirm
           title="删除要素"
-          description={`将在当前工作区中删除 ${remove.id}。发布前不会改变正式版本。`}
+          description={
+            <>
+              <span className="mono">{remove.id}</span>
+            </>
+          }
           action="确认删除"
           busy={task.busy}
           error={task.error}
@@ -914,6 +914,7 @@ export function FeatureWorkspace({
               });
               setRemove(undefined);
               setSelectedId(undefined);
+              toast.success("已删除要素", { description: remove.id });
               reload();
             })
           }
@@ -1495,13 +1496,17 @@ export function FeatureEditor({
       state.offset += batch.length;
       setSaved(state.offset);
     }
+    toast.success(
+      rows.length > 1 ? `已保存 ${rows.length} 个要素` : "已保存到工作区",
+    );
     close();
   }
   return (
     <Modal
       title={feature === "new" ? "添加要素" : "编辑要素"}
-      description="编辑 GeoJSON Feature，保存到工作区后发布生效。"
-      close={task.busy ? () => {} : close}
+      size="lg"
+      busy={task.busy}
+      close={close}
     >
       <form
         onSubmit={(e) => {
@@ -1575,12 +1580,7 @@ export function FeatureEditor({
             }
           />
         </fieldset>
-        {saved > 0 && (
-          <p role="status">
-            已保存 {saved}{" "}
-            个要素。中断时已完成的批次会保留，重试从未完成批次继续；若提示版本冲突，请关闭并刷新后检查工作区。
-          </p>
-        )}
+        {saved > 0 && <p role="status">已保存 {saved} 个要素</p>}
         <ErrorBox message={task.error} />
         <div className="form-actions">
           <Button
@@ -1599,106 +1599,4 @@ export function FeatureEditor({
     </Modal>
   );
 }
-export function PublishDialog({
-  project,
-  workspace,
-  version,
-  close,
-  complete,
-}: {
-  project: string;
-  workspace: string;
-  version: string;
-  close: () => void;
-  complete: () => void;
-}) {
-  const [pending, setPending] = useState(() =>
-    readPublication(sessionStorage.getItem("gl.publication")),
-  );
-  const [message, setMessage] = useState(pending?.message ?? "");
-  const [result, setResult] = useState<string>();
-  const task = useAction();
-  const matches =
-    !pending ||
-    (pending.project === project && pending.workspace === workspace);
-  return (
-    <Modal
-      title={result ? "发布完成" : "发布新版本"}
-      description="合并工作区更改；有冲突时需先解决。"
-      close={task.busy ? () => {} : close}
-    >
-      {result ? (
-        <div className="publish-success">
-          <Check />
-          <h3>版本 r{result} 已发布</h3>
-          <Button onClick={close}>完成</Button>
-        </div>
-      ) : (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void task.run(async () => {
-              const intent =
-                pending ??
-                publication(project, workspace, version, message.trim());
-              // Persist before sending: an interrupted response can only retry this immutable request.
-              sessionStorage.setItem("gl.publication", JSON.stringify(intent));
-              setPending(intent);
-              try {
-                const response = await call<{ revision: string }>(intent);
-                sessionStorage.removeItem("gl.publication");
-                setPending(undefined);
-                setResult(response.revision);
-                complete();
-              } catch (error) {
-                if (
-                  error instanceof ApiError &&
-                  releasePublication(error.status, error.uncertain, !!pending)
-                ) {
-                  sessionStorage.removeItem("gl.publication");
-                  setPending(undefined);
-                }
-                throw error;
-              }
-            });
-          }}
-        >
-          <Label htmlFor="publish-message">版本说明</Label>
-          <Textarea
-            id="publish-message"
-            required
-            maxLength={2048}
-            value={message}
-            readOnly={!!pending}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="例如：更新道路边界与分类"
-          />
-          {pending && (
-            <Notice>
-              {matches
-                ? "保留了原始发布请求，重试会使用相同内容和请求标识。"
-                : `请先到工作区 ${pending.workspace} 确认上一笔发布。`}
-            </Notice>
-          )}
-          <ErrorBox message={task.error} />
-          <div className="form-actions">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={task.busy}
-              onClick={close}
-            >
-              关闭
-            </Button>
-            <Button
-              type="submit"
-              disabled={task.busy || !matches || !message.trim()}
-            >
-              {task.busy ? "正在发布…" : pending ? "重试原发布" : "确认发布"}
-            </Button>
-          </div>
-        </form>
-      )}
-    </Modal>
-  );
-}
+export { PublishDialog };

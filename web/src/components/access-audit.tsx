@@ -3,8 +3,17 @@ import { call, type Audit, type Member, type Project } from "@/lib/browser-api";
 import { pretty } from "@/lib/geojson";
 import { CircleCheck, Lock, ScrollText, Users } from "lucide-react";
 import { useState } from "react";
-import { Empty, ErrorBox, Loading, Modal, Notice, usePage } from "./common";
-import { Panel, PanelTitle, time, useAction } from "./resource-shared";
+import {
+  copyText,
+  Empty,
+  ErrorBox,
+  Loading,
+  Modal,
+  Notice,
+  RelativeTime,
+  usePage,
+} from "./common";
+import { Panel, PanelTitle, useAction } from "./resource-shared";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
@@ -180,11 +189,7 @@ function Lifecycle({ project }: { project: Project }) {
   return (
     <Panel toolbar={<PanelTitle title="项目状态" />}>
       <div className="card-form">
-        <p className="muted">
-          {archived
-            ? "项目已归档：数据只读，成员与历史保留。"
-            : "归档后项目变为只读，可随时恢复。"}
-        </p>
+        <p className="muted">{archived ? "已归档 · 只读" : "活跃"}</p>
         <div className="form-actions is-start">
           <Button
             variant="outline"
@@ -287,7 +292,9 @@ export function AuditPanel({ project }: { project: Project }) {
                       {e.subject}
                     </span>
                   </TableCell>
-                  <TableCell className="muted">{time(e.createdAt)}</TableCell>
+                  <TableCell className="muted">
+                    <RelativeTime value={e.createdAt} />
+                  </TableCell>
                   <TableCell className="cell-actions">
                     <Button
                       variant="ghost"
@@ -309,8 +316,31 @@ export function AuditPanel({ project }: { project: Project }) {
       {detail && (
         <Modal
           title={`审计事件 #${detail.id}`}
-          description={`${detail.subject} · ${detail.action}`}
+          meta={
+            <>
+              <Badge variant="outline" className="meta-chip">
+                {detail.subject}
+              </Badge>
+              <Badge variant="outline" className="meta-chip">
+                <span className="mono">{detail.action}</span>
+              </Badge>
+              <Badge variant="outline" className="meta-chip">
+                <RelativeTime value={detail.createdAt} plain />
+              </Badge>
+            </>
+          }
           close={() => setDetail(undefined)}
+          footer={
+            <>
+              <Button
+                variant="outline"
+                onClick={() => copyText(detail.detail, "已复制详情")}
+              >
+                复制
+              </Button>
+              <Button onClick={() => setDetail(undefined)}>关闭</Button>
+            </>
+          }
         >
           <pre className="json-view">{pretty(detail.detail)}</pre>
         </Modal>
