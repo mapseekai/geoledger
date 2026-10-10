@@ -589,7 +589,8 @@ impl Client {
             .await?,
         )
     }
-    pub async fn attach_postgis_table(
+    /// Track an existing PostGIS table, creating its initial published revision.
+    pub async fn track_table(
         &self,
         project: &str,
         name: &str,

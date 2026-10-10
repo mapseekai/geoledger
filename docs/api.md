@@ -156,13 +156,13 @@ Python SDK 与 TS SDK 分别按上文安装和构建；统一安装与联调流�
 |---|---|
 | Client | info、create_project、project、projects、set_member |
 | Client | members、remove_member、archive_project、delete_project |
-| Client | create_dataset、datasets、create_workspace、workspace、workspaces |
+| Client | create_dataset、track_table、datasets、create_workspace、workspace、workspaces |
 | Client | features、history、commit、audit、restore |
 | Workspace | save、save_batch、delete、features、diff、conflicts |
 | Workspace | publish、resolve、rebase、discard、refresh |
 
 `save` 直接接收带字符串 `id` 的完整 GeoJSON Feature。批量编辑使用 SDK 自身的 `Edit`，
-删除通过 `delete()` 或显式 `null` / `None` 表达，保存操作提供完整要素字段。
+删除通过 `delete()` 或显式 `null` / `None` 表达，保存操作提供完整要素字段。 `save` 保存草稿，`publish` 发布版本，`discard` 丢弃工作区草稿；`restore(project, revision)` 创建撤销指定提交的工作区，需要再次发布，不是将整个项目直接重置到该版本。`archive_project` 只读归档并保留历史，`delete_project` / `delete_dataset` 清除对应版本数据，纳管原表保留。
 正式要素分页固定首次返回的 revision，后续查询带该版本及 next_after；草稿分页需核对 workspace_version。
 `history` 的每条提交还包含实际发布工作区及其发布时基线：Go 使用 `SourceWorkspace` / `SourceBaseRevision`，Rust/Python 使用 `source_workspace` / `source_base_revision`，TypeScript 使用 `sourceWorkspace` / `sourceBaseRevision`。基线随发布前 rebase 更新；已发布工作区保持其基线不变。
 JSON 对象键通过递归校验，保护普通对象的编解码语义；
@@ -249,15 +249,17 @@ Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓�
 
 数据集创建参数 `coordinate_dimension` 为 2（默认，XY）或 3（XYZ），创建后不可修改。创建、列表和重命名响应均包含该字段。保存、合并、冲突解决与发布要求坐标维度匹配数据集；null 和空几何不含坐标，仍可保存。
 
-### PostGIS 表接入
+### PostGIS 表纳管
 
-`create_dataset` 的 `postgis_table` 指定 `{schema, table, id_column, geometry_column}`，接入时几何类型和维度由原表读取。返回和数据集列表中的 `postgis_table` 描述绑定；内部数据集该字段为空。操作要求平台管理员同时具有项目写权限。接入建立首个发布版本，日后的 `save`、`publish`、`restore` 使用现有工作区契约。
+业务 SDK 使用 `create_dataset`（Go/TypeScript 按各语言命名风格）创建原生数据集，使用 `track_table` / `TrackTable` / `trackTable` 将已有表纳入版本控制。当前表纳管仅支持服务所连接的 PostGIS 数据库，因此来源类型与协议字段仍为 `PostgisTable` / `postgis_table`，不表示支持任意数据库。底层 RPC 共用 `CreateDataset`；HTTP 与 `gl call` 使用 `create_dataset` 加 `postgis_table`，不增加别名。文件导入继续使用创建数据集、分批保存到工作区、发布的流程。
+
+`create_dataset` 的 `postgis_table` 指定 `{schema, table, id_column, geometry_column}`，纳管时几何类型和维度由原表读取。返回和数据集列表中的 `postgis_table` 描述绑定；内部数据集该字段为空。操作要求平台管理员同时具有项目写权限。纳管建立首个发布版本，日后的 `save`、`publish`、`restore` 使用现有工作区契约。
 
 | SDK | 业务接口 |
 |---|---|
-| Rust | `attach_postgis_table(project, name, &PostgisTable)` |
-| Go | `AttachPostgisTable(ctx, project, name, PostgisTable)` |
-| TypeScript | `attachPostgisTable(project, name, {schema, table, idColumn, geometryColumn})` |
-| Python | `attach_postgis_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
+| Rust | `track_table(project, name, &PostgisTable)` |
+| Go | `TrackTable(ctx, project, name, PostgisTable)` |
+| TypeScript | `trackTable(project, name, {schema, table, idColumn, geometryColumn})` |
+| Python | `track_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
 
 原表要求和发布事务见 [已有业务表](storage.md#已有业务表)。

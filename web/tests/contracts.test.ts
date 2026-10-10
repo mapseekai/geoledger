@@ -18,6 +18,31 @@ import { configuration } from "../src/lib/config";
 import { ApiError } from "../src/lib/browser-api";
 import { resolveProject } from "../src/lib/project-context";
 
+test("table tracking uses the business SDK and validates the source", async () => {
+  const source = {
+    schema: "business",
+    table: "roads",
+    idColumn: "id",
+    geometryColumn: "geom",
+  };
+  const request = { action: "trackTable", project: "p", name: "roads", source };
+  const client = {
+    trackTable: async (...args: unknown[]) => {
+      assert.deepEqual(args, ["p", "roads", source]);
+      return { id: "d", postgisTable: source };
+    },
+  } as unknown as Client;
+  assert.deepEqual(await execute(client, request), {
+    id: "d",
+    postgisTable: source,
+  });
+  assert.equal(
+    requestSchema.safeParse({ ...request, source: { ...source, table: "" } })
+      .success,
+    false,
+  );
+});
+
 test("project resolution preserves explicit failures and only recovers invalid cached projects", async () => {
   const project = { id: "a", name: "A" } as never;
   let explicitListed = false;

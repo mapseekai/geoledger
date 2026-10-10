@@ -237,7 +237,8 @@ class Client:
     def create_dataset(self, project: str, name: str, geometry_type: str, coordinate_dimension: int = 2) -> Dataset:
         return Dataset(**self._call("CreateDataset", project=project, name=name, geometry_type=geometry_type, coordinate_dimension=coordinate_dimension))
 
-    def attach_postgis_table(self, project: str, name: str, *, schema: str, table: str, id_column: str, geometry_column: str) -> Dataset:
+    def track_table(self, project: str, name: str, *, schema: str, table: str, id_column: str, geometry_column: str) -> Dataset:
+        """Track an existing PostGIS table and create its initial published revision."""
         return Dataset(**self._call("CreateDataset", project=project, name=name, postgis_table=dict(schema=schema, table=table, id_column=id_column, geometry_column=geometry_column)))
 
     def datasets(self, project: str, *, after: str = "", limit: int = 100) -> list[Dataset]:

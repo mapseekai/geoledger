@@ -32,8 +32,8 @@ export async function execute(
         r.geometryType,
         r.coordinateDimension,
       );
-    case "attachPostgisTable":
-      return client.attachPostgisTable(r.project, r.name, r.source);
+    case "trackTable":
+      return client.trackTable(r.project, r.name, r.source);
     case "workspaces":
       return client.workspaces(r.project, r);
     case "workspace":

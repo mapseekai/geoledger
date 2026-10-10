@@ -308,7 +308,7 @@ export class Client {
       convert.decodeProject,
     );
   }
-  /** Permanently hide a project; `confirmName` must equal its name. */
+  /** Delete all project data and retain its audit tombstone; `confirmName` must equal its name. */
   async deleteProject(project: string, confirmName: string): Promise<void> {
     await this.#call(
       (cb) => this.#rpc.deleteProject({ project, confirmName }, cb),
@@ -352,7 +352,8 @@ export class Client {
       convert.decodeDataset,
     );
   }
-  attachPostgisTable(
+  /** Track an existing PostGIS table, creating its initial published revision. */
+  trackTable(
     project: string,
     name: string,
     postgisTable: model.PostgisTable,

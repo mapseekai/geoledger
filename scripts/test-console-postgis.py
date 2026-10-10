@@ -18,9 +18,9 @@ with sync_playwright() as pw:
     project=call({'action':'createProject','name':'PostGIS '+uuid.uuid4().hex[:8]})['id']
     page.goto(a.url+'/datasets?project='+project)
     page.get_by_role('button',name='创建数据集',exact=True).click();page.get_by_label('名称',exact=True).fill('已有道路')
-    page.get_by_role('combobox',name='数据来源',exact=True).click();page.get_by_role('option',name='接入 PostGIS 已有表',exact=True).click()
+    page.get_by_role('combobox',name='数据来源',exact=True).click();page.get_by_role('option',name='纳管已有 PostGIS 表',exact=True).click()
     page.get_by_label('Schema',exact=True).fill('business');page.get_by_label('数据表',exact=True).fill('roads')
-    page.get_by_role('button',name='创建',exact=True).click();expect(page.get_by_role('dialog')).to_have_count(0,timeout=30000)
+    page.get_by_role('button',name='纳管',exact=True).click();expect(page.get_by_role('dialog')).to_have_count(0,timeout=30000)
     dataset=call({'action':'datasets','project':project})[0]
     assert dataset['geometryType']=='line' and dataset['postgisTable']['table']=='roads'
     assert call({'action':'project','project':project})['head']=='1'
@@ -43,4 +43,4 @@ with sync_playwright() as pw:
     Path(a.screenshots).mkdir(parents=True,exist_ok=True);page.screenshot(path=str(Path(a.screenshots)/'postgis-bound-table.png'),full_page=True)
     assert not errors,errors
     browser.close()
-print('PostGIS browser: existing table attachment, inferred schema, initial snapshot, edit and publication passed')
+print('PostGIS browser: existing table tracking, inferred schema, initial snapshot, edit and publication passed')

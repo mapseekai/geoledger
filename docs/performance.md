@@ -36,7 +36,7 @@ python3 scripts/benchmark.py \
   --output artifacts/performance/sqlite-run
 ```
 
-SQLite 使用服务配置的可信 SpatiaLite 扩展路径 `GL_SPATIALITE_EXTENSION`。添加 `--backend postgis` 可运行相同 RPC 客户端，并额外验证已有业务表接入及单行发布写回。输出目录每次使用新路径。
+SQLite 使用服务配置的可信 SpatiaLite 扩展路径 `GL_SPATIALITE_EXTENSION`。添加 `--backend postgis` 可运行相同 RPC 客户端，并额外验证已有业务表纳管及单行发布写回。输出目录每次使用新路径。
 
 客户端流式解析 FeatureCollection，使用容量为 2 的批次队列。每批最多 100 个要素或约 1 MiB，单个较大要素独立传输。为按文件顺序分页校验，测试数据集使用补零序号作为要素 ID，保留原始属性和几何。摘要按照服务的数字语义比较：整数属性保留精度，几何按双精度坐标比较，`3` 与 `3.0` 等价。
 

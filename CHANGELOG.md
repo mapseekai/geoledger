@@ -8,6 +8,8 @@
 
 ### Breaking
 
+- SDK 表纳管方法统一为 Rust/Python `track_table`、Go `TrackTable`、TypeScript `trackTable`，替换原有 `attach` 命名；Web 同步使用 `trackTable` 动作，不保留旧别名。原生数据集创建继续使用 `create_dataset` 系列方法。
+
 - 存储格式 11：PostGIS 业务表绑定与事务内变更跟踪、草稿冲突选择部分索引；新库直接初始化当前结构。
 - 当前原生空间存储：SQLite 接入 SpatiaLite 原生几何与 RTree；PostGIS 使用 geometry 列与 GiST。保留精确几何快照、XYZ 坐标和拓扑警告，逻辑导入重建原生索引。
 - 数据集创建增加不可变坐标维度（二维／三维），默认二维；Web 与四种 SDK 支持选择，写入严格匹配维度。

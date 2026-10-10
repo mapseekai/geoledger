@@ -49,7 +49,7 @@ export function CreateDatasetDialog({
   return (
     <Modal
       title="创建数据集"
-      description="从 GeoJSON 文件创建数据集、接入已有 PostGIS 表，或创建空数据集。"
+      description="从 GeoJSON 文件创建数据集、纳管已有 PostGIS 表，或创建空数据集。"
       close={task.busy ? () => {} : close}
     >
       <form
@@ -61,7 +61,7 @@ export function CreateDatasetDialog({
             const current = state.current;
             if (mode === "postgis") {
               const dataset = await call<Dataset>({
-                action: "attachPostgisTable",
+                action: "trackTable",
                 project,
                 name,
                 source: {
@@ -188,7 +188,7 @@ export function CreateDatasetDialog({
                     <SelectItem value="file">上传 GeoJSON 文件</SelectItem>
                     {backend === "postgis" && (
                       <SelectItem value="postgis">
-                        接入 PostGIS 已有表
+                        纳管已有 PostGIS 表
                       </SelectItem>
                     )}
                     <SelectItem value="empty">空数据集</SelectItem>
@@ -238,7 +238,7 @@ export function CreateDatasetDialog({
                   />
                 </Field>
                 <p>
-                  由平台管理员接入当前数据库中的业务表，自动读取类型和维度并建立初始版本。发布时同步修改原表，纳管后的写入通过
+                  由平台管理员纳管当前数据库中的业务表，自动读取类型和维度并建立初始版本。发布时同步修改原表，纳管后的写入通过
                   GeoLedger 完成。
                 </p>
               </>
@@ -327,7 +327,13 @@ export function CreateDatasetDialog({
             关闭
           </Button>
           <Button type="submit" disabled={task.busy}>
-            {task.busy ? "正在处理…" : started ? "继续导入" : "创建"}
+            {task.busy
+              ? "正在处理…"
+              : started
+                ? "继续导入"
+                : mode === "postgis"
+                  ? "纳管"
+                  : "创建"}
           </Button>
         </div>
       </form>

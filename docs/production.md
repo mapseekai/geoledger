@@ -69,6 +69,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 - **管理员凭证**：首次启动生成的管理员凭证在 `geoledger-data` 卷的 `/data/admin-credentials.json`，取出后从卷中删除。
 - **身份认证**：生产建议改用 JWT（`GL_JWKS_URL` 等），并设置 `GL_BOOTSTRAP_ADMIN=false`。
 - **端口**：`GL_GATEWAY_BIND`、`GL_GATEWAY_HTTPS_PORT`、`GL_GATEWAY_HTTP_PORT` 用于调整网关发布的地址和端口。
+- **数据库角色**：示例复用了 `POSTGRES_USER` 初始化的超级用户；正式部署须将数据库初始化账号与服务运行账号分离，改用专用非超级用户连接，并按业务表纳管所需范围授予所有者权限。
 - **备份**：PostGIS 按下文 [备份与恢复](#备份与恢复) 使用 `pg_dump` 或 WAL 归档。逻辑导出命令为 `docker compose -f deploy/compose.production.yaml exec geoledger geoledger-server export --output /data/export.jsonl`。
 
 该组合已在 Docker Engine 29 上实测：四个服务均通过健康检查；`gl` 经网关以 TLS 访问 gRPC；HTTPS API 返回 HSTS 和请求 ID；HTTP 跳转到 HTTPS；PostGIS 拒绝明文连接；只读容器内的导出与校验成功。
@@ -115,7 +116,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 
 初次默认启动生成摘要格式的 `tokens.json` 与一次性的 `admin-credentials.json`；多人使用独立凭证与项目成员关系。静态凭证文件或 JWT 二选一。令牌支持过期时间、吊销与热加载，JWKS 支持文件热加载与 HTTPS 定时刷新，详见 [安全配置](security.md)。
 
-公网访问使用服务端 TLS（`GL_TLS_CERT`/`GL_TLS_KEY`，可选 mTLS）或 TLS 网关：HTTP 转发到 HTTP 监听器；gRPC 网关保持 HTTP/2 并转发到 gRPC 监听器，参考 [nginx.conf](../deploy/gateway/nginx.conf) 与 [Caddyfile](../deploy/gateway/Caddyfile)。SDK 的 https 地址启用服务器证书验证；http 地址只用于回环主机，其他主机需要显式开启明文。凭证通过秘密管理注入；浏览器使用加密 HttpOnly 会话 Cookie，代理通过过滤认证头和请求体日志保护凭证。
+公网访问使用服务端 TLS（`GL_TLS_CERT`/`GL_TLS_KEY`，可选 mTLS）或 TLS 网关：HTTP 转发到 HTTP 监听器；gRPC 网关保持 HTTP/2 并转发到 gRPC 监听器，参考 [nginx.conf](../deploy/gateway/nginx.conf) 与 [Caddyfile](../deploy/gateway/Caddyfile)。SDK 的 https 地址启用服务器证书验证；http 地址只用于回环主机，其他主机需要显式开启明文。凭证通过秘密管理注入；浏览器使用只含随机会话 ID 的加密 HttpOnly Cookie，凭证保存在 Web 服务端内存，代理通过过滤认证头和请求体日志保护凭证。
 
 PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装扩展后让服务账号创建应用表。默认 `sslmode=verify-full`，跨主机数据库连接校验证书链与主机名。每个实例的活跃数据库会话上限为 `GL_DB_POOL_SIZE`（默认 20），数据库和网关连接预算按实例数计算。
 
@@ -172,7 +173,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 ### 项目与成员治理
 
-项目 owner 可列出成员（`list_members`）、修改角色、移除成员（`remove_member`，成员也可退出项目），但项目必须保留至少一名 owner。owner 可归档项目（`archive_project`）：归档后数据只读，成员管理、恢复与删除仍可执行。删除（`delete_project`）需提交与项目名称一致的 `confirm_name`，项目从所有列表与查询中隐藏，历史与审计保留在库中以备审查。
+项目 owner 可列出成员（`list_members`）、修改角色、移除成员（`remove_member`，成员也可退出项目），但项目必须保留至少一名 owner。owner 可归档项目（`archive_project`）：归档后数据只读，成员管理、恢复与删除仍可执行。删除（`delete_project`）需提交与项目名称一致的 `confirm_name`，项目从所有列表与查询中隐藏，数据集、工作区、版本历史和发布收据被清除，保留项目删除标记、成员引用与不可变审计。纳管的原业务表及其当前数据保留并解除绑定。
 
 `GL_ADMIN_SUBJECTS` 指定的平台管理员可对任意项目执行上述成员与生命周期操作（审计记录其 subject），用于离职交接和孤儿项目处理，但不因此获得要素、历史或审计的读取权限。`GL_PROJECT_CREATION=admins` 与 `GL_MAX_PROJECTS_PER_SUBJECT` 限制项目创建，拒绝时返回 403。配额为软上限：PostgreSQL 多实例同时创建时可能短暂超出 1 个。
 
@@ -208,7 +209,7 @@ RTO 主要是文件复制时间加一次启动，通常为分钟级。容器部�
 
 ### 数据增长与保留
 
-历史与审计按设计只追加（见 [存储保证](storage.md#必须实现的保证) 第 3、5 条），保留策略在部署前确定：
+正常编辑和发布追加历史与审计；项目或数据集删除会清除对应版本数据，审计仍保留（见 [存储保证](storage.md#必须实现的保证)）。保留策略在部署前确定：
 
 | 表 | 增长来源 |
 |---|---|
@@ -230,18 +231,18 @@ SQLite 观察数据库文件与 WAL 文件大小。两种后端都为数据卷�
 
 **保留与归档建议。**
 
-1. 结束的项目先 `archive_project`（只读），确认无需再编辑后 `delete_project`（从列表隐藏，历史与审计保留以备审查）。
+1. 结束的项目先 `archive_project`（只读并保留历史）；只有确认不再需要在线版本数据且已完成所需备份后，才执行 `delete_project`（清除版本数据，保留审计）。
 2. 按月或按季度执行 `geoledger-server export`，连同 SHA-256 写入启用对象锁（WORM）的冷存储，保留期按行业法规设定；归档文件可随时 `verify` 并 `import` 到独立实例查阅。
-3. 要素属性中避免直接存放个人信息，改存外部系统的引用 ID，个人数据的更正与删除在外部系统完成。按法规物理清除某个项目全部历史的离线工具列入后续版本计划；在此之前，需要按法规物理删除的数据不写入 GeoLedger；冷存储中的归档按保留期到期删除。
+3. 要素属性中避免直接存放个人信息，改存外部系统的引用 ID，个人数据的更正与删除在外部系统完成。项目删除可清除在线版本数据，但不清除审计、备份或纳管原表；这不等同于完整的个人数据擦除流程。需要覆盖这些副本的删除要求须在上线前另行落实；冷存储中的归档按保留期到期删除。
 
 ## 独立 Web 管理服务
 
 管理页面独立部署为 [Next.js 控制台](../web/README.md#生产运行)，由其 Node.js
 服务端调用 TS SDK。数据库仅由 GeoLedger 服务访问。Web 的公开入口使用 HTTPS，
-固定 `GL_WEB_ORIGIN`；随机 `GL_WEB_SESSION_SECRET` 只在运行时配置，多实例共享。
+固定 `GL_WEB_ORIGIN`；随机 `GL_WEB_SESSION_SECRET` 只在运行时配置，多实例共享。会话保存在各实例内存，多实例需会话粘滞，重启后用户重新登录。
 反向代理设置请求体、连接数与登录速率限制。Web 和服务端的内部连接应限制在
 可信网络，跨网络使用 gRPC TLS。`compose.yaml` 的 console profile 提供本地组合启动。
 
 ### 业务表纳管部署
 
-将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，配置 `GL_ADMIN_SUBJECTS` 授权表接入操作。使用格式 11 的独立初始化环境；部署前保存业务数据库备份。服务账号需要锁表、创建触发器和业务表增删改权限。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。
+将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，配置 `GL_ADMIN_SUBJECTS` 授权表纳管操作。使用格式 11 的独立初始化环境；部署前保存业务数据库备份。服务账号需要业务表增删改权限，以及表所有权或等效的所有者角色权限：纳管与解绑会创建、启用和删除触发器，仅授予 `TRIGGER` 权限不足。业务应用撤销对纳管表的直接写权限，不将保护触发器视为数据库授权边界。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。

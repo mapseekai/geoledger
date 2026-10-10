@@ -368,7 +368,7 @@ pub(super) fn create_dataset(
         if !policy.admins.contains(s) {
             return Err(Error::new(
                 403,
-                "attaching a business table requires a platform administrator",
+                "tracking a business table requires a platform administrator",
             ));
         }
         let row = t.inspect_postgis_table(source)?;
@@ -426,7 +426,7 @@ pub(super) fn create_dataset(
             }
         }
         let revision = current.checked_add(1).ok_or_else(bad)?;
-        t.append_commit(&r.project, revision, &w, s, "Attach PostGIS table")?;
+        t.append_commit(&r.project, revision, &w, s, "Track table")?;
         t.append_changes(&r.project, revision)?;
         t.append_history(&r.project, revision)?;
         t.advance_head(&r.project, revision)?;
