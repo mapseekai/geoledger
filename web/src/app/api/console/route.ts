@@ -12,6 +12,7 @@ export async function POST(request: Request) {
     if (!token) throw new HttpError(401, "请登录控制台。");
     const lease = clients().acquire(token);
     try {
+      if (token.startsWith("glmt_")) await lease.client.info();
       const data = await execute(lease.client, await body(request));
       return data &&
         typeof data === "object" &&

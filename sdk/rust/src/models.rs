@@ -4,6 +4,8 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServerInfo {
+    pub platform_admin: bool,
+    pub managed_tokens: bool,
     pub version: String,
     pub backend: String,
     pub format_version: u32,
@@ -233,4 +235,23 @@ pub struct PostgisTable {
     pub table: String,
     pub id_column: String,
     pub geometry_column: String,
+}
+
+/// Metadata contains no digest or bearer token.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ManagedToken {
+    pub id: String,
+    pub subject: String,
+    pub label: String,
+    pub created_by: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub revoked_at: Option<String>,
+}
+/// No Debug implementation: the first response contains a secret.
+#[derive(Deserialize)]
+pub struct IssuedToken {
+    pub credential: ManagedToken,
+    pub token: Option<String>,
+    pub replayed: bool,
 }

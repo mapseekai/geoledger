@@ -112,7 +112,7 @@ impl Service {
         self.draining.load(Ordering::SeqCst)
     }
     /// Rate-limit, authenticate and reserve an execution slot for one call.
-    fn admit(
+    async fn admit(
         &self,
         call: &mut Call,
         headers: &axum::http::HeaderMap,
@@ -129,7 +129,47 @@ impl Service {
             self.metrics.rate_limited(true);
             return Err(Error::new(429, "rate limit exceeded"));
         }
-        let subject = self.authentication.authenticate(headers).ok_or_else(|| {
+        let permit = self
+            .capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Error::new(429, "server busy"))?;
+        let bearer = if headers.get_all("authorization").iter().count() == 1 {
+            headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        } else {
+            None
+        };
+        let subject = if bearer.is_some_and(|v| v.starts_with("glmt_")) {
+            if !self.authentication.managed_tokens() {
+                None
+            } else {
+                let token = bearer.unwrap_or_default().to_owned();
+                let app = self.app.clone().with_timeout(self.limits.request_timeout);
+                // Hold the slot inside the blocking task even if the RPC is cancelled.
+                let (subject, returned) = tokio::task::spawn_blocking(move || {
+                    (app.authenticate_managed_token(&token), permit)
+                })
+                .await
+                .map_err(|_| Error::new(500, "authentication unavailable"))?;
+                let permit = returned;
+                let subject = subject?;
+                return self.admit_subject(call, subject, permit);
+            }
+        } else {
+            self.authentication.authenticate(headers)
+        };
+        self.admit_subject(call, subject, permit)
+    }
+    fn admit_subject(
+        &self,
+        call: &mut Call,
+        subject: Option<String>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        let subject = subject.ok_or_else(|| {
             self.metrics.auth_failure();
             Error::new(401, "bearer authentication required")
         })?;
@@ -140,10 +180,7 @@ impl Service {
             self.metrics.rate_limited(false);
             return Err(Error::new(429, "rate limit exceeded"));
         }
-        self.capacity
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Error::new(429, "server busy"))
+        Ok(permit)
     }
     /// Finish a call: correlate the error with the transport request ID, log
     /// server-side failures with a safe diagnostic, emit metrics and an access log.
@@ -187,6 +224,16 @@ impl Service {
         timeout: Option<Duration>,
         permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<Value> {
+        if matches!(
+            call.operation.as_str(),
+            "issue_token" | "reissue_token" | "revoke_token" | "list_tokens"
+        ) && !self.authentication.managed_tokens()
+        {
+            return Err(Error::new(
+                409,
+                "managed credentials are disabled in JWT mode",
+            ));
+        }
         let max = self.limits.request_timeout;
         let app = self
             .app

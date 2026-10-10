@@ -97,6 +97,8 @@ export type Workspace = {
   status: string;
 };
 export type Info = {
+  platformAdmin: boolean;
+  managedTokens: boolean;
   version: string;
   backend: string;
   formatVersion: number;

@@ -4,6 +4,8 @@ package geoledger
 import "encoding/json"
 
 type ServerInfo struct {
+	PlatformAdmin   bool   `json:"platform_admin"`
+	ManagedTokens   bool   `json:"managed_tokens"`
 	Version         string `json:"version"`
 	Backend         string `json:"backend"`
 	FormatVersion   uint32 `json:"format_version"`
@@ -200,4 +202,19 @@ type ChangeSummary struct {
 	Datasets []DatasetChangeCounts `json:"datasets"`
 	Version  *int64                `json:"version,omitempty"`
 	Revision *int64                `json:"revision,omitempty"`
+}
+
+type ManagedToken struct {
+	ID        string  `json:"id"`
+	Subject   string  `json:"subject"`
+	Label     string  `json:"label"`
+	CreatedBy string  `json:"created_by"`
+	CreatedAt string  `json:"created_at"`
+	ExpiresAt string  `json:"expires_at"`
+	RevokedAt *string `json:"revoked_at"`
+}
+type IssuedToken struct {
+	Credential ManagedToken `json:"credential"`
+	Token      *string      `json:"token"`
+	Replayed   bool         `json:"replayed"`
 }

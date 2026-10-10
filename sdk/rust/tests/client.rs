@@ -21,6 +21,30 @@ impl wire::geo_ledger_server::GeoLedger for Service {
     ) -> Result<Response<Self::FeaturesStreamStream>, Status> {
         Err(Status::unimplemented("unused"))
     }
+    async fn list_tokens(
+        &self,
+        _request: Request<wire::PageRequest>,
+    ) -> Result<Response<wire::TokensReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn issue_token(
+        &self,
+        _request: Request<wire::IssueTokenRequest>,
+    ) -> Result<Response<wire::IssuedTokenReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn reissue_token(
+        &self,
+        _request: Request<wire::ReissueTokenRequest>,
+    ) -> Result<Response<wire::IssuedTokenReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+    async fn revoke_token(
+        &self,
+        _request: Request<wire::TokenRefRequest>,
+    ) -> Result<Response<wire::OkReply>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
     async fn info(
         &self,
         _request: Request<wire::Empty>,

@@ -33,6 +33,8 @@ function feature(value: wire.Feature | undefined): Feature | null {
 
 export function decodeServerInfo(v: wire.InfoReply): ServerInfo {
   return {
+    platformAdmin: v.platformAdmin,
+    managedTokens: v.managedTokens,
     version: v.version,
     backend: v.backend,
     formatVersion: v.formatVersion,

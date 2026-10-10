@@ -196,3 +196,9 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 `scripts/test-console-postgis.py` 验证完整 Web 纳管与发布。使用隔离 PostGIS 服务，在当前数据库准备 `business.roads(id bigint PRIMARY KEY, name text NOT NULL, geom geometry(LineString,4326))` 及一条要素，并通过 `GL_ADMIN_SUBJECTS=admin` 授权测试管理员。脚本接收与上传测试相同的 `--url`、`--token-file`、`--chromium` 和 `--screenshots` 参数。
 
 2026-10-10 本机隔离验证：Node.js 22.23.2、Web 生产构建、PostgreSQL 17.10 / PostGIS 3.6.1；服务使用非超级用户并拥有测试业务表。浏览器经 `trackTable` 纳管一条 LineString，编辑属性与几何并发布 r2，直接 SQL 核对原表写回。对该库执行 `pg_dump -Fc` / `pg_restore` 到独立新库后，确认绑定和 r2 快照保留；继续发布 r3、重放原请求，再直接核对原表写回。该验证仅覆盖小规模功能恢复，不代表目标环境的容量、RPO、RTO 或高可用验收。
+
+## 成员令牌验收
+
+运行 `cargo test -p geoledger-engine --test credentials` 和 `cargo test -p geoledger-server --test credentials` 验证签发回执、权限边界、撤销、到期、原子重新签发、故障回滚与 SQLite 备份。可选 PostGIS 测试要求 `GL_TEST_DATABASE_URL` 指向隔离的 `geoledger_test`，执行 `cargo test -p geoledger-engine --test credentials -- --ignored`。额外设置 `GL_TEST_PG_BIN` 为包含 `pg_dump` 与 `pg_restore` 的目录时，同一测试还验证原生备份恢复；未设置时不运行原生备份步骤。
+
+本次格式 12 本地验收使用 Node.js 22.23.2、SQLite/SpatiaLite 和隔离 PostGIS 17/3.6：两后端的凭据竞态、回滚与到期测试通过，PostGIS 原生备份恢复步骤已启用并通过。浏览器在独立预览中完成签发、一次性展示关闭、授权、成员登录、重新签发、新令牌登录及旧会话 401、撤销 401；1093px 和 390px 视口均无页面横向溢出。这些是功能验收，不是吞吐、RPO/RTO 或生产部署认证。

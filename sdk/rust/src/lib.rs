@@ -308,6 +308,26 @@ impl Client {
     async fn invoke(&self, operation: &str, value: Value) -> Result<Value, Error> {
         let mut rpc = self.rpc.clone();
         Ok(match operation {
+            "list_tokens" => serde_json::to_value(
+                rpc.list_tokens(serde_json::from_value::<pb::PageRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "issue_token" => serde_json::to_value(
+                rpc.issue_token(serde_json::from_value::<pb::IssueTokenRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "revoke_token" => serde_json::to_value(
+                rpc.revoke_token(serde_json::from_value::<pb::TokenRefRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "reissue_token" => serde_json::to_value(
+                rpc.reissue_token(serde_json::from_value::<pb::ReissueTokenRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
             "info" => serde_json::to_value(rpc.info(pb::Empty {}).await?.into_inner())?,
             "create_project" => serde_json::to_value(
                 rpc.create_project(serde_json::from_value::<pb::NameRequest>(value)?)
@@ -465,6 +485,37 @@ impl Client {
 }
 
 impl Client {
+    /// List managed credential metadata (platform administrators only).
+    pub async fn tokens(&self, page: Page) -> Result<Vec<ManagedToken>, Error> {
+        let r = self
+            .execute("list_tokens", serde_json::to_value(page)?)
+            .await?;
+        Ok(serde_json::from_value(r["tokens"].clone())?)
+    }
+    /// Preserve request_id on retries. Only initial success returns plaintext.
+    pub async fn issue_token(
+        &self,
+        request_id: &str,
+        subject: &str,
+        label: &str,
+        expires_at: &str,
+    ) -> Result<IssuedToken, Error> {
+        Ok(serde_json::from_value(self.execute("issue_token", json!({"request_id":request_id,"subject":subject,"label":label,"expires_at":expires_at})).await?)?)
+    }
+    pub async fn reissue_token(
+        &self,
+        request_id: &str,
+        token_id: &str,
+        label: &str,
+        expires_at: &str,
+    ) -> Result<IssuedToken, Error> {
+        Ok(serde_json::from_value(self.execute("reissue_token", json!({"request_id":request_id,"token_id":token_id,"label":label,"expires_at":expires_at})).await?)?)
+    }
+    pub async fn revoke_token(&self, token_id: &str) -> Result<(), Error> {
+        self.execute("revoke_token", json!({"token_id":token_id}))
+            .await?;
+        Ok(())
+    }
     pub async fn info(&self) -> Result<ServerInfo, Error> {
         decode(self.execute("info", json!({})).await?)
     }

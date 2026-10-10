@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod credentials;
+pub use credentials::{ManagedToken, TokenReceipt};
 mod workspace;
 use workspace::*;
 mod feature;
@@ -31,7 +33,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 11;
+pub const FORMAT_VERSION: i32 = 12;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
@@ -195,7 +197,8 @@ impl Application {
         let command: Command = decode(json!({"operation":operation,"input":input}))?;
         let read_only = matches!(
             operation,
-            "list_projects"
+            "list_tokens"
+                | "list_projects"
                 | "get_project"
                 | "list_datasets"
                 | "list_workspaces"
@@ -213,6 +216,10 @@ impl Application {
         let policy = self.policy.as_ref();
         let mut t = self.storage.begin(read_only, self.timeout)?;
         let result = match command {
+            Command::IssueToken(r) => credentials::issue(&mut t, subject, policy, r),
+            Command::ReissueToken(r) => credentials::reissue(&mut t, subject, policy, r),
+            Command::RevokeToken(r) => credentials::revoke(&mut t, subject, policy, r),
+            Command::ListTokens(r) => credentials::list(&mut t, subject, policy, r),
             Command::CreateProject(r) => create_project(&mut t, subject, policy, r),
             Command::ListProjects(r) => list_projects(&mut t, subject, r),
             Command::GetProject(r) => get_project(&mut t, subject, policy, r),
@@ -311,6 +318,10 @@ mod tests {
 #[derive(Deserialize)]
 #[serde(tag = "operation", content = "input", rename_all = "snake_case")]
 enum Command {
+    IssueToken(credentials::Issue),
+    ReissueToken(credentials::Reissue),
+    RevokeToken(credentials::TokenRef),
+    ListTokens(Page),
     CreateProject(Name),
     ListProjects(Page),
     GetProject(Project),

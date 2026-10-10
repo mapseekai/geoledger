@@ -40,6 +40,9 @@ async fn headers(mut req: Request, next: Next) -> Response {
     if let Ok(id) = HeaderValue::from_str(&id) {
         response.headers_mut().insert("x-request-id", id);
     }
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
     response.headers_mut().insert(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
@@ -84,7 +87,7 @@ async fn call(State(s): State<Service>, Path(op): Path<String>, request: Request
     }
 }
 async fn handle(s: &Service, call: &mut Call, op: &str, request: Request) -> Result<Value> {
-    let permit = s.admit(call, request.headers())?;
+    let permit = s.admit(call, request.headers()).await?;
     let body = match tokio::time::timeout(
         s.limits.request_timeout,
         axum::body::to_bytes(request.into_body(), usize::MAX),
@@ -98,7 +101,7 @@ async fn handle(s: &Service, call: &mut Call, op: &str, request: Request) -> Res
     let input = geoledger_engine::parse_json(&body)?;
     if op == "info" {
         return Ok(
-            json!({"version":env!("CARGO_PKG_VERSION"),"backend":s.app.backend(),"format_version":geoledger_engine::FORMAT_VERSION}),
+            json!({"version":env!("CARGO_PKG_VERSION"),"backend":s.app.backend(),"format_version":geoledger_engine::FORMAT_VERSION,"platform_admin":call.subject.as_ref().is_some_and(|v|s.app.policy().admins.contains(v)),"managed_tokens":s.authentication.managed_tokens()}),
         );
     }
     s.execute(call, input, None, permit).await

@@ -256,6 +256,25 @@ export class Client {
       }
     });
   }
+  tokens(p: model.Page = {}): Promise<model.ManagedToken[]> {
+    return this.#call<wire.TokensReply, model.ManagedToken[]>((cb) => this.#rpc.listTokens(page(p), cb), (r) => r.tokens);
+  }
+  /** Preserve requestId on retries; plaintext is returned only on initial success. */
+  issueToken(request: model.IssueTokenRequest): Promise<model.IssuedToken> {
+    return this.#call<wire.IssuedTokenReply, model.IssuedToken>((cb) => this.#rpc.issueToken(request, cb), (r) => {
+      if (!r.credential) throw new Error("Missing credential metadata");
+      return { ...r, credential: r.credential };
+    });
+  }
+  reissueToken(request: model.ReissueTokenRequest): Promise<model.IssuedToken> {
+    return this.#call<wire.IssuedTokenReply, model.IssuedToken>((cb) => this.#rpc.reissueToken(request, cb), (r) => {
+      if (!r.credential) throw new Error("Missing credential metadata");
+      return { ...r, credential: r.credential };
+    });
+  }
+  async revokeToken(tokenId: string): Promise<void> {
+    await this.#call((cb) => this.#rpc.revokeToken({ tokenId }, cb), () => undefined);
+  }
   info(): Promise<model.ServerInfo> {
     return this.#call((cb) => this.#rpc.info({}, cb), convert.decodeServerInfo);
   }
@@ -845,3 +864,5 @@ export class Workspace {
     });
   }
 }
+
+export type { ManagedToken, IssuedToken, IssueTokenRequest, ReissueTokenRequest } from "./models";

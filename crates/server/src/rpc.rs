@@ -148,11 +148,12 @@ impl Service {
             .get("grpc-timeout")
             .and_then(|v| v.to_str().ok())
             .and_then(parse_timeout);
-        let permit = self.admit(call, &headers)?;
+        let permit = self.admit(call, &headers).await?;
         let value = serde_json::to_value(request.into_inner()).map_err(|_| bad())?;
         let value = input(value)?;
         let mut result = self.execute(call, value, timeout, permit).await?;
         result = match call.operation.as_str() {
+            "list_tokens" => json!({"tokens":result}),
             "list_projects" => json!({"projects":result}),
             "list_datasets" => json!({"datasets":result}),
             "list_workspaces" => json!({"workspaces":result}),
@@ -196,7 +197,9 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         let mut call = Call::new("grpc", "save", incoming_id(&request), peer(&request));
         let result = async {
             // Authenticate and reserve capacity before accepting the upload.
-            let permit = self.admit(&mut call, &request.metadata().clone().into_headers())?;
+            let permit = self
+                .admit(&mut call, &request.metadata().clone().into_headers())
+                .await?;
             let timeout = request
                 .metadata()
                 .get("grpc-timeout")
@@ -280,6 +283,7 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         let mut call = Call::new("grpc", "info", incoming_id(&request), peer(&request));
         let admitted = self
             .admit(&mut call, &request.metadata().clone().into_headers())
+            .await
             .map(drop);
         self.finish(&call, admitted).map_err(status)?;
         Ok(with_id(
@@ -287,11 +291,40 @@ impl pb::geo_ledger_server::GeoLedger for Service {
                 version: env!("CARGO_PKG_VERSION").into(),
                 backend: self.app.backend().into(),
                 format_version: geoledger_engine::FORMAT_VERSION as u32,
+                platform_admin: call
+                    .subject
+                    .as_ref()
+                    .is_some_and(|v| self.app.policy().admins.contains(v)),
+                managed_tokens: self.authentication.managed_tokens(),
                 max_request_bytes: 0, // No application-level message byte cap.
                 max_feature_bytes: 0, // No independent per-feature byte limit.
             }),
             &call.request_id,
         ))
+    }
+    async fn list_tokens(
+        &self,
+        request: Request<pb::PageRequest>,
+    ) -> std::result::Result<Response<pb::TokensReply>, Status> {
+        self.call(request, "list_tokens").await
+    }
+    async fn issue_token(
+        &self,
+        request: Request<pb::IssueTokenRequest>,
+    ) -> std::result::Result<Response<pb::IssuedTokenReply>, Status> {
+        self.call(request, "issue_token").await
+    }
+    async fn revoke_token(
+        &self,
+        request: Request<pb::TokenRefRequest>,
+    ) -> std::result::Result<Response<pb::OkReply>, Status> {
+        self.call(request, "revoke_token").await
+    }
+    async fn reissue_token(
+        &self,
+        request: Request<pb::ReissueTokenRequest>,
+    ) -> std::result::Result<Response<pb::IssuedTokenReply>, Status> {
+        self.call(request, "reissue_token").await
     }
     async fn create_project(
         &self,

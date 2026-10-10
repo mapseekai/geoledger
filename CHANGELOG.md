@@ -1,5 +1,11 @@
 # 变更记录
 
+## Unreleased — managed member tokens
+
+- 平台管理员可通过控制台或四语言 SDK 签发、撤销及重新签发成员个人令牌；明文只在首次成功响应返回，重试不重复签发。
+- 存储格式 12：增加受管凭据摘要、操作回执和全局身份审计；格式 11 数据库须保留备份并另建新库，不提供自动升级。
+- 权限页统一卡片宽度与间距，说明成员角色与登录凭据的区别。
+
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)（`0.x` 预发布期间，次版本可能包含破坏性变化，均列在 **Breaking**）。版本契约见 [当前版本契约](docs/api.md#当前版本契约)，漏洞报告见 [安全策略](SECURITY.md)。
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。

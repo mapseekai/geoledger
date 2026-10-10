@@ -445,3 +445,28 @@ func (c *Client) TrackTable(ctx context.Context, project, name string, source Po
 	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, PostgisTable: &pb.PostgisTable{Schema: source.Schema, Table: source.Table, IdColumn: source.IDColumn, GeometryColumn: source.GeometryColumn}}, &r)
 	return r, e
 }
+
+// Tokens lists metadata only; platform administrators are required.
+func (c *Client) Tokens(ctx context.Context, page Page) ([]ManagedToken, error) {
+	var r struct {
+		Tokens []ManagedToken `json:"tokens"`
+	}
+	e := call(c, ctx, c.rpc.ListTokens, &pb.PageRequest{After: page.After, Limit: limit(page.Limit)}, &r)
+	return r.Tokens, e
+}
+
+// IssueToken returns plaintext only on initial success. Preserve requestID when retrying.
+func (c *Client) IssueToken(ctx context.Context, requestID, subject, label, expiresAt string) (IssuedToken, error) {
+	var r IssuedToken
+	e := call(c, ctx, c.rpc.IssueToken, &pb.IssueTokenRequest{RequestId: requestID, Subject: subject, Label: label, ExpiresAt: expiresAt}, &r)
+	return r, e
+}
+func (c *Client) ReissueToken(ctx context.Context, requestID, tokenID, label, expiresAt string) (IssuedToken, error) {
+	var r IssuedToken
+	e := call(c, ctx, c.rpc.ReissueToken, &pb.ReissueTokenRequest{RequestId: requestID, TokenId: tokenID, Label: label, ExpiresAt: expiresAt}, &r)
+	return r, e
+}
+func (c *Client) RevokeToken(ctx context.Context, tokenID string) error {
+	var r struct{ OK bool }
+	return call(c, ctx, c.rpc.RevokeToken, &pb.TokenRefRequest{TokenId: tokenID}, &r)
+}

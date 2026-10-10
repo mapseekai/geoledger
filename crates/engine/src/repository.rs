@@ -15,7 +15,7 @@ pub trait StorageBackend: Send + Sync {
     fn pool_stats(&self) -> Option<crate::PoolStats> {
         None
     }
-    /// Write every table to `out` from one consistent snapshot (see `DataSummary`).
+    /// Export project/version tables from one consistent snapshot; global credentials are excluded.
     fn export(
         &self,
         out: &mut dyn std::io::Write,
@@ -56,6 +56,29 @@ pub struct FeatureQuery {
 /// All methods are scoped by a validated project; authorization remains in Application.
 /// begin_merge/stage_merge are transaction-local staging, never durable publication.
 pub trait RepositoryTransaction: Send {
+    /// Serialize global credential mutations and their audit/receipt writes until commit.
+    fn lock_credentials(&mut self) -> Result<()>;
+    fn managed_token(&mut self, id: &str) -> Result<Option<crate::ManagedToken>>;
+    fn managed_subject(&mut self, digest: &str, now: &str) -> Result<Option<String>>;
+    fn list_tokens(&mut self, after: &str, limit: i64) -> Result<Vec<crate::ManagedToken>>;
+    fn insert_token(&mut self, token: &crate::ManagedToken, digest: &str) -> Result<()>;
+    fn revoke_token(&mut self, id: &str, now: &str) -> Result<()>;
+    fn token_receipt(&mut self, actor: &str, request: &str) -> Result<Option<crate::TokenReceipt>>;
+    fn save_token_receipt(
+        &mut self,
+        actor: &str,
+        request: &str,
+        payload: &str,
+        token_id: &str,
+    ) -> Result<()>;
+    fn append_token_audit(
+        &mut self,
+        actor: &str,
+        action: &str,
+        token_id: &str,
+        detail: &str,
+    ) -> Result<()>;
+
     /// (role, project state) for an active member of a project that is not deleted.
     fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>>;
     fn project_head(&mut self, project: &str, lock: bool) -> Result<Option<Row>>;

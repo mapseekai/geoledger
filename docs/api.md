@@ -231,7 +231,7 @@ Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / ar
 
 当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-当前存储格式为 11，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+当前存储格式为 12，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
 
 `Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 为 `0` 也表示不设应用层固定请求字节上限。
 
@@ -263,3 +263,16 @@ Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓�
 | Python | `track_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
 
 原表要求和发布事务见 [已有业务表](storage.md#已有业务表)。
+
+## 成员令牌管理
+
+`Info` 增加 `platform_admin` 和 `managed_tokens`（TS 为 `platformAdmin`/`managedTokens`）。受管令牌管理要求本地令牌模式和平台管理员身份；不授予项目成员权限。
+
+| RPC / HTTP 操作 | 请求 | 结果 |
+|---|---|---|
+| `ListTokens` / `list_tokens` | `after`, `limit` | 按 ID 分页的元数据，不含摘要或明文 |
+| `IssueToken` / `issue_token` | `request_id`, `subject`, `label`, `expires_at` | `credential`, 可选 `token`, `replayed` |
+| `ReissueToken` / `reissue_token` | `request_id`, `token_id`, `label`, `expires_at` | 原子撤销旧令牌并签发，结果同上 |
+| `RevokeToken` / `revoke_token` | `token_id` | `ok`；重复撤销成功 |
+
+SDK 对应 `tokens`、`issue_token`、`reissue_token`、`revoke_token`；Go 使用大写驼峰，TS 使用小写驼峰。时间使用 RFC 3339，`expires_at` 必須晚于当前时间。签发重试保留原 UUID 和参数；`replayed=true` 时绝不返回明文，请撤销对应 ID 后创建新请求。CLI 可通过 `gl call issue_token ...` 等操作调用同一接口。安全和部署说明见 [成员令牌](security.md#控制台签发成员令牌)。

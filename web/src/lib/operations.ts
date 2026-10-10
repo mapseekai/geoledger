@@ -8,6 +8,25 @@ export async function execute(
 ): Promise<unknown> {
   const r = requestSchema.parse(input);
   switch (r.action) {
+    case "tokens":
+      return client.tokens(r);
+    case "issueToken":
+      return client.issueToken({
+        requestId: r.requestId,
+        subject: r.subject,
+        label: r.label,
+        expiresAt: r.expiresAt,
+      });
+    case "reissueToken":
+      return client.reissueToken({
+        requestId: r.requestId,
+        tokenId: r.tokenId,
+        label: r.label,
+        expiresAt: r.expiresAt,
+      });
+    case "revokeToken":
+      await client.revokeToken(r.tokenId);
+      return { ok: true };
     case "info":
       return client.info();
     case "projects":

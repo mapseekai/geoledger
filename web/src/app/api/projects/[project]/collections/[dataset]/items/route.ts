@@ -21,6 +21,7 @@ export async function GET(
     );
     const lease = clients().acquire(token);
     try {
+      if (token.startsWith("glmt_")) await lease.client.info();
       return geoReply(await featureCollection(lease.client, query));
     } catch (error) {
       if (error instanceof GeoLedgerError && error.code === "unauthenticated") {

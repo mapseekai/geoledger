@@ -581,7 +581,86 @@ fn sqlite_error(source: rusqlite::Error) -> Error {
     Error::new(status, "storage operation failed").caused_by(source)
 }
 
+fn token_row(r: Row) -> Result<crate::ManagedToken> {
+    Ok(crate::ManagedToken {
+        id: r.get(0usize)?,
+        subject: r.get(1usize)?,
+        label: r.get(2usize)?,
+        created_by: r.get(3usize)?,
+        created_at: r.get(4usize)?,
+        expires_at: r.get(5usize)?,
+        revoked_at: r.get(6usize)?,
+    })
+}
 impl crate::repository::RepositoryTransaction for SqlTransaction {
+    fn lock_credentials(&mut self) -> Result<()> {
+        if matches!(self.0.backend, Backend::Postgis(_)) {
+            self.query_one("SELECT pg_advisory_xact_lock(7885)::text", &[])?;
+        }
+        Ok(())
+    }
+    fn managed_token(&mut self, id: &str) -> Result<Option<crate::ManagedToken>> {
+        self.query_opt("SELECT id,subject,label,created_by,created_at,expires_at,revoked_at FROM gl_managed_tokens WHERE id=$1", &[&id])?.map(token_row).transpose()
+    }
+    fn managed_subject(&mut self, digest: &str, now: &str) -> Result<Option<String>> {
+        self.query_opt("SELECT subject FROM gl_managed_tokens WHERE digest=$1 AND revoked_at IS NULL AND expires_at>$2", &[&digest,&now])?.map(|r|r.get(0usize)).transpose()
+    }
+    fn list_tokens(&mut self, after: &str, limit: i64) -> Result<Vec<crate::ManagedToken>> {
+        self.query("SELECT id,subject,label,created_by,created_at,expires_at,revoked_at FROM gl_managed_tokens WHERE id>$1 ORDER BY id LIMIT $2", &[&after,&limit])?.into_iter().map(token_row).collect()
+    }
+    fn insert_token(&mut self, r: &crate::ManagedToken, digest: &str) -> Result<()> {
+        self.execute("INSERT INTO gl_managed_tokens(id,digest,subject,label,created_by,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)", &[&r.id,&digest,&r.subject,&r.label,&r.created_by,&r.created_at,&r.expires_at])
+    }
+    fn revoke_token(&mut self, id: &str, now: &str) -> Result<()> {
+        self.execute(
+            "UPDATE gl_managed_tokens SET revoked_at=$2 WHERE id=$1 AND revoked_at IS NULL",
+            &[&id, &now],
+        )
+    }
+    fn token_receipt(&mut self, actor: &str, request: &str) -> Result<Option<crate::TokenReceipt>> {
+        self.query_opt(
+            "SELECT payload,token_id FROM gl_token_receipts WHERE actor=$1 AND request_id=$2",
+            &[&actor, &request],
+        )?
+        .map(|r| {
+            Ok(crate::TokenReceipt {
+                payload: r.get(0usize)?,
+                token_id: r.get(1usize)?,
+            })
+        })
+        .transpose()
+    }
+    fn save_token_receipt(
+        &mut self,
+        actor: &str,
+        request: &str,
+        payload: &str,
+        token_id: &str,
+    ) -> Result<()> {
+        self.execute(
+            "INSERT INTO gl_token_receipts(actor,request_id,payload,token_id) VALUES($1,$2,$3,$4)",
+            &[&actor, &request, &payload, &token_id],
+        )
+    }
+    fn append_token_audit(
+        &mut self,
+        actor: &str,
+        action: &str,
+        token_id: &str,
+        detail: &str,
+    ) -> Result<()> {
+        self.execute(
+            "INSERT INTO gl_token_audit(id,actor,action,token_id,detail) VALUES($1,$2,$3,$4,$5)",
+            &[
+                &uuid::Uuid::new_v4().to_string(),
+                &actor,
+                &action,
+                &token_id,
+                &detail,
+            ],
+        )
+    }
+
     fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>> {
         self.query_opt(
             &self.lock_sql(

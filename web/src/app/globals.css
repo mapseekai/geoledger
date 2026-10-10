@@ -1012,8 +1012,16 @@ label {
   font-size: 12px;
   color: var(--text-muted);
 }
-.form-grid {
-  max-width: 640px;
+.access-layout {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+.access-layout > .panel {
+  min-width: 0;
+}
+.access-layout > .panel > .card-form {
+  max-width: 680px;
 }
 .card-form {
   padding: 20px;
@@ -1584,9 +1592,6 @@ label {
   }
   .mobile-close {
     display: inline-flex;
-  }
-  .form-grid {
-    max-width: 640px;
   }
   .topbar {
     padding: 0 20px;

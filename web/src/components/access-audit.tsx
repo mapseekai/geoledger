@@ -2,6 +2,7 @@
 import { call, type Audit, type Member, type Project } from "@/lib/browser-api";
 import { pretty } from "@/lib/geojson";
 import { CircleCheck, Lock, ScrollText, Users } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { Empty, ErrorBox, Loading, Modal, Notice, usePage } from "./common";
 import { Panel, PanelTitle, time, useAction } from "./resource-shared";
@@ -24,14 +25,27 @@ import {
   TableHeader,
   TableRow,
 } from "./ui/table";
-export function Access({ project }: { project: Project }) {
+export function Access({
+  project,
+  canManageTokens,
+}: {
+  project: Project;
+  canManageTokens?: boolean;
+}) {
   const task = useAction();
   const [success, setSuccess] = useState("");
   const [refresh, setRefresh] = useState(0);
-  const owner = project.role === "owner";
+  const owner = project.role === "owner" || project.role === "admin";
   return (
-    <div className="form-grid">
-      <Panel toolbar={<PanelTitle title="设置成员权限" />}>
+    <div className="access-layout">
+      <Panel
+        toolbar={
+          <PanelTitle
+            title="设置成员权限"
+            description="为已有身份分配此项目的访问权限。"
+          />
+        }
+      >
         <form
           className="card-form"
           onSubmit={(e) => {
@@ -61,10 +75,23 @@ export function Access({ project }: { project: Project }) {
               id="subject"
               name="subject"
               required
-              placeholder="令牌或身份提供方中的 subject"
+              placeholder="例如 alice（身份标识 subject）"
+              aria-describedby="member-login-help"
               maxLength={128}
             />
           </div>
+          <p id="member-login-help" className="muted">
+            此处不会创建账号或生成登录令牌。请先由管理员签发个人访问令牌，
+            成员身份须与令牌对应的 subject
+            一致；保存权限后，成员使用自己的令牌登录控制台。
+          </p>
+          {canManageTokens && (
+            <p>
+              <Link href="/tokens" className="text-primary underline">
+                前往成员令牌管理
+              </Link>
+            </p>
+          )}
           <div className="field">
             <Label htmlFor="member-role">项目角色</Label>
             <Select name="role" defaultValue="viewer">
@@ -108,7 +135,7 @@ const roleLabels: Record<string, string> = {
 function Members({ project, refresh }: { project: Project; refresh: number }) {
   const task = useAction();
   const [removed, setRemoved] = useState(0);
-  const owner = project.role === "owner";
+  const owner = project.role === "owner" || project.role === "admin";
   const page = usePage<Member>(async (after) => {
     const rows = await call<Member[]>({
       action: "members",

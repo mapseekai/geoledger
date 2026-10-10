@@ -29,6 +29,11 @@ impl Authentication {
             *current = Arc::new(authenticator);
         }
     }
+    pub(crate) fn managed_tokens(&self) -> bool {
+        self.0
+            .read()
+            .is_ok_and(|a| matches!(a.as_ref(), Authenticator::Tokens(_)))
+    }
     pub(crate) fn authenticate(&self, headers: &HeaderMap) -> Option<String> {
         let current = self.0.read().ok()?.clone();
         match current.as_ref() {

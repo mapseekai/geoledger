@@ -1,7 +1,7 @@
 //! Logical export, import and verification of a whole database as JSON lines.
 //!
 //! File layout (one JSON object per line):
-//! 1. header `{"geoledger_export":1,"format":11,"backend":"sqlite"}`
+//! 1. header `{"geoledger_export":1,"format":12,"backend":"sqlite"}`
 //! 2. per table, in foreign-key order: `{"table":..,"columns":[..]}`, one
 //!    `{"r":[..]}` line per row, then `{"table_end":..,"rows":N,"digest":hex}`
 //! 3. trailer `{"end":true,"checksum":hex}` where checksum is the SHA-256 hash of
@@ -36,7 +36,7 @@ struct Table {
     key: usize,
 }
 use Kind::{Bool, Int, Text};
-/// Portable version tables of format 11 in foreign-key order. Spatial indexes
+/// Portable version tables of format 12 in foreign-key order. Spatial indexes
 /// and gl_format are rebuilt; business-table binding state stays with its source.
 const TABLES: &[Table] = &[
     Table {

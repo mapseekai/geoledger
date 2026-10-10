@@ -1,7 +1,7 @@
 """GeoLedger business client. Network protocol and generated types are private."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from math import isfinite
 from threading import RLock
 from typing import Any
@@ -14,7 +14,23 @@ import grpc as _grpc
 from ._internal.v1 import geoledger_pb2 as _pb
 from ._internal.v1.geoledger_pb2_grpc import GeoLedgerStub as _Stub
 
-__all__ = ["Client", "Workspace", "Project", "Member", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
+__all__ = ["ManagedToken", "IssuedToken", "Client", "Workspace", "Project", "Member", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
+
+@dataclass(frozen=True)
+class ManagedToken:
+    id: str
+    subject: str
+    label: str
+    created_by: str
+    created_at: str
+    expires_at: str
+    revoked_at: str | None = None
+
+@dataclass(frozen=True)
+class IssuedToken:
+    credential: ManagedToken
+    replayed: bool = False
+    token: str | None = field(default=None, repr=False)
 
 @dataclass(frozen=True)
 class Project:
@@ -110,7 +126,7 @@ def _error(error):
         pass  # Malformed optional metadata must not hide the original failure.
     return GeoLedgerError(codes.get(error.code(), "unavailable"), error.details() or "request failed", uncertain=uncertain)
 
-_REQUESTS = {"RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDatasetRequest", "DeleteDataset": "DeleteDatasetRequest", "Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
+_REQUESTS = {"ListTokens":"PageRequest", "IssueToken":"IssueTokenRequest", "ReissueToken":"ReissueTokenRequest", "RevokeToken":"TokenRefRequest", "RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDatasetRequest", "DeleteDataset": "DeleteDatasetRequest", "Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
              "SetMember": "MemberRequest", "CreateDataset": "DatasetRequest", "ListDatasets": "ProjectPageRequest",
              "CreateWorkspace": "ProjectRequest", "ListWorkspaces": "ProjectPageRequest", "GetWorkspace": "WorkspaceRequest",
              "Save": "SaveRequest", "Discard": "VersionRequest", "Features": "FeaturesRequest", "Diff": "DiffRequest",
@@ -193,6 +209,21 @@ class Client:
             return _decode(reply)
         except (ValueError, TypeError) as e:
             raise GeoLedgerError("invalid_response", "invalid data received from server", uncertain=True) from None
+
+    def tokens(self, *, after: str = "", limit: int = 100) -> list[ManagedToken]:
+        return [ManagedToken(**r) for r in self._call("ListTokens", after=after, limit=limit)["tokens"]]
+
+    def issue_token(self, request_id: str, subject: str, label: str, expires_at: str) -> IssuedToken:
+        """Preserve request_id on retries; plaintext is returned only once."""
+        r = self._call("IssueToken", request_id=request_id, subject=subject, label=label, expires_at=expires_at)
+        return IssuedToken(ManagedToken(**r["credential"]), r.get("replayed", False), r.get("token"))
+
+    def reissue_token(self, request_id: str, token_id: str, label: str, expires_at: str) -> IssuedToken:
+        r = self._call("ReissueToken", request_id=request_id, token_id=token_id, label=label, expires_at=expires_at)
+        return IssuedToken(ManagedToken(**r["credential"]), r.get("replayed", False), r.get("token"))
+
+    def revoke_token(self, token_id: str) -> None:
+        self._call("RevokeToken", token_id=token_id)
 
     def info(self) -> dict[str, Any]:
         return self._call("Info")

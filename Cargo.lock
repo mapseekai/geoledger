@@ -717,10 +717,12 @@ name = "geoledger-engine"
 version = "0.3.0-alpha.1"
 dependencies = [
  "bytes",
+ "chrono",
  "geo",
  "geojson",
  "geoledger-core",
  "geoledger-spatialite",
+ "getrandom 0.4.3",
  "native-tls",
  "postgres",
  "postgres-native-tls",

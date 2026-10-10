@@ -306,3 +306,31 @@ test("map preview bounds cover collections and preserve the original exact text"
     ),
   );
 });
+
+test("credential issuance preserves request IDs and validates the request", async () => {
+  const request = {
+    action: "issueToken",
+    requestId: "733fcf66-a9a6-4636-9496-cc7d831f7789",
+    subject: "alice",
+    label: "work",
+    expiresAt: "2099-01-01T00:00:00Z",
+  };
+  const client = {
+    issueToken: async (r: unknown) => {
+      const { action, ...expected } = request;
+      assert.deepEqual(r, expected);
+      return { replayed: true };
+    },
+  } as unknown as Client;
+  assert.deepEqual(await execute(client, request), { replayed: true });
+  for (const change of [
+    { requestId: "bad" },
+    { expiresAt: "tomorrow" },
+    { subject: "" },
+  ]) {
+    assert.equal(
+      requestSchema.safeParse({ ...request, ...change }).success,
+      false,
+    );
+  }
+});

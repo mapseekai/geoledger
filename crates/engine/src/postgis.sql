@@ -1,8 +1,8 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
 CREATE FUNCTION gl_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' AND TG_TABLE_NAME<>'gl_audit_events' AND EXISTS(SELECT 1 FROM gl_purge WHERE project=OLD.project) THEN RETURN OLD; END IF; RAISE EXCEPTION 'immutable version record'; END $$;
 CREATE FUNCTION gl_json_field(value text, key text) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT value::jsonb ->> key $$;
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=11));
-INSERT INTO gl_format VALUES(true,11);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=12));
+INSERT INTO gl_format VALUES(true,12);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head bigint NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -99,3 +99,19 @@ CREATE FUNCTION gl_source_track() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
  END IF;
  RETURN NULL;
 END $$;
+
+-- Global identity resources are excluded from project logical exports.
+CREATE TABLE gl_managed_tokens (
+ id text PRIMARY KEY, digest text NOT NULL UNIQUE,
+ subject text NOT NULL, label text NOT NULL, created_by text NOT NULL,
+ created_at text NOT NULL, expires_at text NOT NULL, revoked_at text,
+ CHECK(expires_at>created_at));
+CREATE TABLE gl_token_receipts (
+ actor text NOT NULL, request_id text NOT NULL, payload text NOT NULL,
+ token_id text NOT NULL REFERENCES gl_managed_tokens(id), PRIMARY KEY(actor,request_id));
+CREATE TABLE gl_token_audit (
+ id text PRIMARY KEY, actor text NOT NULL, action text NOT NULL,
+ token_id text NOT NULL REFERENCES gl_managed_tokens(id), detail text NOT NULL);
+CREATE FUNCTION gl_credential_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'immutable credential record'; END $$;
+CREATE TRIGGER gl_token_audit_immutable BEFORE UPDATE OR DELETE ON gl_token_audit FOR EACH ROW EXECUTE FUNCTION gl_credential_immutable();
+CREATE TRIGGER gl_token_receipts_immutable BEFORE UPDATE OR DELETE ON gl_token_receipts FOR EACH ROW EXECUTE FUNCTION gl_credential_immutable();

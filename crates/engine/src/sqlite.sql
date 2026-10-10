@@ -1,6 +1,6 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=11));
-INSERT INTO gl_format VALUES(true,11);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=12));
+INSERT INTO gl_format VALUES(true,12);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -66,3 +66,20 @@ CREATE TRIGGER gl_history_update BEFORE UPDATE ON gl_history WHEN NOT (
 OLD.valid_to IS NULL AND NEW.valid_to IS NOT NULL AND OLD.project=NEW.project AND OLD.dataset=NEW.dataset AND OLD.feature_id=NEW.feature_id AND OLD.valid_from=NEW.valid_from AND OLD.properties IS NEW.properties AND OLD.geometry_json IS NEW.geometry_json AND OLD.geom IS NEW.geom AND OLD.geom_z IS NEW.geom_z)
 BEGIN SELECT RAISE(ABORT,'immutable history'); END;
 CREATE TRIGGER gl_history_delete BEFORE DELETE ON gl_history WHEN NOT EXISTS (SELECT 1 FROM gl_purge WHERE project=OLD.project) BEGIN SELECT RAISE(ABORT,'immutable history'); END;
+
+-- Global identity resources are excluded from project logical exports.
+CREATE TABLE gl_managed_tokens (
+ id text PRIMARY KEY, digest text NOT NULL UNIQUE,
+ subject text NOT NULL, label text NOT NULL, created_by text NOT NULL,
+ created_at text NOT NULL, expires_at text NOT NULL, revoked_at text,
+ CHECK(expires_at>created_at));
+CREATE TABLE gl_token_receipts (
+ actor text NOT NULL, request_id text NOT NULL, payload text NOT NULL,
+ token_id text NOT NULL REFERENCES gl_managed_tokens(id), PRIMARY KEY(actor,request_id));
+CREATE TABLE gl_token_audit (
+ id text PRIMARY KEY, actor text NOT NULL, action text NOT NULL,
+ token_id text NOT NULL REFERENCES gl_managed_tokens(id), detail text NOT NULL);
+CREATE TRIGGER gl_token_audit_update BEFORE UPDATE ON gl_token_audit BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
+CREATE TRIGGER gl_token_audit_delete BEFORE DELETE ON gl_token_audit BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
+CREATE TRIGGER gl_token_receipts_update BEFORE UPDATE ON gl_token_receipts BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
+CREATE TRIGGER gl_token_receipts_delete BEFORE DELETE ON gl_token_receipts BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;

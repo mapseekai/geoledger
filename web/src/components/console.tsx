@@ -22,6 +22,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Access, AuditPanel } from "./access-audit";
+import { TokensPanel } from "./tokens";
 import { Brand } from "./brand";
 import { MapConfigProvider } from "./map-config";
 import type { RasterBasemap } from "@/lib/basemap";
@@ -41,6 +42,7 @@ type Section = {
   scoped: boolean;
 };
 const sections: Section[] = [
+  { id: "tokens", title: "成员令牌", icon: Shield, scoped: false },
   {
     id: "projects",
     title: "项目",
@@ -86,7 +88,7 @@ const sections: Section[] = [
 ];
 const groups = [
   { label: "数据管理", ids: ["projects", "datasets", "workspaces", "history"] },
-  { label: "系统管理", ids: ["access", "audit", "service"] },
+  { label: "系统管理", ids: ["access", "tokens", "audit", "service"] },
 ];
 export function Console({
   section,
@@ -201,6 +203,11 @@ export function Console({
             <div className="nav-group" key={group.label}>
               <div className="sidebar-label">{group.label}</div>
               {group.ids.map((id) => {
+                if (
+                  id === "tokens" &&
+                  !(info?.platformAdmin && info.managedTokens)
+                )
+                  return null;
                 const item = sections.find((s) => s.id === id)!;
                 const active = section === item.id;
                 return (
@@ -321,6 +328,19 @@ export function Console({
           <ErrorBox message={error} />
           {section === "projects" ? (
             <Projects info={info} />
+          ) : section === "tokens" ? (
+            info ? (
+              info.platformAdmin && info.managedTokens ? (
+                <TokensPanel />
+              ) : (
+                <Empty
+                  icon={Shield}
+                  title="此功能仅对本地令牌模式的平台管理员开放"
+                />
+              )
+            ) : (
+              !error && <Loading />
+            )
           ) : section === "service" ? (
             !error && <ServiceInfo info={info} />
           ) : projectId === undefined && resolved ? (
@@ -351,7 +371,14 @@ export function Console({
               {section === "history" && (
                 <HistoryPanel project={project} writable={writable} />
               )}
-              {section === "access" && <Access project={project} />}
+              {section === "access" && (
+                <Access
+                  project={project}
+                  canManageTokens={
+                    !!(info?.platformAdmin && info.managedTokens)
+                  }
+                />
+              )}
               {section === "audit" && <AuditPanel project={project} />}
             </>
           )}
