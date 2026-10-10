@@ -2,6 +2,7 @@
 pub(crate) mod pgtls;
 pub(crate) mod portable;
 pub(crate) mod postgres;
+mod tables;
 use crate::repository::{RepositoryTransaction, StorageBackend};
 use crate::{Error, FORMAT_VERSION, Result, Storage};
 use rusqlite::functions::FunctionFlags;
@@ -479,7 +480,52 @@ impl SqlTransaction {
             }
         }
     }
-    pub(crate) fn spatial_filter(&self, alias: &str, table: &str, enabled: bool) -> String {
+    fn sparse_spatial_candidates(
+        &mut self,
+        table: &str,
+        r: &crate::repository::FeatureQuery,
+    ) -> Result<bool> {
+        let Some(bbox) = r.bbox else { return Ok(false) };
+        if r.feature_id.is_some() || !matches!(self.0.backend, Backend::Sqlite(_)) {
+            return Ok(false);
+        }
+        // Small Rtree results avoid even the bounded feature-key probe below.
+        let cap = r.limit.saturating_mul(4);
+        let count: i64 = self.query_one(&format!("SELECT count(*) FROM (
+            SELECT pkid FROM idx_gl_{table}_geom WHERE xmin<=$3 AND xmax>=$1 AND ymin<=$4 AND ymax>=$2
+            UNION ALL SELECT pkid FROM idx_gl_{table}_geom_z WHERE xmin<=$3 AND xmax>=$1 AND ymin<=$4 AND ymax>=$2 LIMIT $5
+        )"), &[&bbox[0], &bbox[1], &bbox[2], &bbox[3], &cap])?.get(0usize)?;
+        if count < cap {
+            return Ok(true);
+        }
+        // Global Rtree density says nothing about this dataset or cursor. Only
+        // use key order when a bounded prefix proves it can fill this page.
+        let (scope, visible, visibility_columns) = if table == "history" {
+            (
+                "project=$1 AND dataset=$2 AND feature_id>$5",
+                "valid_from<=$3 AND (valid_to IS NULL OR valid_to>$3) AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c INDEXED BY sqlite_autoindex_gl_workspace_changes_1 WHERE c.project=$1 AND c.workspace=$4 AND c.dataset=$2 AND c.feature_id=prefix.feature_id)",
+                ",valid_from,valid_to",
+            )
+        } else {
+            (
+                "project=$1 AND workspace=$4 AND dataset=$2 AND feature_id>$5",
+                "CAST($3 AS bigint) IS NOT NULL",
+                "",
+            )
+        };
+        let count: i64 = self.query_one(
+            &format!("WITH prefix AS MATERIALIZED (SELECT feature_id,properties IS NOT NULL AS present,geom,geom_z{visibility_columns} FROM gl_{table} INDEXED BY sqlite_autoindex_gl_{table}_1 WHERE {scope} ORDER BY feature_id LIMIT $10) SELECT count(*) FROM (SELECT 1 FROM prefix WHERE present AND ({visible}) AND (ST_Intersects(geom,BuildMbr($6,$7,$8,$9,4326))=1 OR ST_Intersects(geom_z,BuildMbr($6,$7,$8,$9,4326))=1) LIMIT $11)"),
+            &[&r.project, &r.dataset, &r.revision, &r.workspace, &r.after, &bbox[0], &bbox[1], &bbox[2], &bbox[3], &cap, &r.limit],
+        )?.get(0usize)?;
+        Ok(count < r.limit)
+    }
+    pub(crate) fn spatial_filter(
+        &self,
+        alias: &str,
+        table: &str,
+        enabled: bool,
+        candidates: bool,
+    ) -> String {
         // Cast unused parameters too: PostgreSQL prepares a single typed parameter vector.
         if !enabled {
             return "NOT $7 AND CAST($8 AS double precision) IS NOT NULL AND CAST($9 AS double precision) IS NOT NULL AND CAST($10 AS double precision) IS NOT NULL AND CAST($11 AS double precision) IS NOT NULL".into();
@@ -493,9 +539,22 @@ impl SqlTransaction {
             Backend::Postgis(_) => {
                 format!("$7 AND ST_Intersects({a}geom,ST_MakeEnvelope($8,$9,$10,$11,4326))")
             }
-            Backend::Sqlite(_) => format!(
-                "$7 AND (({a}rowid IN (SELECT pkid FROM idx_gl_{table}_geom WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9) AND ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,4326))=1) OR ({a}rowid IN (SELECT pkid FROM idx_gl_{table}_geom_z WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9) AND ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,4326))=1))"
+            Backend::Sqlite(_) if !candidates => format!(
+                "$7 AND (ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,4326))=1 OR ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,4326))=1)"
             ),
+            // +0 retains scalar rowid point lookup even after a stale one-row ANALYZE estimate.
+            Backend::Sqlite(_) => format!(
+                "$7 AND {a}feature_id IN (SELECT (SELECT feature_id FROM gl_{table} WHERE rowid=spatial_candidates.pkid+0) FROM (SELECT pkid FROM idx_gl_{table}_geom WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9 UNION ALL SELECT pkid FROM idx_gl_{table}_geom_z WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9) spatial_candidates) AND (ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,4326))=1 OR ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,4326))=1)"
+            ),
+        }
+    }
+    fn workspace_key_table(&self) -> &'static str {
+        match self.0.backend {
+            // ANALYZE on a new database can retain a one-row estimate after drafts grow.
+            Backend::Sqlite(_) => {
+                "gl_workspace_changes INDEXED BY sqlite_autoindex_gl_workspace_changes_1"
+            }
+            Backend::Postgis(_) => "gl_workspace_changes",
         }
     }
     pub(crate) fn commit(mut self) -> Result<()> {
@@ -558,10 +617,21 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         } else {
             "CAST($6 AS text) IS NULL"
         };
-        let spatial_filter = self.spatial_filter("h", "history", r.bbox.is_some());
-        let draft_spatial_filter = self.spatial_filter("", "workspace_changes", r.bbox.is_some());
+        let sparse_history = self.sparse_spatial_candidates("history", r)?;
+        let sparse_draft = self.sparse_spatial_candidates("workspace_changes", r)?;
+        let spatial_filter = self.spatial_filter("h", "history", r.bbox.is_some(), sparse_history);
+        let draft_spatial_filter =
+            self.spatial_filter("", "workspace_changes", r.bbox.is_some(), sparse_draft);
+        let (spatial_lookup, draft_lookup) = if matches!(self.0.backend, Backend::Sqlite(_)) {
+            (
+                " INDEXED BY sqlite_autoindex_gl_history_1",
+                " INDEXED BY sqlite_autoindex_gl_workspace_changes_1",
+            )
+        } else {
+            ("", "")
+        };
         let sql = format!("WITH base AS MATERIALIZED (
-            SELECT h.feature_id,h.properties,h.geometry_json FROM gl_history h
+            SELECT h.feature_id,h.properties,h.geometry_json FROM gl_history h{spatial_lookup}
             WHERE h.project=$1 AND h.dataset=$2
               AND h.valid_from<=$3 AND (h.valid_to IS NULL OR h.valid_to>$3)
               AND h.properties IS NOT NULL AND h.feature_id>$5 AND {key_filter}
@@ -570,7 +640,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
                 WHERE c.project=h.project AND c.dataset=h.dataset AND c.feature_id=h.feature_id AND c.workspace=$4)
             ORDER BY h.feature_id LIMIT $12
           ), draft AS MATERIALIZED (
-            SELECT feature_id,properties,geometry_json FROM gl_workspace_changes
+            SELECT feature_id,properties,geometry_json FROM gl_workspace_changes{draft_lookup}
             WHERE project=$1 AND dataset=$2 AND workspace=$4
               AND properties IS NOT NULL AND feature_id>$5 AND {key_filter}
               AND ({draft_spatial_filter})
@@ -607,7 +677,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn dataset_exists(&mut self, project: &str, dataset: &str) -> Result<Option<Row>> {
         self.query_opt(
-            "SELECT geometry_type,name,coordinate_dimension FROM gl_datasets WHERE project=$1 AND id=$2",
+            "SELECT geometry_type,name,coordinate_dimension,postgis_source FROM gl_datasets WHERE project=$1 AND id=$2",
             &[&project, &dataset],
         )
     }
@@ -707,7 +777,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         coordinate_dimension: i32,
     ) -> Result<()> {
         self.execute(
-            "INSERT INTO gl_datasets VALUES($1,$2,$3,$4,$5)",
+            "INSERT INTO gl_datasets(project,id,name,geometry_type,coordinate_dimension) VALUES($1,$2,$3,$4,$5)",
             &[
                 &project,
                 &dataset,
@@ -716,6 +786,34 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
                 &coordinate_dimension,
             ],
         )
+    }
+    fn inspect_postgis_table(&mut self, source: &crate::PostgisTable) -> Result<Row> {
+        let metadata = self.inspect_source(source)?;
+        Ok(Row::new(vec![
+            Cell::Text(metadata.family),
+            Cell::Integer(metadata.dimension.into()),
+        ]))
+    }
+    fn postgis_table_page(
+        &mut self,
+        source: &crate::PostgisTable,
+        after: &str,
+    ) -> Result<Vec<Row>> {
+        self.source_page(source, after)
+    }
+    fn bind_postgis_table(
+        &mut self,
+        project: &str,
+        dataset: &str,
+        source: &crate::PostgisTable,
+    ) -> Result<()> {
+        let metadata =
+            serde_json::to_string(&self.inspect_source(source)?).map_err(Error::stored_json)?;
+        self.execute(
+            "UPDATE gl_datasets SET postgis_source=$3 WHERE project=$1 AND id=$2",
+            &[&project, &dataset, &metadata],
+        )?;
+        self.guard_source(source)
     }
     fn rename_project(&mut self, project: &str, name: &str) -> Result<()> {
         self.execute(
@@ -730,6 +828,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         )
     }
     fn purge_data(&mut self, project: &str, dataset: Option<&str>) -> Result<()> {
+        self.release_sources(project, dataset)?;
         self.execute("INSERT INTO gl_purge VALUES($1)", &[&project])?;
         if let Some(dataset) = dataset {
             // Capture only workspaces touched by this dataset, including published drafts.
@@ -803,7 +902,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn list_datasets(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
         self.query(
-            "SELECT id,name,geometry_type,coordinate_dimension FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
+            "SELECT id,name,geometry_type,coordinate_dimension,postgis_source FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
             &[&project, &after, &limit],
         )
     }
@@ -846,7 +945,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) VALUES($1,$2,$3,$4,$5,$6,{values}) ON CONFLICT(project,workspace,dataset,feature_id) DO UPDATE SET properties=excluded.properties,geometry_json=excluded.geometry_json,{updates}", columns=self.geometry_columns(), values=self.geometry_values("$6")), &[&project, &workspace, &dataset, &key, &properties, &geometry])
     }
     fn invalidate_resolutions(&mut self, project: &str, workspace: &str) -> Result<()> {
-        self.execute("UPDATE gl_workspace_changes SET resolution_stale=true WHERE project=$1 AND workspace=$2 AND resolved_head IS NOT NULL", &[&project, &workspace])
+        self.execute("UPDATE gl_workspace_changes SET resolution_stale=true WHERE project=$1 AND workspace=$2 AND resolved_head IS NOT NULL AND NOT resolution_stale", &[&project, &workspace])
     }
     fn has_resolution(
         &mut self,
@@ -855,7 +954,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         dataset: &str,
         key: &str,
     ) -> Result<Row> {
-        self.query_one("SELECT EXISTS(SELECT 1 FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL)", &[&project, &workspace, &dataset, &key])
+        self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL)", self.workspace_key_table()), &[&project, &workspace, &dataset, &key])
     }
     fn remove_delta(
         &mut self,
@@ -864,7 +963,13 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         dataset: &str,
         key: &str,
     ) -> Result<()> {
-        self.execute("DELETE FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4", &[&project, &workspace, &dataset, &key])
+        self.execute(
+            &format!(
+                "DELETE FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",
+                self.workspace_key_table()
+            ),
+            &[&project, &workspace, &dataset, &key],
+        )
     }
     fn count_deltas(&mut self, project: &str, workspace: &str) -> Result<Row> {
         self.query_one(
@@ -961,6 +1066,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,NULLIF(before_value,'null'),after_value FROM gl_merge_stage", &[&project, &revision])
     }
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
+        self.sync_sources(project)?;
         self.execute("UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL", &[&project, &revision])
     }
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
@@ -993,7 +1099,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         key: &str,
         head: i64,
     ) -> Result<()> {
-        self.execute("UPDATE gl_workspace_changes SET resolved_head=$5,resolution_stale=false WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4", &[&project, &workspace, &dataset, &key, &head])
+        self.execute(&format!("UPDATE {} SET resolved_head=$5,resolution_stale=false WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4", self.workspace_key_table()), &[&project, &workspace, &dataset, &key, &head])
     }
     fn stage_resolution(&mut self, dataset: &str, key: &str, after: &Option<String>) -> Result<()> {
         self.execute(
@@ -1003,7 +1109,10 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn clear_deltas(&mut self, project: &str, workspace: &str) -> Result<()> {
         self.execute(
-            "DELETE FROM gl_workspace_changes WHERE project=$1 AND workspace=$2",
+            &format!(
+                "DELETE FROM {} WHERE project=$1 AND workspace=$2",
+                self.workspace_key_table()
+            ),
             &[&project, &workspace],
         )
     }
@@ -1327,3 +1436,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "session/query_performance_tests.rs"]
+mod query_performance_tests;

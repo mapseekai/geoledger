@@ -124,7 +124,14 @@ export interface Member {
 
 export type GeometryType = "point" | "line" | "polygon";
 
+export interface PostgisTable {
+  schema: string;
+  table: string;
+  idColumn: string;
+  geometryColumn: string;
+}
 export interface Dataset {
+  postgisTable?: PostgisTable;
   geometryType: GeometryType;
   coordinateDimension: 2 | 3;
   id: string;

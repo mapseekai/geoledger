@@ -1,11 +1,5 @@
 "use client";
-import {
-  call,
-  type Dataset,
-  type GeometryType,
-  type Info,
-  type Project,
-} from "@/lib/browser-api";
+import { call, type Dataset, type Info, type Project } from "@/lib/browser-api";
 import {
   ArrowRight,
   Database,
@@ -26,6 +20,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { Empty, ErrorBox, Loading, listPage, usePage } from "./common";
+import { CreateDatasetDialog } from "./create-dataset";
 import { FeatureExplorer } from "./features";
 import {
   NameDialog,
@@ -37,14 +32,6 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Label } from "./ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
 import {
   Table,
   TableBody,
@@ -211,7 +198,7 @@ export function Projects({ info }: { info?: Info }) {
           confirmName={manage.remove ? manage.item.name : undefined}
           description={
             manage.remove
-              ? `删除「${manage.item.name}」及全部数据集、工作区和版本历史，此操作不可撤销。`
+              ? `删除「${manage.item.name}」及全部数据集、工作区和版本历史；已绑定的业务表保留。此操作不可撤销。`
               : undefined
           }
           close={() => setManage(undefined)}
@@ -273,15 +260,16 @@ function Stat({
 export function Datasets({
   project,
   writable,
+  backend,
 }: {
+  backend?: string;
   project: Project;
   writable: boolean;
 }) {
   const [selected, setSelected] = useState<Dataset>(),
     [create, setCreate] = useState(false),
     [refresh, setRefresh] = useState(0);
-  const [geometryType, setGeometryType] = useState<GeometryType>("point");
-  const [coordinateDimension, setCoordinateDimension] = useState<2 | 3>(2);
+  const [initialWorkspace, setInitialWorkspace] = useState<string>();
   const [manage, setManage] = useState<{ item: Dataset; remove: boolean }>();
   const page = usePage<Dataset>(
     async (after) =>
@@ -301,8 +289,12 @@ export function Datasets({
         key={selected.id}
         project={project}
         dataset={selected}
+        initialWorkspace={initialWorkspace}
         writable={writable}
-        back={() => setSelected(undefined)}
+        back={() => {
+          setSelected(undefined);
+          setInitialWorkspace(undefined);
+        }}
       />
     );
   return (
@@ -345,6 +337,11 @@ export function Datasets({
                       </span>
                       {d.name}
                     </Button>
+                    {d.postgisTable && (
+                      <span className="muted">
+                        {d.postgisTable.schema}.{d.postgisTable.table}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell>
                     {{ point: "点", line: "线", polygon: "面" }[d.geometryType]}{" "}
@@ -395,7 +392,9 @@ export function Datasets({
           confirmName={manage.remove ? manage.item.name : undefined}
           description={
             manage.remove
-              ? `删除「${manage.item.name}」的要素、工作区变更和版本历史；保留其他数据集的记录，清理空记录。此操作不可撤销。`
+              ? manage.item.postgisTable
+                ? `解除「${manage.item.name}」的绑定并清理 GeoLedger 版本记录，保留原业务表和当前数据。此操作不可撤销。`
+                : `删除「${manage.item.name}」的要素、工作区变更和版本历史；保留其他数据集的记录，清理空记录。此操作不可撤销。`
               : undefined
           }
           close={() => setManage(undefined)}
@@ -422,59 +421,22 @@ export function Datasets({
         />
       )}
       {create && (
-        <NameDialog
-          title="创建数据集"
-          close={() => setCreate(false)}
-          submit={async (name) => {
-            await call({
-              action: "createDataset",
-              project: project.id,
-              name,
-              geometryType,
-              coordinateDimension,
-            });
+        <CreateDatasetDialog
+          project={project.id}
+          backend={backend}
+          close={() => {
             setCreate(false);
             setRefresh((n) => n + 1);
             page.reset();
           }}
-        >
-          <Label htmlFor="geometry-type">几何类型</Label>
-          <Select
-            value={geometryType}
-            onValueChange={(value) => setGeometryType(value as GeometryType)}
-          >
-            <SelectTrigger id="geometry-type" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              <SelectItem value="point">点（Point / MultiPoint）</SelectItem>
-              <SelectItem value="line">
-                线（LineString / MultiLineString）
-              </SelectItem>
-              <SelectItem value="polygon">
-                面（Polygon / MultiPolygon）
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <Label htmlFor="coordinate-dimension">坐标维度</Label>
-          <Select
-            value={String(coordinateDimension)}
-            onValueChange={(value) =>
-              setCoordinateDimension(Number(value) as 2 | 3)
-            }
-          >
-            <SelectTrigger id="coordinate-dimension" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              <SelectItem value="2">二维（XY）</SelectItem>
-              <SelectItem value="3">三维（XYZ）</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="muted">
-            创建后不可更改类型和维度；后续新增和修改必须与数据集一致。
-          </p>
-        </NameDialog>
+          created={(dataset, workspace) => {
+            setCreate(false);
+            setRefresh((n) => n + 1);
+            page.reset();
+            setInitialWorkspace(workspace);
+            if (workspace || dataset.postgisTable) setSelected(dataset);
+          }}
+        />
       )}
     </>
   );

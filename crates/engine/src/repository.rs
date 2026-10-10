@@ -112,6 +112,17 @@ pub trait RepositoryTransaction: Send {
         geometry_type: &str,
         coordinate_dimension: i32,
     ) -> Result<()>;
+    /// Validate and lock a business table; returns (geometry family, dimension).
+    fn inspect_postgis_table(&mut self, source: &crate::PostgisTable) -> Result<Row>;
+    /// Source rows (id, properties JSON, geometry JSON), ordered by id with C collation.
+    fn postgis_table_page(&mut self, source: &crate::PostgisTable, after: &str)
+    -> Result<Vec<Row>>;
+    fn bind_postgis_table(
+        &mut self,
+        project: &str,
+        dataset: &str,
+        source: &crate::PostgisTable,
+    ) -> Result<()>;
     fn rename_project(&mut self, project: &str, name: &str) -> Result<()>;
     fn rename_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()>;
     /// Purge the selected dataset, or all project data. Caller holds the project lock.

@@ -77,7 +77,14 @@ export type Project = {
 };
 export type Member = { subject: string; role: string };
 export type GeometryType = "point" | "line" | "polygon";
+export type PostgisTable = {
+  schema: string;
+  table: string;
+  idColumn: string;
+  geometryColumn: string;
+};
 export type Dataset = {
+  postgisTable?: PostgisTable;
   id: string;
   name: string;
   geometryType: GeometryType;

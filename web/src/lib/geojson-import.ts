@@ -234,3 +234,42 @@ export function importBatch(
   }
   return rows.slice(offset, end);
 }
+
+/** Infer the immutable dataset shape from all non-null geometries before creation. */
+export function importedShape(
+  rows: ImportedFeature[],
+): { geometryType: GeometryType; coordinateDimension: 2 | 3 } | undefined {
+  const families = new Set<GeometryType>();
+  const dimensions = new Set<2 | 3>();
+  function visit(value: unknown) {
+    if (!object(value)) return;
+    if (value.type === "GeometryCollection") {
+      (value.geometries as unknown[]).forEach(visit);
+      return;
+    }
+    const family = String(value.type).includes("Point")
+      ? "point"
+      : String(value.type).includes("LineString")
+        ? "line"
+        : "polygon";
+    families.add(family);
+    function dimension(v: unknown) {
+      if (!Array.isArray(v) || !v.length) return;
+      if (Array.isArray(v[0])) v.forEach(dimension);
+      else dimensions.add(v.length as 2 | 3);
+    }
+    dimension(value.coordinates);
+  }
+  rows.forEach((row) =>
+    visit((parseLosslessJson(row.raw) as { geometry: unknown }).geometry),
+  );
+  if (families.size > 1 || dimensions.size > 1)
+    throw new Error(
+      "请按点、线、面以及 XY、XYZ 分成独立文件，每个文件创建一个数据集。",
+    );
+  if (!families.size) return undefined;
+  return {
+    geometryType: [...families][0],
+    coordinateDimension: [...dimensions][0] ?? 2,
+  };
+}

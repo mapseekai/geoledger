@@ -37,6 +37,16 @@ const variants = {
     geometryType: z.enum(["point", "line", "polygon"]),
     coordinateDimension: z.union([z.literal(2), z.literal(3)]).default(2),
   },
+  attachPostgisTable: {
+    ...project,
+    name: text(256),
+    source: z.strictObject({
+      schema: text(63),
+      table: text(63),
+      idColumn: text(63),
+      geometryColumn: text(63),
+    }),
+  },
   workspaces: { ...project, ...page },
   createWorkspace: project,
   workspace,
@@ -106,6 +116,10 @@ export const requestSchema = z.discriminatedUnion("action", [
   z.strictObject({
     action: z.literal("createDataset"),
     ...variants.createDataset,
+  }),
+  z.strictObject({
+    action: z.literal("attachPostgisTable"),
+    ...variants.attachPostgisTable,
   }),
   z.strictObject({ action: z.literal("workspaces"), ...variants.workspaces }),
   z.strictObject({

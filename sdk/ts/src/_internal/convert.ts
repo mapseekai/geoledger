@@ -56,6 +56,7 @@ export function decodeDataset(v: wire.DatasetReply): Dataset {
   if (!["point", "line", "polygon"].includes(v.geometryType))
     throw new Error("Invalid dataset geometry type");
   return {
+    ...(v.postgisTable ? { postgisTable: v.postgisTable } : {}),
     id: v.dataset,
     name: v.name,
     geometryType: v.geometryType as Dataset["geometryType"],

@@ -78,6 +78,7 @@ export interface DatasetRequest {
   geometryType: string;
   /** 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset. */
   coordinateDimension: number;
+  postgisTable?: PostgisTable | undefined;
 }
 
 export interface WorkspaceRequest {
@@ -203,6 +204,7 @@ export interface DatasetReply {
   geometryType: string;
   /** 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset. */
   coordinateDimension: number;
+  postgisTable?: PostgisTable | undefined;
 }
 
 export interface DatasetsReply {
@@ -391,6 +393,14 @@ export interface ChangeSummaryReply {
   datasets: DatasetChangeCounts[];
   version?: string | undefined;
   revision?: string | undefined;
+}
+
+/** Existing table in the server database. Geometry type/dimension are inferred. */
+export interface PostgisTable {
+  schema: string;
+  table: string;
+  idColumn: string;
+  geometryColumn: string;
 }
 
 function createBaseDataChunk(): DataChunk {
@@ -1163,7 +1173,7 @@ export const DeleteProjectRequest: MessageFns<DeleteProjectRequest> = {
 };
 
 function createBaseDatasetRequest(): DatasetRequest {
-  return { project: "", name: "", geometryType: "", coordinateDimension: 0 };
+  return { project: "", name: "", geometryType: "", coordinateDimension: 0, postgisTable: undefined };
 }
 
 export const DatasetRequest: MessageFns<DatasetRequest> = {
@@ -1179,6 +1189,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     }
     if (message.coordinateDimension !== 0) {
       writer.uint32(32).uint32(message.coordinateDimension);
+    }
+    if (message.postgisTable !== undefined) {
+      PostgisTable.encode(message.postgisTable, writer.uint32(42).fork()).join();
     }
     return writer;
   },
@@ -1228,6 +1241,14 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
             message.coordinateDimension = reader.uint32();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.postgisTable = PostgisTable.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1254,6 +1275,11 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
         : isSet(object.coordinate_dimension)
         ? globalThis.Number(object.coordinate_dimension)
         : 0,
+      postgisTable: isSet(object.postgisTable)
+        ? PostgisTable.fromJSON(object.postgisTable)
+        : isSet(object.postgis_table)
+        ? PostgisTable.fromJSON(object.postgis_table)
+        : undefined,
     };
   },
 
@@ -1271,6 +1297,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     if (message.coordinateDimension !== 0) {
       obj.coordinateDimension = Math.round(message.coordinateDimension);
     }
+    if (message.postgisTable !== undefined) {
+      obj.postgisTable = PostgisTable.toJSON(message.postgisTable);
+    }
     return obj;
   },
 
@@ -1283,6 +1312,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     message.name = object.name ?? "";
     message.geometryType = object.geometryType ?? "";
     message.coordinateDimension = object.coordinateDimension ?? 0;
+    message.postgisTable = (object.postgisTable !== undefined && object.postgisTable !== null)
+      ? PostgisTable.fromPartial(object.postgisTable)
+      : undefined;
     return message;
   },
 };
@@ -3305,7 +3337,7 @@ export const OkReply: MessageFns<OkReply> = {
 };
 
 function createBaseDatasetReply(): DatasetReply {
-  return { dataset: "", name: "", geometryType: "", coordinateDimension: 0 };
+  return { dataset: "", name: "", geometryType: "", coordinateDimension: 0, postgisTable: undefined };
 }
 
 export const DatasetReply: MessageFns<DatasetReply> = {
@@ -3321,6 +3353,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     }
     if (message.coordinateDimension !== 0) {
       writer.uint32(32).uint32(message.coordinateDimension);
+    }
+    if (message.postgisTable !== undefined) {
+      PostgisTable.encode(message.postgisTable, writer.uint32(42).fork()).join();
     }
     return writer;
   },
@@ -3370,6 +3405,14 @@ export const DatasetReply: MessageFns<DatasetReply> = {
             message.coordinateDimension = reader.uint32();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.postgisTable = PostgisTable.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3396,6 +3439,11 @@ export const DatasetReply: MessageFns<DatasetReply> = {
         : isSet(object.coordinate_dimension)
         ? globalThis.Number(object.coordinate_dimension)
         : 0,
+      postgisTable: isSet(object.postgisTable)
+        ? PostgisTable.fromJSON(object.postgisTable)
+        : isSet(object.postgis_table)
+        ? PostgisTable.fromJSON(object.postgis_table)
+        : undefined,
     };
   },
 
@@ -3413,6 +3461,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     if (message.coordinateDimension !== 0) {
       obj.coordinateDimension = Math.round(message.coordinateDimension);
     }
+    if (message.postgisTable !== undefined) {
+      obj.postgisTable = PostgisTable.toJSON(message.postgisTable);
+    }
     return obj;
   },
 
@@ -3425,6 +3476,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     message.name = object.name ?? "";
     message.geometryType = object.geometryType ?? "";
     message.coordinateDimension = object.coordinateDimension ?? 0;
+    message.postgisTable = (object.postgisTable !== undefined && object.postgisTable !== null)
+      ? PostgisTable.fromPartial(object.postgisTable)
+      : undefined;
     return message;
   },
 };
@@ -6593,6 +6647,131 @@ export const ChangeSummaryReply: MessageFns<ChangeSummaryReply> = {
     message.datasets = object.datasets?.map((e) => DatasetChangeCounts.fromPartial(e)) || [];
     message.version = object.version ?? undefined;
     message.revision = object.revision ?? undefined;
+    return message;
+  },
+};
+
+function createBasePostgisTable(): PostgisTable {
+  return { schema: "", table: "", idColumn: "", geometryColumn: "" };
+}
+
+export const PostgisTable: MessageFns<PostgisTable> = {
+  encode(message: PostgisTable, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.schema !== "") {
+      writer.uint32(10).string(message.schema);
+    }
+    if (message.table !== "") {
+      writer.uint32(18).string(message.table);
+    }
+    if (message.idColumn !== "") {
+      writer.uint32(26).string(message.idColumn);
+    }
+    if (message.geometryColumn !== "") {
+      writer.uint32(34).string(message.geometryColumn);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PostgisTable {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePostgisTable();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.schema = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.table = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.idColumn = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.geometryColumn = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PostgisTable {
+    return {
+      schema: isSet(object.schema) ? globalThis.String(object.schema) : "",
+      table: isSet(object.table) ? globalThis.String(object.table) : "",
+      idColumn: isSet(object.idColumn)
+        ? globalThis.String(object.idColumn)
+        : isSet(object.id_column)
+        ? globalThis.String(object.id_column)
+        : "",
+      geometryColumn: isSet(object.geometryColumn)
+        ? globalThis.String(object.geometryColumn)
+        : isSet(object.geometry_column)
+        ? globalThis.String(object.geometry_column)
+        : "",
+    };
+  },
+
+  toJSON(message: PostgisTable): unknown {
+    const obj: any = {};
+    if (message.schema !== "") {
+      obj.schema = message.schema;
+    }
+    if (message.table !== "") {
+      obj.table = message.table;
+    }
+    if (message.idColumn !== "") {
+      obj.idColumn = message.idColumn;
+    }
+    if (message.geometryColumn !== "") {
+      obj.geometryColumn = message.geometryColumn;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PostgisTable>, I>>(base?: I): PostgisTable {
+    return PostgisTable.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PostgisTable>, I>>(object: I): PostgisTable {
+    const message = createBasePostgisTable();
+    message.schema = object.schema ?? "";
+    message.table = object.table ?? "";
+    message.idColumn = object.idColumn ?? "";
+    message.geometryColumn = object.geometryColumn ?? "";
     return message;
   },
 };

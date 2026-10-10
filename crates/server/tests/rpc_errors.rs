@@ -150,6 +150,7 @@ async fn large_conflicts_fit_trailers_and_keep_paginated_details() -> TestResult
     );
     let duplicate = client
         .create_dataset(authenticated(pb::DatasetRequest {
+            postgis_table: None,
             coordinate_dimension: 2,
             geometry_type: "point".into(),
             project,

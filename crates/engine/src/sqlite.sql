@@ -1,6 +1,6 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=8));
-INSERT INTO gl_format VALUES(true,8);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=11));
+INSERT INTO gl_format VALUES(true,11);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -13,6 +13,7 @@ CREATE TABLE gl_datasets (
  project text REFERENCES gl_projects(id), id text NOT NULL, name text NOT NULL,
  geometry_type text NOT NULL CHECK(geometry_type IN ('point','line','polygon')),
  coordinate_dimension integer NOT NULL DEFAULT 2 CHECK(coordinate_dimension IN (2,3)),
+ postgis_source text,
  PRIMARY KEY(project,id), UNIQUE(project,name));
 CREATE TABLE gl_workspaces (
  project text NOT NULL, id text NOT NULL, owner text NOT NULL, base_revision INTEGER NOT NULL CHECK(base_revision>=0),
@@ -25,6 +26,7 @@ CREATE TABLE gl_workspace_changes (
  FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id),
  FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id),
  CHECK(properties IS NULL OR json_type(properties)='object'), CHECK(properties IS NOT NULL OR geometry_json IS NULL));
+CREATE INDEX workspace_active_resolutions ON gl_workspace_changes(project,workspace) WHERE resolved_head IS NOT NULL AND NOT resolution_stale;
 CREATE TABLE gl_commits (
  project text NOT NULL REFERENCES gl_projects(id), revision INTEGER NOT NULL CHECK(revision>0),
  workspace text NOT NULL, subject text NOT NULL, message text NOT NULL, created_at text NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

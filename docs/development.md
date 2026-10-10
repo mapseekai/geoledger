@@ -101,6 +101,8 @@ SDK 示例与测试会写入新的测试项目，请使用专用测试服务。C
 
 ## 容量验证
 
+[真实文件性能测试](performance.md) 提供 Rust 流式 RPC 客户端、固定速率 HTTP 压测、已有 PostGIS 表纳管测量，以及进程内存记录和复现命令。
+
 [容量测试](../crates/engine/tests/capacity.rs) 在百万 Point 要素上运行 20 个独立身份的分页查询、草稿保存、发布、原请求重试与读取，并核对版本和历史一致性。
 
 ```sh
@@ -186,3 +188,9 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 该用例在临时 SQLite/SpatiaLite 库保存、发布整份面数据，检查原生 BLOB 数量、变更统计、带 bbox 的全量分页，并逐要素对比原始属性与坐标；不会修改输入文件或运行中的业务库。耗时输出仅代表本机存储路径，不包含浏览器上传与网络传输。
 
 2026-10-09 本机隔离验证：SpatiaLite 5.1.0、release 构建，LUCC 文件 133,151,432 字节、9,384 个 MultiPolygon。保存 144.88 秒，发布 100.63 秒，提交统计 36.46 毫秒，带全范围 bbox 的完整分页与逐要素数值核对 12.53 秒。所有要素的坐标与属性数值一致（JSON 的 `112.0` 与 `112` 按精确数值等价比较），全部具有原生几何 BLOB。上述为单次本机存储验证，现有格式 7 业务库及服务保持不变。
+
+### 已有 PostGIS 表回归
+
+`./scripts/check.sh` 在设置 `GL_TEST_DATABASE_URL` 后执行 `postgis_table` 专项测试，覆盖初始快照、管理员权限、原表增删改、约束失败回滚、重复发布、撤销、外部修改检测、逻辑导入独立副本和解绑保留。
+
+`scripts/test-console-postgis.py` 验证完整 Web 接入与发布。使用隔离 PostGIS 服务，在当前数据库准备 `business.roads(id bigint PRIMARY KEY, name text NOT NULL, geom geometry(LineString,4326))` 及一条要素，并通过 `GL_ADMIN_SUBJECTS=admin` 授权测试管理员。脚本接收与上传测试相同的 `--url`、`--token-file`、`--chromium` 和 `--screenshots` 参数。

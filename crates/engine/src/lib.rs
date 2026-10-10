@@ -31,7 +31,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 8;
+pub const FORMAT_VERSION: i32 = 11;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
@@ -224,7 +224,7 @@ impl Application {
             Command::RenameProject(r) => rename_project(&mut t, subject, policy, r),
             Command::RenameDataset(r) => rename_dataset(&mut t, subject, r),
             Command::DeleteDataset(r) => delete_dataset(&mut t, subject, policy, r),
-            Command::CreateDataset(r) => create_dataset(&mut t, subject, r),
+            Command::CreateDataset(r) => create_dataset(&mut t, subject, policy, r),
             Command::ListDatasets(r) => list_datasets(&mut t, subject, r),
             Command::CreateWorkspace(r) => create_workspace(&mut t, subject, r),
             Command::ListWorkspaces(r) => list_workspaces(&mut t, subject, r),
@@ -345,4 +345,14 @@ enum Command {
 
 pub fn parse_json(bytes: &[u8]) -> Result<Value> {
     codec::parse(bytes)
+}
+
+/// An existing business table in the server's PostgreSQL database.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PostgisTable {
+    pub schema: String,
+    pub table: String,
+    pub id_column: String,
+    pub geometry_column: String,
 }

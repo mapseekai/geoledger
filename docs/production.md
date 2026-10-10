@@ -107,7 +107,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 | GL_DATA_TIMEOUT_SECS | backup、export、import、verify 命令的期限，默认 3600 |
 | RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
-启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 8；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
+启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 11；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
 
 根目录 [.env.example](../.env.example) 提供当前服务配置模板，列出服务端和 `gl` 的全部 `GL_*` 参数及默认值，[check-env.py](../scripts/check-env.py) 在 `check.sh` 中校验它与代码一致。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
 
@@ -164,7 +164,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 ### 存储格式
 
-当前存储格式为 8，包含项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
+当前存储格式为 11，包含项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
 
 - 同格式部署沿用原数据目录，启动后检查 `/ready`、项目列表与历史查询。
 - 存储格式变化时，使用独立的新数据库，通过当前 CLI 或 SDK 导入源业务要素。
@@ -241,3 +241,7 @@ SQLite 观察数据库文件与 WAL 文件大小。两种后端都为数据卷�
 固定 `GL_WEB_ORIGIN`；随机 `GL_WEB_SESSION_SECRET` 只在运行时配置，多实例共享。
 反向代理设置请求体、连接数与登录速率限制。Web 和服务端的内部连接应限制在
 可信网络，跨网络使用 gRPC TLS。`compose.yaml` 的 console profile 提供本地组合启动。
+
+### 业务表纳管部署
+
+将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，配置 `GL_ADMIN_SUBJECTS` 授权表接入操作。使用格式 11 的独立初始化环境；部署前保存业务数据库备份。服务账号需要锁表、创建触发器和业务表增删改权限。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。

@@ -1327,12 +1327,20 @@ fn native_geometry_preserves_nested_collections_and_empty_features() -> TestResu
         .unwrap()
         .to_owned();
     for geometry in [
+        json!({"type":"GeometryCollection","geometries":[{"type":"MultiPoint","coordinates":[[1,2,3],[4,5,6]]},{"type":"Point","coordinates":[7,8,9]}]}),
         json!({"type":"MultiPoint","coordinates":[]}),
         json!({"type":"GeometryCollection","geometries":[]}),
         json!({"type":"GeometryCollection","geometries":[{"type":"MultiPoint","coordinates":[]},{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2,3]}]}]}),
     ] {
         let w = f.ws(&f.alice);
-        f.save(&f.alice, &w, 0, json!({}), geometry.clone())?;
+        f.save(&f.alice, &w, 0, json!({}), geometry.clone())
+            .inspect_err(|error| {
+                let mut cause = std::error::Error::source(error);
+                while let Some(e) = cause {
+                    eprintln!("geometry {geometry}: {e:?}");
+                    cause = e.source();
+                }
+            })?;
         assert_eq!(f.get(&f.alice, Some(&w))["geometry"], geometry);
         f.publish(&f.alice, &w, 1)?;
         assert_eq!(f.get(&f.alice, None)["geometry"], geometry);

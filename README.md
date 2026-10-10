@@ -4,7 +4,7 @@
 
 GeoLedger 为道路、地块、监测点等空间要素提供版本控制。团队成员在独立工作区中编辑 GeoJSON，通过属性三方合并、冲突解决和原子发布形成共享版本；历史查询、提交撤销、成员权限与审计帮助追踪和管理数据变化。
 
-当前版本为 `0.3.0-alpha.1`，存储格式为 8。默认 SQLite + SpatiaLite（Docker 镜像包含扩展），可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
+当前版本为 `0.3.0-alpha.1`，存储格式为 11。默认 SQLite + SpatiaLite（Docker 镜像包含扩展），可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
 
 ## 获取代码
 
@@ -44,7 +44,7 @@ curl --fail http://127.0.0.1:7881/ready
 ./target/debug/gl --token-file ./geoledger-data/admin-credentials.json info
 ```
 
-就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 8 等服务信息。首次启动直接创建格式 8 的数据库、服务端摘要文件 `tokens.json` 和客户端凭证文件 `admin-credentials.json`。CLI 和控制台使用客户端凭证中的令牌。
+就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 11 等服务信息。首次启动直接创建格式 11 的数据库、服务端摘要文件 `tokens.json` 和客户端凭证文件 `admin-credentials.json`。CLI 和控制台使用客户端凭证中的令牌。
 
 ### Web 开发服务
 
@@ -54,7 +54,7 @@ curl --fail http://127.0.0.1:7881/ready
 npm --prefix web run dev
 ```
 
-访问 `http://localhost:3000`，使用管理员分配的令牌登录。控制台提供项目、数据集、工作区、版本历史、访问权限、审计日志与服务信息。第一条要素的操作流程见 [管理控制台](docs/console.md)。
+访问 `http://localhost:3000`，使用管理员分配的令牌登录。控制台提供项目、数据集、工作区、版本历史、访问权限、审计日志与服务信息。创建数据集时可上传 GeoJSON 文件并自动识别类型与维度；PostGIS 可由平台管理员接入当前业务数据库中的已有表，发布同步修改原表。第一条要素的操作流程见 [管理控制台](docs/console.md)。
 
 ## 构建、测试与部署
 
@@ -73,7 +73,7 @@ cargo build --release --locked --bins
 docker compose up --build -d
 ```
 
-服务端、CLI、SDK 和 Web 控制台按同一发布版本部署。格式 8 的已有数据库可直接沿用；新环境可通过当前格式的备份恢复或逻辑导入导出搬迁完整数据。版本关系见 [当前版本契约](docs/api.md#当前版本契约)，部署配置、持久化、TLS、身份与备份见 [生产运行](docs/production.md)。
+服务端、CLI、SDK 和 Web 控制台按同一发布版本部署。格式 11 的已有数据库可直接沿用；新环境可通过当前格式的备份恢复或逻辑导入导出搬迁完整数据。版本关系见 [当前版本契约](docs/api.md#当前版本契约)，部署配置、持久化、TLS、身份与备份见 [生产运行](docs/production.md)。
 
 ## 贡献
 

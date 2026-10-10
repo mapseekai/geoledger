@@ -338,7 +338,11 @@ export function Console({
               <ProjectContext project={project} />
               {section === "datasets" && (
                 <MapConfigProvider value={basemap}>
-                  <Datasets project={project} writable={writable} />
+                  <Datasets
+                    project={project}
+                    writable={writable}
+                    backend={info?.backend}
+                  />
                 </MapConfigProvider>
               )}
               {section === "workspaces" && (

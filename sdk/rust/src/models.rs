@@ -30,6 +30,7 @@ pub struct Member {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Dataset {
+    pub postgis_table: Option<PostgisTable>,
     pub geometry_type: String,
     pub coordinate_dimension: u32,
     #[serde(rename = "dataset")]
@@ -224,4 +225,12 @@ pub struct ChangeSummary {
     pub datasets: Vec<DatasetChangeCounts>,
     pub version: Option<i64>,
     pub revision: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PostgisTable {
+    pub schema: String,
+    pub table: String,
+    pub id_column: String,
+    pub geometry_column: String,
 }

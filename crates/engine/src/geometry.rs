@@ -49,7 +49,7 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<String>> {
     positions(value, &mut None)?;
     Ok(Some(value.to_string()))
 }
-/// SpatiaLite's JSON parser cannot read nested/empty collection members.
+/// SpatiaLite's JSON parser cannot read nested, multipart or empty collection members.
 /// Flatten only the derived spatial representation; version snapshots stay exact.
 pub(crate) fn spatial_collection(source: &str) -> Result<Option<String>> {
     let value: Value = serde_json::from_str(source).map_err(crate::Error::stored_json)?;
@@ -58,6 +58,15 @@ pub(crate) fn spatial_collection(source: &str) -> Result<Option<String>> {
             if let Some(parts) = value["geometries"].as_array() {
                 for part in parts {
                     collect(part.clone(), out);
+                }
+            }
+        } else if let Some(kind) = value["type"].as_str().and_then(|s| s.strip_prefix("Multi")) {
+            if let Some(parts) = value["coordinates"].as_array() {
+                for coordinates in parts {
+                    collect(
+                        serde_json::json!({"type":kind,"coordinates":coordinates}),
+                        out,
+                    );
                 }
             }
         } else if value["coordinates"]
@@ -69,10 +78,23 @@ pub(crate) fn spatial_collection(source: &str) -> Result<Option<String>> {
     }
     let mut parts = Vec::new();
     collect(value, &mut parts);
+    // SpatiaLite requires type before coordinates/geometries inside collections.
+    let mut parts: Vec<String> = parts
+        .into_iter()
+        .map(|part| {
+            format!(
+                "{{\"type\":{},\"coordinates\":{}}}",
+                part["type"], part["coordinates"]
+            )
+        })
+        .collect();
     Ok(match parts.len() {
         0 => None,
-        1 => parts.pop().map(|v| v.to_string()),
-        _ => Some(serde_json::json!({"type":"GeometryCollection","geometries":parts}).to_string()),
+        1 => parts.pop(),
+        _ => Some(format!(
+            "{{\"type\":\"GeometryCollection\",\"geometries\":[{}]}}",
+            parts.join(",")
+        )),
     })
 }
 /// Topology is diagnostic: preserve source coordinates rather than repairing boundaries.

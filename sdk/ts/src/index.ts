@@ -352,6 +352,18 @@ export class Client {
       convert.decodeDataset,
     );
   }
+  attachPostgisTable(
+    project: string,
+    name: string,
+    postgisTable: model.PostgisTable,
+  ): Promise<model.Dataset> {
+    return this.#call(
+      (cb) => this.#rpc.createDataset({
+        project, name, geometryType: "", coordinateDimension: 0, postgisTable,
+      }, cb),
+      convert.decodeDataset,
+    );
+  }
   datasets(project: string, p: model.Page = {}): Promise<model.Dataset[]> {
     return this.#call<wire.DatasetsReply, model.Dataset[]>(
       (cb) => this.#rpc.listDatasets({ project, ...page(p) }, cb),

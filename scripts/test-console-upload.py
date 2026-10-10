@@ -55,12 +55,11 @@ with sync_playwright() as p:
     project=page.url.split('project=')[1]
     page.get_by_role('button',name='创建数据集',exact=True).click()
     page.get_by_label('名称',exact=True).fill('道路')
-    page.get_by_role('button',name='创建',exact=True).click()
-    page.get_by_role('button',name='道路',exact=True).click()
-    page.get_by_role('button',name='新建工作区',exact=True).click()
-    page.get_by_role('button',name='添加要素',exact=True).click()
-    upload=page.get_by_label('上传 GeoJSON 文件',exact=True)
+    page.get_by_role('combobox',name='数据来源',exact=True).click()
+    page.get_by_role('option',name='上传 GeoJSON 文件',exact=True).click()
+    upload=page.get_by_label('GeoJSON 文件',exact=True)
     upload.set_input_files({'name':'invalid.geojson','mimeType':'application/geo+json','buffer':b'{bad'})
+    page.get_by_role('button',name='创建',exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('有效的 JSON')
     features=[{'type':'Feature','id':f'upload-{i:04d}','properties':{'name':f'Imported {i}','padding':'a'*9000},'geometry':{'type':'Point','coordinates':[104+i/1000,35]}} for i in range(130)]
     features[0]['id']=18446744073709551615
@@ -72,9 +71,9 @@ with sync_playwright() as p:
     raw=json.dumps({'type':'FeatureCollection','features':features}).encode()
     assert len(raw)>1024*1024
     upload.set_input_files({'name':'large.geojson','mimeType':'application/geo+json','buffer':raw})
-    expect(page.get_by_role('status')).to_contain_text('130 个要素')
     saves=[]
     failed=[False]
+    committed=[False]
     def intercept(route):
         body=route.request.post_data_json
         if body.get('action')=='save':
@@ -83,14 +82,24 @@ with sync_playwright() as p:
                 failed[0]=True
                 route.abort()
                 return
+            if len(saves)==4:
+                response=route.fetch()
+                assert response.status==200,response.text()
+                committed[0]=True
+                route.abort()
+                return
         route.continue_()
     page.route('**/api/console',intercept)
-    page.get_by_role('button',name='保存到工作区',exact=True).click()
+    page.get_by_role('button',name='创建',exact=True).click()
     expect(page.get_by_role('alert')).to_be_visible(timeout=30000)
-    expect(page.get_by_role('status').filter(has_text='已保存')).to_contain_text(str(len(saves[0]['edits']))+' 个要素')
-    page.get_by_role('button',name='保存到工作区',exact=True).click()
+    expect(page.get_by_role('status')).to_contain_text('已导入 '+str(len(saves[0]['edits'])))
+    page.get_by_role('button',name='继续导入',exact=True).click()
+    expect(page.get_by_role('alert')).to_be_visible(timeout=30000)
+    assert committed[0]
+    page.get_by_role('button',name='继续导入',exact=True).click()
     expect(page.get_by_role('dialog')).to_have_count(0,timeout=60000)
     assert failed[0]
+    assert saves[3]['edits'] != saves[4]['edits'], 'committed batch must not be saved twice'
     assert saves[1]['edits']==saves[2]['edits']
     assert saves[1]['version']==saves[2]['version']
     dataset=command({'action':'datasets','project':project})[0]['id']
@@ -115,9 +124,45 @@ with sync_playwright() as p:
     published=command({'action':'features','project':project,'dataset':dataset,'featureId':'18446744073709551615'})
     assert len(published['features'][0]['properties']['padding'])==args.feature_bytes
     page.get_by_role('button',name='添加要素',exact=True).click()
+    expect(page.get_by_label('GeoJSON 文件',exact=True)).to_have_count(0)
+    page.get_by_role('button',name='取消',exact=True).click()
+    page.get_by_role('button',name='返回数据集',exact=True).click()
     page.set_viewport_size({'width':390,'height':844})
-    expect(page.get_by_label('上传 GeoJSON 文件',exact=True)).to_be_visible()
+    page.get_by_role('button',name='创建数据集',exact=True).click()
+    page.get_by_role('combobox',name='数据来源',exact=True).click()
+    page.get_by_role('option',name='上传 GeoJSON 文件',exact=True).click()
+    expect(page.get_by_label('GeoJSON 文件',exact=True)).to_be_visible()
     page.screenshot(path=str(shots/'geojson-upload-mobile.png'),full_page=True)
+    page.get_by_label('名称',exact=True).fill('并发导入校验')
+    page.get_by_label('GeoJSON 文件',exact=True).set_input_files({'name':'conflict.geojson','mimeType':'application/geo+json','buffer':raw})
+    page.unroute('**/api/console',intercept)
+    conflicting=[]
+    def concurrent(route):
+        body=route.request.post_data_json
+        if body.get('action')=='save':
+            conflicting.append(body)
+            if len(conflicting)==1:
+                saved=route.fetch()
+                assert saved.status==200,saved.text()
+                edit=dict(body['edits'][0])
+                feature=json.loads(edit['feature'])
+                feature['properties']['concurrent']='preserve me'
+                edit['feature']=json.dumps(feature)
+                changed={**body,'version':saved.json()['version'],'edits':[edit]}
+                response=context.request.post(origin+'/api/console',data=changed,headers={'Origin':origin})
+                assert response.status==200,response.text()
+                route.abort()
+                return
+        route.continue_()
+    page.route('**/api/console',concurrent)
+    page.get_by_role('button',name='创建',exact=True).click()
+    expect(page.get_by_role('alert')).to_be_visible(timeout=30000)
+    page.get_by_role('button',name='继续导入',exact=True).click()
+    expect(page.get_by_role('alert')).to_contain_text('其他修改')
+    assert len(conflicting)==1,'recovery must not overwrite concurrent edits'
+    attempted=conflicting[0]
+    retained=command({'action':'features','project':project,'dataset':attempted['edits'][0]['dataset'],'workspace':attempted['workspace'],'featureId':attempted['edits'][0]['featureId']})
+    assert retained['features'][0]['properties']['concurrent']=='preserve me'
     assert not errors,errors
     browser.close()
-    print('GeoJSON upload: invalid input, >1 MiB, 130 features, interrupted batch resume, exact IDs/properties and mobile passed')
+    print('GeoJSON upload: invalid input, >1 MiB, 130 features, pre-commit retry, lost committed response recovery, concurrent-edit protection, exact IDs/properties and mobile passed')

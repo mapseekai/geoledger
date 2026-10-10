@@ -29,6 +29,7 @@ base="http://127.0.0.1:$http"
 storage=(--storage sqlite)
 [[ -n ${GL_DATABASE_URL:-} ]] && storage=(--storage postgis)
 env -i HOME="$HOME" PATH="$PATH" RUST_LOG=warn ${GL_DATABASE_URL:+"GL_DATABASE_URL=$GL_DATABASE_URL"} \
+  ${GL_SPATIALITE_EXTENSION:+"GL_SPATIALITE_EXTENSION=$GL_SPATIALITE_EXTENSION"} \
   ${GL_DATABASE_ALLOW_PLAINTEXT:+"GL_DATABASE_ALLOW_PLAINTEXT=$GL_DATABASE_ALLOW_PLAINTEXT"} \
   "$server" "${storage[@]}" --data-dir "$work/data" --http "127.0.0.1:$http" --grpc "127.0.0.1:$grpc" \
   --max-concurrency "${GL_MAX_CONCURRENCY:-20}" >"$work/server.log" 2>&1 &

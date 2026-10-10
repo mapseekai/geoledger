@@ -79,16 +79,18 @@ class DeleteProjectRequest(_message.Message):
     def __init__(self, project: _Optional[str] = ..., confirm_name: _Optional[str] = ...) -> None: ...
 
 class DatasetRequest(_message.Message):
-    __slots__ = ("project", "name", "geometry_type", "coordinate_dimension")
+    __slots__ = ("project", "name", "geometry_type", "coordinate_dimension", "postgis_table")
     PROJECT_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     GEOMETRY_TYPE_FIELD_NUMBER: _ClassVar[int]
     COORDINATE_DIMENSION_FIELD_NUMBER: _ClassVar[int]
+    POSTGIS_TABLE_FIELD_NUMBER: _ClassVar[int]
     project: str
     name: str
     geometry_type: str
     coordinate_dimension: int
-    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ...) -> None: ...
+    postgis_table: PostgisTable
+    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ..., postgis_table: _Optional[_Union[PostgisTable, _Mapping]] = ...) -> None: ...
 
 class WorkspaceRequest(_message.Message):
     __slots__ = ("project", "workspace")
@@ -285,16 +287,18 @@ class OkReply(_message.Message):
     def __init__(self, ok: bool = ...) -> None: ...
 
 class DatasetReply(_message.Message):
-    __slots__ = ("dataset", "name", "geometry_type", "coordinate_dimension")
+    __slots__ = ("dataset", "name", "geometry_type", "coordinate_dimension", "postgis_table")
     DATASET_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     GEOMETRY_TYPE_FIELD_NUMBER: _ClassVar[int]
     COORDINATE_DIMENSION_FIELD_NUMBER: _ClassVar[int]
+    POSTGIS_TABLE_FIELD_NUMBER: _ClassVar[int]
     dataset: str
     name: str
     geometry_type: str
     coordinate_dimension: int
-    def __init__(self, dataset: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ...) -> None: ...
+    postgis_table: PostgisTable
+    def __init__(self, dataset: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ..., postgis_table: _Optional[_Union[PostgisTable, _Mapping]] = ...) -> None: ...
 
 class DatasetsReply(_message.Message):
     __slots__ = ("datasets",)
@@ -603,3 +607,15 @@ class ChangeSummaryReply(_message.Message):
     version: int
     revision: int
     def __init__(self, total: _Optional[_Union[ChangeCounts, _Mapping]] = ..., datasets: _Optional[_Iterable[_Union[DatasetChangeCounts, _Mapping]]] = ..., version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
+
+class PostgisTable(_message.Message):
+    __slots__ = ("schema", "table", "id_column", "geometry_column")
+    SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    TABLE_FIELD_NUMBER: _ClassVar[int]
+    ID_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    GEOMETRY_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    schema: str
+    table: str
+    id_column: str
+    geometry_column: str
+    def __init__(self, schema: _Optional[str] = ..., table: _Optional[str] = ..., id_column: _Optional[str] = ..., geometry_column: _Optional[str] = ...) -> None: ...

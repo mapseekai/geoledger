@@ -85,7 +85,7 @@ npm --prefix web run build
 
 生产构建输出至 `web/.next`；浏览器与真实服务联调入口见 [开发指南](../docs/development.md#控制台浏览器验证)。
 
-GeoJSON 文件上传专项浏览器验证：`python3 scripts/test-console-upload.py --url http://localhost:3000 --token-file target/console-test/admin-credentials.json --screenshots /tmp/geoledger-upload-shots`。使用隔离测试服务，验证大于 1 MiB 的文件、多批次导入、中断重试、精确数字和手机上传入口。 添加 `--feature-bytes 12582912` 可验证单个 12 MiB 要素经 Web/BFF/gRPC 流式上传、查询及发布；这是验证用例大小，不是产品上限。
+GeoJSON 文件上传专项浏览器验证：`python3 scripts/test-console-upload.py --url http://localhost:3000 --token-file target/console-test/admin-credentials.json --screenshots /tmp/geoledger-upload-shots`。使用隔离测试服务，验证创建数据集时的文件上传、大于 1 MiB 的文件、多批次导入、中断重试、提交成功后响应丢失的恢复、并发修改保护、精确数字和手机上传入口。 添加 `--feature-bytes 12582912` 可验证单个 12 MiB 要素经 Web/BFF/gRPC 流式上传、查询及发布；这是验证用例大小，不是产品上限。
 
 ### 生产运行
 

@@ -13,7 +13,6 @@ import {
   importBatch,
   assertGeometryType,
   assertCoordinateDimension,
-  geometryLabels,
   type ImportedFeature,
 } from "@/lib/geojson-import";
 import {
@@ -117,14 +116,16 @@ export function FeatureExplorer({
   dataset,
   writable,
   back,
+  initialWorkspace = "",
 }: {
+  initialWorkspace?: string;
   project: Project;
   dataset: Dataset;
   writable: boolean;
   back: () => void;
 }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]),
-    [workspace, setWorkspace] = useState(""),
+    [workspace, setWorkspace] = useState(initialWorkspace),
     [refresh, setRefresh] = useState(0);
   const [workspaceError, setWorkspaceError] = useState("");
   const task = useAction();
@@ -1496,23 +1497,15 @@ export function FeatureEditor({
     }
     close();
   }
-  const [upload, setUpload] = useState<{
-    name: string;
-    features: ImportedFeature[];
-  }>();
   return (
     <Modal
       title={feature === "new" ? "添加要素" : "编辑要素"}
-      description="输入 GeoJSON Feature 或上传文件，保存到工作区后发布生效。"
+      description="编辑 GeoJSON Feature，保存到工作区后发布生效。"
       close={task.busy ? () => {} : close}
     >
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (upload) {
-            void task.run(() => submit(upload.features));
-            return;
-          }
           const form = new FormData(e.currentTarget);
           const id =
             feature === "new" ? String(form.get("id")).trim() : feature.id;
@@ -1529,74 +1522,7 @@ export function FeatureEditor({
           );
         }}
       >
-        {feature === "new" && (
-          <>
-            <Label htmlFor="geojson-file">上传 GeoJSON 文件</Label>
-            <Input
-              id="geojson-file"
-              type="file"
-              accept=".geojson,.json,application/geo+json,application/json"
-              disabled={task.busy}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                setUpload(undefined);
-                setSaved(0);
-                if (!file) return;
-                void task.run(async () => {
-                  const features = await new Promise<ImportedFeature[]>(
-                    (resolve, reject) => {
-                      const worker = new Worker(
-                        new URL(
-                          "../lib/geojson-import.worker.ts",
-                          import.meta.url,
-                        ),
-                      );
-                      worker.onmessage = (
-                        event: MessageEvent<{
-                          rows?: ImportedFeature[];
-                          error?: string;
-                        }>,
-                      ) => {
-                        worker.terminate();
-                        if (event.data.error)
-                          reject(new Error(event.data.error));
-                        else resolve(event.data.rows!);
-                      };
-                      worker.onerror = () => {
-                        worker.terminate();
-                        reject(new Error("GeoJSON 解析失败，请重试。"));
-                      };
-                      worker.postMessage({
-                        file,
-                        family: geometryType,
-                        dimension: coordinateDimension,
-                      });
-                    },
-                  );
-                  setUpload({ name: file.name, features });
-                });
-              }}
-            />
-            <p className="muted">
-              当前数据集类型：{geometryLabels[geometryType]}，
-              {coordinateDimension === 3 ? "三维（XYZ）" : "二维（XY）"}。支持
-              Feature、FeatureCollection 和几何对象，不限制文件大小。 缺少 id
-              时自动生成，已有同名要素将被更新。
-            </p>
-            {task.busy && !upload && (
-              <p role="status">正在解析 GeoJSON 文件…</p>
-            )}
-            {upload && (
-              <p role="status">
-                已读取 {upload.name}，共 {upload.features.length}{" "}
-                个要素，保存后分批导入工作区。
-                {upload.features.some((f) => f.reprojected) &&
-                  " 已将 EPSG:3857 米制坐标转换为 WGS84 经纬度。"}
-              </p>
-            )}
-          </>
-        )}
-        <fieldset disabled={task.busy || !!upload} hidden={!!upload}>
+        <fieldset disabled={task.busy}>
           <Label htmlFor="feature-id">要素标识</Label>
           <Input
             id="feature-id"

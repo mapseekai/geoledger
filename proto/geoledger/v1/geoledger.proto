@@ -85,6 +85,7 @@ message DatasetRequest {
  string geometry_type = 3;
  // 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
  uint32 coordinate_dimension = 4;
+ PostgisTable postgis_table = 5;
 }
 message WorkspaceRequest {
  string project = 1;
@@ -190,6 +191,7 @@ message DatasetReply {
  string geometry_type = 3;
  // 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
  uint32 coordinate_dimension = 4;
+ PostgisTable postgis_table = 5;
 }
 message DatasetsReply {
  repeated DatasetReply datasets = 1;
@@ -339,4 +341,12 @@ message ChangeSummaryReply {
  repeated DatasetChangeCounts datasets = 2;
  optional int64 version = 3;
  optional int64 revision = 4;
+}
+
+// Existing table in the server database. Geometry type/dimension are inferred.
+message PostgisTable {
+ string schema = 1;
+ string table = 2;
+ string id_column = 3;
+ string geometry_column = 4;
 }

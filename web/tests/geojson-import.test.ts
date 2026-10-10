@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { importBatch, importGeojson } from "../src/lib/geojson-import";
+import {
+  importBatch,
+  importGeojson,
+  importedShape,
+} from "../src/lib/geojson-import";
 
 test("imports collections preserving numeric IDs and exact property tokens", () => {
   const rows = importGeojson(
@@ -147,5 +151,37 @@ test("dataset coordinate dimension is enforced before uploading", () => {
   assert.throws(
     () => importGeojson(point([1, 2]), () => "wrong", "point", 3),
     /三维/,
+  );
+});
+
+test("infers shape before creating a dataset and rejects mixed files", () => {
+  const rows = importGeojson(
+    '{"type":"LineString","coordinates":[[1,2,3],[2,3,4]]}',
+  );
+  assert.deepEqual(importedShape(rows), {
+    geometryType: "line",
+    coordinateDimension: 3,
+  });
+  assert.equal(
+    importedShape(
+      importGeojson('{"type":"Feature","properties":{},"geometry":null}'),
+    ),
+    undefined,
+  );
+  assert.throws(
+    () =>
+      importedShape([
+        ...rows,
+        ...importGeojson('{"type":"Point","coordinates":[1,2,3]}'),
+      ]),
+    /独立文件/,
+  );
+  assert.throws(
+    () =>
+      importedShape([
+        ...rows,
+        ...importGeojson('{"type":"LineString","coordinates":[[1,2],[2,3]]}'),
+      ]),
+    /独立文件/,
   );
 });

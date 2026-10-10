@@ -55,13 +55,14 @@ with sync_playwright() as playwright:
    project=report['project'];dataset=report['dataset'];publication=report['publication']
   else:
    project=call({'action':'createProject','name':'LUCC load test '+uuid.uuid4().hex[:8]})['id'];report['project']=project
-   dataset=call({'action':'createDataset','project':project,'name':'LUCC','geometryType':'polygon'})['id'];report['dataset']=dataset
-   page.goto(a.url+'/datasets?project='+project);page.get_by_role('button',name='LUCC',exact=True).click();page.get_by_role('button',name='新建工作区',exact=True).click();page.get_by_role('button',name='添加要素',exact=True).click()
+   page.goto(a.url+'/datasets?project='+project)
+   page.get_by_role('button',name='创建数据集',exact=True).click()
+   page.get_by_label('名称',exact=True).fill('LUCC')
+   page.get_by_role('combobox',name='数据来源',exact=True).click()
+   page.get_by_role('option',name='上传 GeoJSON 文件',exact=True).click()
+   page.get_by_label('GeoJSON 文件',exact=True).set_input_files(a.geojson,timeout=240000)
    page.evaluate('window.__importTicks=0;window.__importTimer=setInterval(()=>window.__importTicks++,50)')
-   started=time.monotonic();page.get_by_label('上传 GeoJSON 文件',exact=True).set_input_files(a.geojson,timeout=240000)
-   expect(page.get_by_role('status').filter(has_text='已读取')).to_be_visible(timeout=240000)
-   report['parse_seconds']=round(time.monotonic()-started,3);report['parse_ui_timer_ticks']=page.evaluate('clearInterval(window.__importTimer);window.__importTicks');report['import_notice']=page.get_by_role('status').filter(has_text='已读取').inner_text();checkpoint();print('Parsed:',report['import_notice'],'in',report['parse_seconds'],'seconds',flush=True)
-   started=time.monotonic();page.get_by_role('button',name='保存到工作区',exact=True).click()
+   started=time.monotonic();page.get_by_role('button',name='创建',exact=True).click()
    deadline=time.monotonic()+a.timeout
    while time.monotonic()<deadline:
     if page.get_by_role('dialog').count()==0:break
@@ -69,6 +70,8 @@ with sync_playwright() as playwright:
     if alerts.count() and alerts.first.inner_text().strip():raise RuntimeError('Upload: '+alerts.first.inner_text())
     page.wait_for_timeout(1000)
    else:raise RuntimeError('Upload exceeded test timeout')
+   dataset=call({'action':'datasets','project':project})[0]['id'];report['dataset']=dataset
+   report['import_ui_timer_ticks']=page.evaluate('clearInterval(window.__importTimer);window.__importTicks')
    report['upload_seconds']=round(time.monotonic()-started,3);report['topology_warning_count']=sum(r.get('topology_warnings',0) for r in report['save_requests']);assert Counter(expected.values())==source_signatures,'Upload changed source properties or geometry';checkpoint();print('Uploaded in',report['upload_seconds'],'seconds',flush=True)
    workspace=call({'action':'workspaces','project':project})[0];report['workspace']=workspace
    started=time.monotonic();page.locator('.map-progress').wait_for(state='hidden',timeout=240000);expect(page.locator('.map-canvas canvas')).to_be_visible(timeout=30000)

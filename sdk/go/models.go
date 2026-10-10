@@ -25,11 +25,18 @@ type Member struct {
 	Role    string `json:"role"`
 }
 
+type PostgisTable struct {
+	Schema         string `json:"schema"`
+	Table          string `json:"table"`
+	IDColumn       string `json:"id_column"`
+	GeometryColumn string `json:"geometry_column"`
+}
 type Dataset struct {
-	GeometryType        string `json:"geometry_type"`
-	CoordinateDimension uint32 `json:"coordinate_dimension"`
-	ID                  string `json:"dataset"`
-	Name                string `json:"name"`
+	PostgisTable        *PostgisTable `json:"postgis_table,omitempty"`
+	GeometryType        string        `json:"geometry_type"`
+	CoordinateDimension uint32        `json:"coordinate_dimension"`
+	ID                  string        `json:"dataset"`
+	Name                string        `json:"name"`
 }
 
 type WorkspaceInfo struct {

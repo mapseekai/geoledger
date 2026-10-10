@@ -275,7 +275,11 @@ fn damaged_exports_are_rejected_without_partial_writes() -> TestResult {
         .ok_or("row")?;
     lines.remove(dropped_row);
     let missing_row = lines.join("\n") + "\n";
-    let newer = text.replacen("\"format\":8", "\"format\":99", 1);
+    let newer = text.replacen(
+        &format!("\"format\":{}", geoledger_engine::FORMAT_VERSION),
+        "\"format\":99",
+        1,
+    );
     let target = Application::new(Storage::Sqlite(dir.path().join("target.sqlite3")));
     for (case, input, status) in [
         ("tampered", tampered.as_bytes(), 400),

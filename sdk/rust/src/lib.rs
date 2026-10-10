@@ -589,6 +589,20 @@ impl Client {
             .await?,
         )
     }
+    pub async fn attach_postgis_table(
+        &self,
+        project: &str,
+        name: &str,
+        table: &PostgisTable,
+    ) -> Result<Dataset, Error> {
+        decode(
+            self.execute(
+                "create_dataset",
+                json!({"project":project,"name":name,"postgis_table":table}),
+            )
+            .await?,
+        )
+    }
     pub async fn datasets(&self, project: &str, page: Page) -> Result<Vec<Dataset>, Error> {
         decode(
             self.execute(

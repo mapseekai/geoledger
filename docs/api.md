@@ -231,7 +231,7 @@ Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / ar
 
 当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-当前存储格式为 8，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+当前存储格式为 11，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
 
 `Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 为 `0` 也表示不设应用层固定请求字节上限。
 
@@ -248,3 +248,16 @@ Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓�
 `WorkspaceSummary`（`workspace_summary`）和 `CommitSummary`（`commit_summary`）返回 `total` 与按数据集分组的 `datasets`（id、name、added、deleted、modified）；工作区返回 `version`，历史版本返回 `revision`。统计沿用 Diff/Commit 的存在性分类和访问权限，在同一读取事务内完成，不读取或传输几何与属性正文。工作区仅所有者可读；历史统计对项目成员开放。数据集删除后统计跟随保留的记录变化，名称使用当前名称。四种 SDK 提供对应业务方法。
 
 数据集创建参数 `coordinate_dimension` 为 2（默认，XY）或 3（XYZ），创建后不可修改。创建、列表和重命名响应均包含该字段。保存、合并、冲突解决与发布要求坐标维度匹配数据集；null 和空几何不含坐标，仍可保存。
+
+### PostGIS 表接入
+
+`create_dataset` 的 `postgis_table` 指定 `{schema, table, id_column, geometry_column}`，接入时几何类型和维度由原表读取。返回和数据集列表中的 `postgis_table` 描述绑定；内部数据集该字段为空。操作要求平台管理员同时具有项目写权限。接入建立首个发布版本，日后的 `save`、`publish`、`restore` 使用现有工作区契约。
+
+| SDK | 业务接口 |
+|---|---|
+| Rust | `attach_postgis_table(project, name, &PostgisTable)` |
+| Go | `AttachPostgisTable(ctx, project, name, PostgisTable)` |
+| TypeScript | `attachPostgisTable(project, name, {schema, table, idColumn, geometryColumn})` |
+| Python | `attach_postgis_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
+
+原表要求和发布事务见 [已有业务表](storage.md#已有业务表)。
