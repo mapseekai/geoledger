@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
 import { call } from "@/lib/browser-api";
+import { count } from "@/lib/format";
 import {
   sharedRequests,
   type ChangeSummary as Summary,
 } from "@/lib/change-summary";
 const loadSummary = sharedRequests<Summary>();
 import { Button } from "./ui/button";
+import { Skeleton } from "./ui/skeleton";
 import {
   Table,
   TableCaption,
@@ -74,7 +76,12 @@ export function ChangeSummary({
         </Button>
       </div>
     );
-  if (!current?.value) return <span className="muted text-xs">统计中…</span>;
+  if (!current?.value)
+    return compact ? (
+      <Skeleton className="h-4 w-36" aria-label="正在统计" />
+    ) : (
+      <Skeleton className="h-24 w-full" aria-label="正在统计" />
+    );
   const { total, datasets } = current.value;
   if (compact)
     return (
@@ -98,10 +105,8 @@ export function ChangeSummary({
       </div>
     );
   return (
-    <Table aria-label="按数据集统计要素变更">
-      <TableCaption className="caption-top p-2 text-left font-medium">
-        要素变更统计（全部记录）
-      </TableCaption>
+    <Table aria-label="按数据集统计要素变更" className="summary-table">
+      <TableCaption className="sr-only">要素变更统计（全部记录）</TableCaption>
       <TableHeader>
         <TableRow>
           <TableHead>数据集</TableHead>
@@ -114,16 +119,20 @@ export function ChangeSummary({
         {datasets.map((row) => (
           <TableRow key={row.id}>
             <TableCell title={row.id}>{row.name}</TableCell>
-            <TableCell>{row.added}</TableCell>
-            <TableCell>{row.deleted}</TableCell>
-            <TableCell>{row.modified}</TableCell>
+            <TableCell className="num is-added">{count(row.added)}</TableCell>
+            <TableCell className="num is-deleted">
+              {count(row.deleted)}
+            </TableCell>
+            <TableCell className="num is-modified">
+              {count(row.modified)}
+            </TableCell>
           </TableRow>
         ))}
-        <TableRow>
+        <TableRow className="total-row">
           <TableCell>合计</TableCell>
-          <TableCell>{total.added}</TableCell>
-          <TableCell>{total.deleted}</TableCell>
-          <TableCell>{total.modified}</TableCell>
+          <TableCell className="num">{count(total.added)}</TableCell>
+          <TableCell className="num">{count(total.deleted)}</TableCell>
+          <TableCell className="num">{count(total.modified)}</TableCell>
         </TableRow>
       </TableBody>
     </Table>

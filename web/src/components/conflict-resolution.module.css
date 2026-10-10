@@ -1,204 +1,368 @@
-:global(.dialog-wide).dialog {
-  width: min(1100px, calc(100vw - 2rem));
-  max-width: min(1100px, calc(100vw - 2rem)) !important;
-  max-height: 90dvh;
+.dialog {
+  height: min(860px, 92dvh);
+}
+.body {
+  padding: 0 !important;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.frame {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+  padding: 16px 24px;
+}
+.frame:empty {
+  display: none;
 }
 .layout {
   display: grid;
-  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
-  gap: 1rem;
-  min-height: 0;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 0;
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
 }
-.list {
+.listPane {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  overflow: auto;
-  border-right: 1px solid var(--border);
-  padding-right: 0.75rem;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: #fcfcfd;
 }
-.item,
-.activeItem {
+.listTools {
   display: grid;
-  gap: 0.25rem;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.listTools :global(.search) {
   width: 100%;
+}
+.listFilters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.list {
+  overflow: auto;
+  padding: 6px;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+}
+.item {
   height: auto !important;
-  white-space: normal;
-  justify-content: stretch;
-  padding: 0.65rem;
+  display: grid !important;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: start !important;
+  justify-content: stretch !important;
+  column-gap: 8px !important;
+  row-gap: 4px;
+  padding: 9px 10px !important;
+  border-radius: 8px !important;
   text-align: left;
-  font-size: 0.875rem;
+  white-space: normal !important;
+  color: var(--text) !important;
+  border: 1px solid transparent;
 }
-.item:hover,
-.activeItem {
-  background: var(--accent);
-  color: var(--accent-foreground);
+.item:hover {
+  background: var(--line-faint) !important;
 }
-.item span {
-  overflow-wrap: anywhere;
+.itemActive,
+.itemActive:hover {
+  background: var(--brand-soft) !important;
+  border-color: var(--brand-line);
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+.item > svg {
+  margin-top: 2px;
+  width: 16px !important;
+  height: 16px !important;
+}
+.itemDone {
+  color: #079455;
+}
+.itemOpen {
+  color: #98a2b3;
+}
+.itemText {
+  display: grid;
+  min-width: 0;
+  line-height: 1.35;
+}
+.itemText strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.itemText small {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.itemTags {
+  grid-column: 2;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.choiceTag {
+  font-size: 11px;
+  font-weight: 500;
+  color: #067647;
+}
+.listEmpty {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 .detail {
   min-width: 0;
-  display: grid;
-  align-content: start;
-  gap: 0.75rem;
-}
-.heading,
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-}
-.columns {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-.column,
-.preview,
-.choices {
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 0.75rem;
-}
-.column h3,
-.preview h3,
-.choices h3 {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
-}
-.choices > p {
-  margin: 0 0 0.6rem;
-  font-size: 0.875rem;
-  color: var(--muted-foreground);
-}
-.wholeChoices,
-.field > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-.field {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.75rem;
-  border-top: 1px solid var(--border);
-  padding: 0.55rem 0;
-}
-.field:first-of-type {
-  border-top: 0;
-}
-.code {
-  max-height: 14rem;
-  margin: 0;
+  min-height: 0;
   overflow: auto;
-  white-space: pre-wrap;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+}
+.detailHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.detailTitle {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.detailTitle h3 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
   overflow-wrap: anywhere;
-  font-size: 0.8125rem;
-  line-height: 1.45;
+}
+.detailMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.sideActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.kbd {
+  margin-left: 2px;
+  background: rgb(255 255 255 / 0.2);
+  color: inherit;
+  opacity: 0.8;
+}
+.compare {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 16px;
+  align-items: start;
+}
+.tableWrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+.table th[scope="col"] {
+  white-space: nowrap;
+}
+.col_base {
+  color: var(--text-muted) !important;
+}
+.col_current {
+  color: #175cd3 !important;
+}
+.col_draft {
+  color: var(--brand-ink) !important;
+}
+.col_result {
+  color: #067647 !important;
+}
+.rowConflict > th {
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+.rowChanged > th {
+  color: var(--text-2);
+}
+.rowIcon {
+  width: 13px;
+  height: 13px;
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: var(--brand);
+}
+.cellChanged {
+  background: #fffaeb;
+}
+.rowConflict .cellChanged {
+  background: #fff6ed;
+}
+.cellPicked,
+.rowConflict .cellPicked {
+  background: #ecfdf3;
+}
+.cellButton {
+  width: 100%;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  text-align: left;
+  margin: -4px -6px;
+  padding: 4px 6px;
+  width: calc(100% + 12px);
+  border-radius: 6px;
+  border: 1px dashed transparent;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+.cellButton:hover:not(:disabled) {
+  border-color: #98a2b3;
+  background: rgb(255 255 255 / 0.7);
+}
+.cellButton[aria-pressed="true"] {
+  border: 1px solid #47cd89;
+}
+.cellButton svg {
+  width: 14px;
+  height: 14px;
+  color: #079455;
+}
+.resultCell {
+  font-weight: 500;
+}
+.pending {
+  color: var(--brand-ink);
+  font-size: 12px;
+  font-weight: 500;
+}
+.toggleRows {
+  margin-top: 6px;
+}
+.preview {
+  position: sticky;
+  top: 0;
 }
 .editor {
-  min-height: 14rem;
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
-}
-.comparison {
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-}
-.comparisonHeader,
-.comparisonRow {
   display: grid;
-  grid-template-columns: minmax(8rem, 0.7fr) minmax(12rem, 1fr) minmax(
-      12rem,
-      1fr
-    );
-  gap: 0.5rem;
-  min-width: 38rem;
-  padding: 0.6rem 0.75rem;
+  gap: 10px;
 }
-.comparisonHeader {
-  background: var(--muted);
-  font-size: 0.875rem;
+.editor textarea {
+  min-height: 320px;
 }
-.comparisonRow {
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--accent) 35%, transparent);
+.editorActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
-.comparisonRow pre {
-  min-width: 0;
-  margin: 0;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 0.8125rem;
+.detailFooter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: auto;
+  border-top: 1px solid var(--line-soft);
 }
-.comparison > p {
-  margin: 0;
-  padding: 0.6rem 0.75rem;
-  font-size: 0.875rem;
-  color: var(--muted-foreground);
+.detailStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-2);
 }
-.fieldValues {
-  display: block;
-  margin-top: 0.25rem;
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  overflow-wrap: anywhere;
+.detailStatus svg {
+  width: 15px;
+  height: 15px;
 }
-.pageHint {
-  margin: 0.25rem 0;
-  color: var(--muted-foreground);
-  font-size: 0.8125rem;
+.nextButton {
+  margin-left: auto;
 }
-.actions {
-  border-top: 1px solid var(--border);
-  padding-top: 0.75rem;
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-2);
 }
-@media (max-width: 700px) {
-  :global(.dialog-wide).dialog {
-    width: calc(100vw - 1rem);
-    max-width: calc(100vw - 1rem) !important;
+.progressBar {
+  width: 120px;
+  height: 6px;
+}
+@media (max-width: 1100px) {
+  .compare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .preview {
+    position: static;
+    max-width: 360px;
+  }
+}
+@media (max-width: 760px) {
+  .frame {
+    padding: 12px 14px;
   }
   .layout {
     grid-template-columns: minmax(0, 1fr);
-    min-height: 0;
+    grid-template-rows: minmax(0, 34%) minmax(0, 1fr);
   }
-  .list {
-    max-height: 10rem;
+  .listPane {
     border-right: 0;
-    border-bottom: 1px solid var(--border);
-    padding: 0 0 0.75rem;
+    border-bottom: 1px solid var(--line);
   }
-  .columns {
-    grid-template-columns: minmax(0, 1fr);
+  .detail {
+    padding: 14px;
   }
-  .comparisonHeader {
+  .progressBar {
+    width: 64px;
+  }
+}
+.table td {
+  min-width: 76px;
+}
+.table td[data-side="draft"],
+.table td[data-side="current"] {
+  min-width: 96px;
+}
+.resultCell {
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .table [data-side="base"] {
     display: none;
   }
-  .comparisonRow {
-    grid-template-columns: minmax(0, 1fr);
+  .table td {
     min-width: 0;
-  }
-  .comparisonRow pre::before {
-    content: attr(data-side);
-    display: block;
-    margin-bottom: 0.5rem;
-    color: var(--muted-foreground);
-    font-family: inherit;
-    font-weight: 600;
-  }
-  .field {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
