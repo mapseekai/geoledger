@@ -252,6 +252,10 @@ impl Metrics {
                 pool.active, pool.idle
             ));
             line(format!(
+                "# HELP geoledger_db_pool_retiring Connections awaiting confirmed cleanup\n# TYPE geoledger_db_pool_retiring gauge\ngeoledger_db_pool_retiring {}",
+                pool.retiring
+            ));
+            line(format!(
                 "# HELP geoledger_db_pool_wait_timeouts_total Connection acquisitions that hit the operation deadline\n# TYPE geoledger_db_pool_wait_timeouts_total counter\ngeoledger_db_pool_wait_timeouts_total {}",
                 pool.wait_timeouts
             ));

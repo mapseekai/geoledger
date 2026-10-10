@@ -1,0 +1,44 @@
+name: Reaudit published image digests
+on:
+  schedule:
+    - cron: '41 18 * * *'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release containing the image inventories; empty selects newest non-draft release
+        required: false
+        type: string
+permissions:
+  contents: read
+  packages: read
+concurrency:
+  group: geoledger-published-image-audit
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+      - run: python3 scripts/install-trivy.py --destination "$RUNNER_TEMP/scanners"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch and scan the published digests, never floating tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REGISTRY_AUTH_FILE: /home/runner/.docker/config.json
+        run: python3 scripts/audit-published-images.py --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --output "$RUNNER_TEMP/published-reports"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: published-image-scan
+          path: ${{ runner.temp }}/published-reports
+          if-no-files-found: ignore
+          retention-days: 30

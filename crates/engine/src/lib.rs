@@ -31,7 +31,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 11;
+pub const FORMAT_VERSION: i32 = 12;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
@@ -58,12 +58,18 @@ fn id(s: &str) -> Result<()> {
     Uuid::parse_str(s).map(|_| ()).map_err(|_| bad())
 }
 
+/// Grow a transport-owned encoded-byte reservation before retaining more result data.
+/// Implementations must keep a reservation alive for the lifetime of the response.
+pub type ResponseReservation = std::sync::Arc<dyn Fn(usize) -> Result<()> + Send + Sync>;
+
 /// Independent central application. Each operation owns one connection and transaction.
 /// Configuration deliberately has no Debug implementation: it contains a DSN.
 #[derive(Clone)]
 pub struct Application {
     storage: std::sync::Arc<dyn StorageBackend>,
     timeout: Duration,
+    response_limit: usize,
+    response_reservation: Option<ResponseReservation>,
     policy: std::sync::Arc<Policy>,
 }
 /// Platform-level authorization that is not tied to project membership.
@@ -108,6 +114,8 @@ pub struct PoolStats {
     pub capacity: usize,
     pub active: usize,
     pub idle: usize,
+    /// Slots retained by cleanup; included in active until rollback is confirmed.
+    pub retiring: usize,
     /// Acquisitions that gave up because no connection became free before the deadline.
     pub wait_timeouts: u64,
 }
@@ -132,6 +140,8 @@ impl Application {
         Self {
             storage,
             timeout: Duration::from_secs(30),
+            response_limit: 64 * 1024 * 1024,
+            response_reservation: None,
             policy: Default::default(),
         }
     }
@@ -167,6 +177,16 @@ impl Application {
     pub fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> Result<()> {
         session::verify_sqlite_file(path, timeout)
     }
+    /// Share a dynamically growing response reservation with the calling transport.
+    pub fn with_response_reservation(mut self, reservation: ResponseReservation) -> Self {
+        self.response_reservation = Some(reservation);
+        self
+    }
+    /// Bound individual database result batches and assembled response JSON.
+    pub fn with_response_limit(mut self, bytes: usize) -> Self {
+        self.response_limit = bytes.max(1);
+        self
+    }
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -190,6 +210,9 @@ impl Application {
         operation: &str,
         input: Value,
     ) -> Result<(Value, Vec<u8>)> {
+        let deadline = std::time::Instant::now()
+            .checked_add(self.timeout)
+            .ok_or_else(|| Error::new(400, "invalid operation deadline"))?;
         text(subject, 128)?;
         let input = codec::parse(&codec::encode(&input)?)?;
         let command: Command = decode(json!({"operation":operation,"input":input}))?;
@@ -204,14 +227,22 @@ impl Application {
                 | "diff"
                 | "workspace_summary"
                 | "commit_summary"
-                | "conflicts"
                 | "history"
                 | "audit"
                 | "commit"
                 | "list_members"
         );
         let policy = self.policy.as_ref();
-        let mut t = self.storage.begin(read_only, self.timeout)?;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(Error::new(
+                504,
+                "operation deadline exceeded before storage admission",
+            ));
+        }
+        let mut t = self.storage.begin(read_only, remaining)?;
+        t.set_response_limit(self.response_limit);
+        t.set_response_reservation(self.response_reservation.clone());
         let result = match command {
             Command::CreateProject(r) => create_project(&mut t, subject, policy, r),
             Command::ListProjects(r) => list_projects(&mut t, subject, r),
@@ -244,7 +275,11 @@ impl Application {
             Command::Rebase(r) => rebase(&mut t, subject, r),
             Command::Restore(r) => restore(&mut t, subject, r),
         }?;
-        let encoded = codec::encode(&result)?;
+        let encoded = codec::encode_limited(
+            &result,
+            self.response_limit,
+            self.response_reservation.clone(),
+        )?;
         t.commit()?;
         Ok((result, encoded))
     }
@@ -355,4 +390,41 @@ pub struct PostgisTable {
     pub table: String,
     pub id_column: String,
     pub geometry_column: String,
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct ProbeBackend(AtomicBool);
+    impl StorageBackend for ProbeBackend {
+        fn name(&self) -> &'static str {
+            "probe"
+        }
+        fn initialize(&self, _: Duration) -> Result<()> {
+            Ok(())
+        }
+        fn health(&self, _: Duration) -> Result<()> {
+            Ok(())
+        }
+        fn begin(&self, _: bool, _: Duration) -> Result<Box<dyn RepositoryTransaction>> {
+            self.0.store(true, Ordering::SeqCst);
+            Err(Error::new(500, "storage must not be reached after expiry"))
+        }
+    }
+    #[test]
+    fn expired_application_does_not_start_a_storage_operation() -> Result<()> {
+        let backend = Arc::new(ProbeBackend(AtomicBool::new(false)));
+        let app = Application::with_backend(backend.clone()).with_timeout(Duration::ZERO);
+        let error = app
+            .execute("alice", "list_projects", json!({}))
+            .err()
+            .ok_or_else(bad)?;
+        assert_eq!(error.status, 504);
+        assert!(!backend.0.load(Ordering::SeqCst));
+        Ok(())
+    }
 }

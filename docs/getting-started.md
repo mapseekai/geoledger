@@ -10,7 +10,7 @@
 
 ## 环境准备
 
-Rust 最低版本由 [Cargo.toml](../Cargo.toml) 定义为 1.88；主 CI 和 Dockerfile 使用 1.92。通过已安装的 rustup 配置一致的工具链：
+Rust 最低版本由 [Cargo.toml](../Cargo.toml) 定义为 1.88；主 CI 使用 1.92，Dockerfile 的构建工具链固定为 1.98。通过已安装的 rustup 配置一致的工具链：
 
 ```sh
 rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy
@@ -42,6 +42,20 @@ export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig${PKG_CONFIG_PAT
 ### Windows
 
 安装 Visual Studio Build Tools 的 C++ 工具链、Rust MSVC 工具链、Python 和 Node.js 22。将 protoc 的 `bin` 目录加入 PATH。原生构建与测试命令使用 Cargo；仓库 `.sh` 脚本在 Bash 环境运行。主 [CI](../.github/workflows/ci.yml) 包含 Windows 构建和测试配置。
+
+Windows 默认 SQLite 后端需要完整的 SpatiaLite 运行时及其依赖 DLL。安装 Python 3.12 后，在 PowerShell 为本次版本选择新的目录：
+
+```powershell
+$runtime = Join-Path $env:LOCALAPPDATA "GeoLedger/native-5.1.0-9"
+python scripts/install-spatialite.py --destination $runtime
+$env:GL_SPATIALITE_EXTENSION = Join-Path $runtime "bin/mod_spatialite.dll"
+$env:PATH = (Join-Path $runtime "bin") + ";" + $env:PATH
+$env:PROJ_DATA = Join-Path $runtime "share/proj"
+cargo test --locked --workspace
+```
+
+安装器校验每个 OSGeo4W 归档的 SHA256，保留版本、依赖与源码地址，不执行系统安装程序或上游 post-install 脚本，也不覆盖已有目录。Windows Release 包内提供同一安装器及锁文件，解压后使用 `python install-spatialite.py --destination native` 准备运行时，并按上例设置环境后再启动 `.exe`；上游 DLL 独立下载，不混入 GeoLedger 自身的许可证声明。
+
 
 ### 检查工具
 
@@ -121,7 +135,7 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 ./target/debug/geoledger-server --storage postgis --data-dir ./geoledger-data
 ```
 
-启动时直接将空库初始化为格式 11，并校验已有库的当前格式（见 [存储格式](production.md#存储格式)）。连接默认 `sslmode=verify-full`，私有 CA 通过 `sslrootcert=<PEM 文件>` 指定；本机无 TLS 的开发库使用 `sslmode=disable`，参数说明见 [PostgreSQL TLS](security.md#postgresql-tls)。后端配置选择相应数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`（见 [备份与恢复](production.md#备份与恢复)）。两种后端沿用相同的 CLI、SDK 与控制台流程。
+启动时直接将空库初始化为格式 12，并校验已有库的当前格式（见 [存储格式](production.md#存储格式)）。连接默认 `sslmode=verify-full`，私有 CA 通过 `sslrootcert=<PEM 文件>` 指定；本机无 TLS 的开发库使用 `sslmode=disable`，参数说明见 [PostgreSQL TLS](security.md#postgresql-tls)。后端配置选择相应数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`（见 [备份与恢复](production.md#备份与恢复)）。两种后端沿用相同的 CLI、SDK 与控制台流程。
 
 ## 配置团队身份
 

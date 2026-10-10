@@ -108,6 +108,7 @@ impl<T: Decode> Decode for Option<T> {
         }
     }
 }
+#[derive(Clone)]
 pub struct Row(Vec<Cell>);
 impl Row {
     pub fn new(values: Vec<Cell>) -> Self {
@@ -122,13 +123,15 @@ impl Row {
     }
 }
 enum Backend {
-    Sqlite(rusqlite::Connection),
+    Sqlite(geoledger_spatialite::Connection),
     Postgis(postgres::Client),
 }
 pub(crate) struct Client {
     backend: Backend,
     deadline: Instant,
     transaction: bool,
+    result_limit: usize,
+    response_reservation: Option<crate::ResponseReservation>,
 }
 impl Client {
     pub fn open(storage: &Storage, pool: &Arc<postgres::Pool>, timeout: Duration) -> Result<Self> {
@@ -141,9 +144,10 @@ impl Client {
                 let c = rusqlite::Connection::open(path).map_err(sqlite_error)?;
                 let extension = std::env::var_os("GL_SPATIALITE_EXTENSION")
                     .unwrap_or_else(|| "mod_spatialite".into());
-                geoledger_spatialite::load(&c, std::path::Path::new(&extension)).map_err(|e| {
+                let native = geoledger_spatialite::load(c, std::path::Path::new(&extension)).map_err(|e| {
                     Error::new(500, "cannot load SpatiaLite; install mod_spatialite or set GL_SPATIALITE_EXTENSION to its trusted library path").caused_by(e)
                 })?;
+                let c = native.read().map_err(sqlite_error)?;
                 c.busy_timeout(timeout).map_err(sqlite_error)?;
                 c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;")
                     .map_err(sqlite_error)?;
@@ -203,13 +207,16 @@ impl Client {
                     }
                     Ok(None::<String>)
                 }).map_err(sqlite_error)?;
-                Backend::Sqlite(c)
+                drop(c);
+                Backend::Sqlite(native)
             }
         };
         Ok(Self {
             backend,
             deadline,
             transaction: false,
+            result_limit: usize::MAX,
+            response_reservation: None,
         })
     }
     fn check(&self) -> Result<()> {
@@ -227,6 +234,7 @@ impl Client {
         let values: Vec<_> = params.iter().map(|p| p.value()).collect();
         match &mut self.backend {
             Backend::Sqlite(c) => {
+                let c = c.read().map_err(sqlite_error)?;
                 c.busy_timeout(self.deadline.saturating_duration_since(Instant::now()))
                     .map_err(sqlite_error)?;
                 let mut stmt = c.prepare_cached(sql).map_err(sqlite_error)?;
@@ -249,6 +257,7 @@ impl Client {
                 let count = stmt.column_count();
                 let mut rows = stmt.raw_query();
                 let mut out = Vec::new();
+                let mut result_bytes = 0usize;
                 while let Some(row) = rows.next().map_err(sqlite_error)? {
                     let mut cells = Vec::with_capacity(count);
                     for i in 0..count {
@@ -264,6 +273,18 @@ impl Client {
                             ),
                             _ => return Err(Error::new(500, "unexpected storage type")),
                         });
+                    }
+                    for cell in &cells {
+                        result_bytes = result_bytes.saturating_add(match cell {
+                            Cell::Text(s) => s.len(),
+                            _ => 8,
+                        });
+                    }
+                    if result_bytes > self.result_limit {
+                        return Err(Error::new(413, "database result batch exceeds byte budget"));
+                    }
+                    if let Some(reserve) = &self.response_reservation {
+                        reserve(result_bytes)?;
                     }
                     out.push(Row(cells));
                 }
@@ -335,6 +356,7 @@ impl Client {
         self.check()?;
         match &mut self.backend {
             Backend::Sqlite(c) => {
+                let c = c.read().map_err(sqlite_error)?;
                 c.busy_timeout(self.deadline.saturating_duration_since(Instant::now()))
                     .map_err(sqlite_error)?;
                 c.execute_batch(sql).map_err(sqlite_error)
@@ -346,13 +368,54 @@ impl Client {
         if read_only && matches!(self.backend, Backend::Sqlite(_)) {
             self.batch_execute("PRAGMA query_only=ON")?;
         }
-        self.batch_execute(match self.backend {
-            Backend::Sqlite(_) if !read_only => "BEGIN IMMEDIATE",
-            Backend::Postgis(_) if read_only => "BEGIN ISOLATION LEVEL REPEATABLE READ",
-            _ => "BEGIN",
-        })?;
+        if let Backend::Sqlite(connection) = &self.backend
+            && !read_only
+        {
+            self.check()?;
+            // Only retry acquiring a transaction, never business SQL or COMMIT.
+            // SQLite's busy handler sleeps inside execute_batch. Holding the
+            // process-wide native access guard while sleeping would prevent
+            // unrelated databases from initializing/closing their connections.
+            loop {
+                let result = {
+                    let access = connection.read().map_err(sqlite_error)?;
+                    access.busy_timeout(Duration::ZERO).map_err(sqlite_error)?;
+                    access.execute_batch("BEGIN IMMEDIATE")
+                };
+                match result {
+                    Ok(()) => break,
+                    Err(error)
+                        if error.sqlite_error_code().is_some_and(|code| {
+                            matches!(
+                                code,
+                                rusqlite::ErrorCode::DatabaseBusy
+                                    | rusqlite::ErrorCode::DatabaseLocked
+                            )
+                        }) =>
+                    {
+                        // Preserve SQLITE_BUSY at lock expiry, while returning
+                        // a deadline error if no database work was ever attempted.
+                        // The native guard is gone before the bounded wait.
+                        std::thread::sleep(
+                            self.deadline
+                                .saturating_duration_since(Instant::now())
+                                .min(Duration::from_millis(5)),
+                        );
+                        if Instant::now() >= self.deadline {
+                            return Err(sqlite_error(error));
+                        }
+                    }
+                    Err(error) => return Err(sqlite_error(error)),
+                }
+            }
+        } else {
+            self.batch_execute(match self.backend {
+                Backend::Postgis(_) if read_only => "BEGIN ISOLATION LEVEL REPEATABLE READ",
+                _ => "BEGIN",
+            })?;
+        }
         self.transaction = true;
-        Ok(SqlTransaction(self))
+        Ok(SqlTransaction(self, TransactionState::default()))
     }
     /// Initialize a fresh current-format database or validate an existing one.
     pub fn migrate(mut self) -> Result<()> {
@@ -419,7 +482,7 @@ impl Client {
                 "storage format must match this server; initialize a fresh database",
             ));
         }
-        Ok(())
+        t.commit()
     }
 }
 impl Drop for Client {
@@ -427,8 +490,10 @@ impl Drop for Client {
         if self.transaction {
             match &mut self.backend {
                 Backend::Sqlite(c) => {
-                    let _ = c.progress_handler(0, None::<fn() -> bool>);
-                    let _ = c.execute_batch("ROLLBACK");
+                    if let Ok(c) = c.read() {
+                        let _ = c.progress_handler(0, None::<fn() -> bool>);
+                        let _ = c.execute_batch("ROLLBACK");
+                    }
                 }
                 Backend::Postgis(c) => {
                     c.invalidate();
@@ -437,8 +502,43 @@ impl Drop for Client {
         }
     }
 }
-pub(crate) struct SqlTransaction(Client);
+#[derive(Default)]
+struct TransactionState {
+    datasets: HashMap<(String, String), Row>,
+    heads: HashMap<String, i64>,
+    stage: Vec<(String, String, Option<String>, Option<String>)>,
+    stage_bytes: usize,
+    custom_spatial_plan: bool,
+}
+pub(crate) struct SqlTransaction(Client, TransactionState);
 impl SqlTransaction {
+    fn flush_stage(&mut self) -> Result<()> {
+        if self.1.stage.is_empty() {
+            return Ok(());
+        }
+        let rows = std::mem::take(&mut self.1.stage);
+        self.1.stage_bytes = 0;
+        let tuples: Vec<_> = (0..rows.len())
+            .map(|i| {
+                format!(
+                    "(${},${},${},${})",
+                    i * 4 + 1,
+                    i * 4 + 2,
+                    i * 4 + 3,
+                    i * 4 + 4
+                )
+            })
+            .collect();
+        let mut params: Vec<&dyn Parameter> = Vec::with_capacity(rows.len() * 4);
+        for (dataset, key, before, after) in &rows {
+            params.extend([dataset as &dyn Parameter, key, before, after]);
+        }
+        self.execute(
+            &format!("INSERT INTO gl_merge_stage VALUES {}", tuples.join(",")),
+            &params,
+        )
+    }
+
     pub(crate) fn query(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<Vec<Row>> {
         self.0.query(s, p)
     }
@@ -582,6 +682,25 @@ fn sqlite_error(source: rusqlite::Error) -> Error {
 }
 
 impl crate::repository::RepositoryTransaction for SqlTransaction {
+    fn set_response_limit(&mut self, bytes: usize) {
+        self.0.result_limit = bytes;
+        if let Backend::Postgis(c) = &mut self.0.backend {
+            c.set_result_limit(bytes);
+        }
+    }
+    fn response_limit(&self) -> usize {
+        self.0.result_limit
+    }
+    fn set_response_reservation(&mut self, reservation: Option<crate::ResponseReservation>) {
+        self.0.response_reservation = reservation.clone();
+        if let Backend::Postgis(c) = &mut self.0.backend {
+            c.set_response_reservation(reservation);
+        }
+    }
+    fn response_reservation(&self) -> Option<crate::ResponseReservation> {
+        self.0.response_reservation.clone()
+    }
+
     fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>> {
         self.query_opt(
             &self.lock_sql(
@@ -593,10 +712,14 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn project_head(&mut self, project: &str, lock: bool) -> Result<Option<Row>> {
         let sql = "SELECT head FROM gl_projects WHERE id=$1";
-        self.query_opt(
+        let row = self.query_opt(
             &self.lock_sql(sql, if lock { "FOR NO KEY UPDATE" } else { "" }),
             &[&project],
-        )
+        )?;
+        if let Some(row) = &row {
+            self.1.heads.insert(project.to_owned(), row.get(0usize)?);
+        }
+        Ok(row)
     }
     fn workspace_state(
         &mut self,
@@ -609,6 +732,21 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn feature_page(&mut self, r: &crate::repository::FeatureQuery) -> Result<Vec<Row>> {
         let bbox = r.bbox.unwrap_or([-180., -90., 180., 90.]);
+        if r.bbox.is_some()
+            && matches!(self.0.backend, Backend::Postgis(_))
+            && !self.1.custom_spatial_plan
+        {
+            // Bbox selectivity varies by orders of magnitude. Keep parameter-aware
+            // plans for this transaction without disabling prepared statements globally.
+            self.batch_execute("SET LOCAL plan_cache_mode=force_custom_plan")?;
+            self.1.custom_spatial_plan = true;
+        }
+        let latest = self.1.heads.get(&r.project) == Some(&r.revision);
+        let visible = if latest {
+            "h.valid_to IS NULL"
+        } else {
+            "(h.valid_to IS NULL OR h.valid_to>$3)"
+        };
         // Bound both UNION branches before geometry/JSON expansion and final
         // sorting. A top-level LIMIT alone let PostgreSQL scan and serialize
         // the entire remaining dataset for each 32-row page.
@@ -624,7 +762,11 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
             self.spatial_filter("", "workspace_changes", r.bbox.is_some(), sparse_draft);
         let (spatial_lookup, draft_lookup) = if matches!(self.0.backend, Backend::Sqlite(_)) {
             (
-                " INDEXED BY sqlite_autoindex_gl_history_1",
+                if latest {
+                    " INDEXED BY history_live"
+                } else {
+                    " INDEXED BY sqlite_autoindex_gl_history_1"
+                },
                 " INDEXED BY sqlite_autoindex_gl_workspace_changes_1",
             )
         } else {
@@ -633,7 +775,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         let sql = format!("WITH base AS MATERIALIZED (
             SELECT h.feature_id,h.properties,h.geometry_json FROM gl_history h{spatial_lookup}
             WHERE h.project=$1 AND h.dataset=$2
-              AND h.valid_from<=$3 AND (h.valid_to IS NULL OR h.valid_to>$3)
+              AND h.valid_from<=$3 AND {visible}
               AND h.properties IS NOT NULL AND h.feature_id>$5 AND {key_filter}
               AND ({spatial_filter})
               AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c
@@ -673,13 +815,24 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         key: &str,
         revision: i64,
     ) -> Result<Option<Row>> {
-        self.query_opt("SELECT properties,geometry_json FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=$3 AND valid_from<=$4 AND (valid_to IS NULL OR valid_to>$4)", &[&project, &dataset, &key, &revision])
+        self.query_opt("SELECT properties,geometry_json FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=$3 AND valid_from<=$4 AND (valid_to IS NULL OR valid_to>$4) ORDER BY valid_from DESC LIMIT 1", &[&project, &dataset, &key, &revision])
     }
     fn dataset_exists(&mut self, project: &str, dataset: &str) -> Result<Option<Row>> {
-        self.query_opt(
+        let key = (project.to_owned(), dataset.to_owned());
+        if let Some(row) = self.1.datasets.get(&key) {
+            return Ok(Some(row.clone()));
+        }
+        let row = self.query_opt(
             "SELECT geometry_type,name,coordinate_dimension,postgis_source FROM gl_datasets WHERE project=$1 AND id=$2",
             &[&project, &dataset],
-        )
+        )?;
+        if let Some(row) = &row {
+            if self.1.datasets.len() >= 128 {
+                self.1.datasets.clear();
+            }
+            self.1.datasets.insert(key, row.clone());
+        }
+        Ok(row)
     }
     fn append_audit(
         &mut self,
@@ -813,6 +966,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
             "UPDATE gl_datasets SET postgis_source=$3 WHERE project=$1 AND id=$2",
             &[&project, &dataset, &metadata],
         )?;
+        self.1.datasets.clear();
         self.guard_source(source)
     }
     fn rename_project(&mut self, project: &str, name: &str) -> Result<()> {
@@ -822,12 +976,14 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         )
     }
     fn rename_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()> {
+        self.1.datasets.clear();
         self.execute(
             "UPDATE gl_datasets SET name=$3 WHERE project=$1 AND id=$2",
             &[&project, &dataset, &name],
         )
     }
     fn purge_data(&mut self, project: &str, dataset: Option<&str>) -> Result<()> {
+        self.1.datasets.clear();
         self.release_sources(project, dataset)?;
         self.execute("INSERT INTO gl_purge VALUES($1)", &[&project])?;
         if let Some(dataset) = dataset {
@@ -973,7 +1129,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn count_deltas(&mut self, project: &str, workspace: &str) -> Result<Row> {
         self.query_one(
-            "SELECT count(*) FROM gl_workspace_changes WHERE project=$1 AND workspace=$2",
+            "SELECT coalesce((SELECT changes FROM gl_workspace_sizes WHERE project=$1 AND workspace=$2),0)",
             &[&project, &workspace],
         )
     }
@@ -1018,7 +1174,79 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     fn audit_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>> {
         self.query("SELECT id,subject,action,detail,created_at FROM gl_audit_events WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3", &[&project, &after, &limit])
     }
+    fn cached_conflict_count(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        base: i64,
+        version: i64,
+        head: i64,
+    ) -> Result<Option<i64>> {
+        self.query_opt("SELECT total FROM gl_conflict_cache WHERE project=$1 AND workspace=$2 AND base_revision=$3 AND workspace_version=$4 AND head=$5 AND complete", &[&project,&workspace,&base,&version,&head])?.map(|r|r.get(0usize)).transpose()
+    }
+    fn reset_conflict_cache(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        base: i64,
+        version: i64,
+        head: i64,
+    ) -> Result<()> {
+        self.execute(
+            "DELETE FROM gl_conflict_cache WHERE project=$1 AND workspace=$2",
+            &[&project, &workspace],
+        )?;
+        self.execute("INSERT INTO gl_conflict_cache(project,workspace,base_revision,workspace_version,head) VALUES($1,$2,$3,$4,$5)", &[&project,&workspace,&base,&version,&head])
+    }
+    fn cache_conflict_keys(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        keys: &[(String, String)],
+    ) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let mut params: Vec<&dyn Parameter> = vec![&project, &workspace];
+        let mut tuples = Vec::with_capacity(keys.len());
+        for (i, (dataset, key)) in keys.iter().enumerate() {
+            tuples.push(format!("($1,$2,${},${})", i * 2 + 3, i * 2 + 4));
+            params.extend([dataset as &dyn Parameter, key]);
+        }
+        self.execute(
+            &format!("INSERT INTO gl_conflict_keys VALUES {}", tuples.join(",")),
+            &params,
+        )
+    }
+    fn complete_conflict_cache(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        total: i64,
+    ) -> Result<()> {
+        self.execute(
+            "UPDATE gl_conflict_cache SET total=$3,complete=true WHERE project=$1 AND workspace=$2",
+            &[&project, &workspace, &total],
+        )
+    }
+    fn cached_conflict_page(
+        &mut self,
+        query: &crate::repository::ConflictQuery<'_>,
+    ) -> Result<Vec<Row>> {
+        let crate::repository::ConflictQuery {
+            project,
+            workspace,
+            base,
+            head,
+            after_dataset,
+            after_key,
+            limit,
+        } = *query;
+        self.query("WITH keys AS MATERIALIZED (SELECT dataset,feature_id FROM gl_conflict_keys WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT $7), batch AS MATERIALIZED (SELECT c.* FROM keys k JOIN gl_workspace_changes c ON c.project=$1 AND c.workspace=$2 AND c.dataset=k.dataset AND c.feature_id=k.feature_id) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,c.resolved_head,c.resolution_stale,b.properties,b.geometry_json,o.properties,o.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project,&workspace,&base,&head,&after_dataset,&after_key,&limit])
+    }
     fn begin_merge(&mut self) -> Result<()> {
+        self.1.stage.clear();
+        self.1.stage_bytes = 0;
         self.batch_execute("DROP TABLE IF EXISTS gl_merge_stage; CREATE TEMP TABLE gl_merge_stage(dataset text, feature_id text, before_value text, after_value text)")
     }
     fn merge_page(
@@ -1039,10 +1267,25 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         before: &Option<String>,
         after: &Option<String>,
     ) -> Result<()> {
-        self.execute(
-            "INSERT INTO gl_merge_stage VALUES($1,$2,$3,$4)",
-            &[&dataset, &key, &before, &after],
-        )
+        let bytes = dataset
+            .len()
+            .saturating_add(key.len())
+            .saturating_add(before.as_ref().map_or(0, String::len))
+            .saturating_add(after.as_ref().map_or(0, String::len));
+        if self.1.stage_bytes.saturating_add(bytes) > 1024 * 1024 {
+            self.flush_stage()?;
+        }
+        self.1.stage.push((
+            dataset.to_owned(),
+            key.to_owned(),
+            before.clone(),
+            after.clone(),
+        ));
+        self.1.stage_bytes = self.1.stage_bytes.saturating_add(bytes);
+        if self.1.stage.len() >= 32 || self.1.stage_bytes >= 1024 * 1024 {
+            self.flush_stage()?;
+        }
+        Ok(())
     }
     fn publication_receipt(
         &mut self,
@@ -1063,13 +1306,16 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         self.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,$2,$3,$4,$5)", &[&project, &revision, &workspace, &subject, &message])
     }
     fn append_changes(&mut self, project: &str, revision: i64) -> Result<()> {
+        self.flush_stage()?;
         self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,NULLIF(before_value,'null'),after_value FROM gl_merge_stage", &[&project, &revision])
     }
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
+        self.flush_stage()?;
         self.sync_sources(project)?;
         self.execute("UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL", &[&project, &revision])
     }
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
+        self.flush_stage()?;
         self.execute(&format!("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,{columns}) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry'),{values} FROM gl_merge_stage", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(after_value,'geometry')")), &[&project, &revision])
     }
     fn advance_head(&mut self, project: &str, revision: i64) -> Result<()> {
@@ -1117,6 +1363,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         )
     }
     fn replace_deltas_with_merge(&mut self, project: &str, workspace: &str) -> Result<()> {
+        self.flush_stage()?;
         self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) SELECT $1,$2,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry'),{values} FROM gl_merge_stage", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(after_value,'geometry')")), &[&project, &workspace])
     }
     fn advance_base(&mut self, project: &str, workspace: &str, revision: i64) -> Result<()> {
@@ -1440,3 +1687,7 @@ mod tests {
 #[cfg(test)]
 #[path = "session/query_performance_tests.rs"]
 mod query_performance_tests;
+
+#[cfg(test)]
+#[path = "session/review_tests.rs"]
+mod review_tests;

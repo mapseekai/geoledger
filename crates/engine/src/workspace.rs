@@ -451,8 +451,10 @@ pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Res
     ))
 }
 pub(super) fn create_workspace(t: &mut Transaction, s: &str, r: Project) -> Result<Value> {
-    membership(t, &r.project, s, true)?;
+    // Project -> membership is the lock order for every project mutation.
+    // Validate lifecycle state only after waiting for the project lock.
     let base = head(t, &r.project, true)?;
+    membership(t, &r.project, s, true)?;
     new_workspace(t, s, &r.project, base)
 }
 pub(super) fn new_workspace(t: &mut Transaction, s: &str, p: &str, base: i64) -> Result<Value> {

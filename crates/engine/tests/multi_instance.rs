@@ -3,6 +3,7 @@
 //! across them: disjoint edits must all land exactly once, overlapping edits must
 //! produce exactly one winner and explicit conflicts, and retried publications
 //! must stay idempotent across instances.
+mod support;
 use geoledger_engine::{Application, Storage};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -252,11 +253,15 @@ fn sqlite_instances_sharing_a_file() -> TestResult {
 fn postgis_instances_sharing_a_database() -> TestResult {
     let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
     let name = format!("geoledger_multi_{}", Uuid::new_v4().simple());
-    let mut admin = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    let config: postgres::Config = dsn.parse()?;
+    let mut admin = config.connect(postgres::NoTls)?;
+    let actual: String = admin.query_one("SELECT current_database()", &[])?.get(0);
+    if actual != "geoledger_test" {
+        return Err("requires isolated geoledger_test database".into());
+    }
     admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
     let result = (|| -> TestResult {
-        let target = dsn.replacen("/geoledger_test", &format!("/{name}"), 1);
-        let mut db = postgres::Client::connect(&target, postgres::NoTls)?;
+        let (target, mut db) = support::connect_isolated(&dsn, &name)?;
         db.batch_execute("CREATE EXTENSION postgis")?;
         drop(db);
         let instances: Vec<_> = (0..3)

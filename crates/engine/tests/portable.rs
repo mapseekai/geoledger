@@ -1,5 +1,6 @@
 //! Logical export/import round trips keep every table, including history,
 //! audit and publication receipts, and reject damaged files atomically.
+mod support;
 use geoledger_engine::{Application, DataSummary, Storage};
 use serde_json::{Value, json};
 use std::io::Cursor;
@@ -347,10 +348,13 @@ fn postgis_and_sqlite_exchange_exports_both_ways() -> TestResult {
     let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
     let name = format!("geoledger_portable_{}", Uuid::new_v4().simple());
     let mut admin = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    let actual: String = admin.query_one("SELECT current_database()", &[])?.get(0);
+    if actual != "geoledger_test" {
+        return Err("requires isolated geoledger_test".into());
+    }
     admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
     let result = (|| -> TestResult {
-        let target = dsn.replacen("/geoledger_test", &format!("/{name}"), 1);
-        let mut db = postgres::Client::connect(&target, postgres::NoTls)?;
+        let (target, mut db) = support::connect_isolated(&dsn, &name)?;
         db.batch_execute("CREATE EXTENSION postgis")?;
         drop(db);
         let dir = tempfile::tempdir()?;

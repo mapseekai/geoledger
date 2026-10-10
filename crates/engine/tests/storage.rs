@@ -100,7 +100,8 @@ fn sqlite_contract() -> Result<(), Box<dyn std::error::Error>> {
     let c = rusqlite::Connection::open(path)?;
     let extension =
         std::env::var_os("GL_SPATIALITE_EXTENSION").unwrap_or_else(|| "mod_spatialite".into());
-    geoledger_spatialite::load(&c, std::path::Path::new(&extension))?;
+    let native = geoledger_spatialite::load(c, std::path::Path::new(&extension))?;
+    let c = native.read()?;
     let (count, z, srid): (i64, f64, i32) = c.query_row(
         "SELECT count(*), ST_Z(geom_z), ST_SRID(geom_z) FROM gl_history WHERE typeof(geom_z)='blob' AND geom IS NULL", [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),

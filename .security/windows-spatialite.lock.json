@@ -1,0 +1,319 @@
+{
+  "schema": 1,
+  "platform": "windows-x86_64",
+  "source": "https://download.osgeo.org/osgeo4w/v2/x86_64/setup.ini",
+  "retrieved": "2026-10-10",
+  "packages": [
+    {
+      "name": "base",
+      "version": "1.0.0-23",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/base/base-1.0.0-23.tar.bz2",
+      "sha256": "684d861493ce9ba4f63ef5717cb57609be521cd312113ef9c98c2bb9b9f423fe",
+      "bytes": 292092,
+      "requires": [
+        "msvcrt2019",
+        "setup"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/base/base-1.0.0-23-src.tar.bz2"
+    },
+    {
+      "name": "brotli",
+      "version": "1.2.0-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/brotli/brotli-1.2.0-1.tar.bz2",
+      "sha256": "3a5235325de0aaa355415cd7080a82b2258c0a9a133b91a36b133e22b27c990f",
+      "bytes": 373701,
+      "requires": [
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/brotli/brotli-1.2.0-1-src.tar.bz2"
+    },
+    {
+      "name": "curl",
+      "version": "8.22.0-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/curl/curl-8.22.0-1.tar.bz2",
+      "sha256": "d984bbfa0d9dd827b553048ba7fcbf70e6b4c4f24fe3190a2e1da8c7c4d4db96",
+      "bytes": 473944,
+      "requires": [
+        "msvcrt2019",
+        "openssl",
+        "curl-ca-bundle",
+        "zlib",
+        "brotli",
+        "zstd"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/curl/curl-8.22.0-1-src.tar.bz2"
+    },
+    {
+      "name": "curl-ca-bundle",
+      "version": "8.22.0-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/curl/curl-ca-bundle/curl-ca-bundle-8.22.0-1.tar.bz2",
+      "sha256": "6cefab940c1b60ed20ef956acb98215eff31b106c76d910b9e2319bbc9a02abd",
+      "bytes": 109515,
+      "requires": [
+        "curl"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/curl/curl-8.22.0-1-src.tar.bz2"
+    },
+    {
+      "name": "expat",
+      "version": "2.9.0-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/expat/expat-2.9.0-1.tar.bz2",
+      "sha256": "1f126d726391a0960b91328e757044e6c0b5065b73bf826812dedadd32d2c09f",
+      "bytes": 74110,
+      "requires": [
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/expat/expat-2.9.0-1-src.tar.bz2"
+    },
+    {
+      "name": "freexl",
+      "version": "2.0.0-4",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/freexl/freexl-2.0.0-4.tar.bz2",
+      "sha256": "ce91e90e71ba88e7f9baa339380d395889101fcbea3abd3664dd7c2ab4ad124f",
+      "bytes": 109471,
+      "requires": [
+        "zlib",
+        "xz",
+        "expat",
+        "libiconv",
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/freexl/freexl-2.0.0-4-src.tar.bz2"
+    },
+    {
+      "name": "geos",
+      "version": "3.15.0-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/geos/geos-3.15.0-1.tar.bz2",
+      "sha256": "86d9c558b2ca5105d8f86adb0a317f3742b45af1b8465ff4dd363860547660d8",
+      "bytes": 1283119,
+      "requires": [
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/geos/geos-3.15.0-1-src.tar.bz2"
+    },
+    {
+      "name": "lerc",
+      "version": "4.2.0-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/lerc/lerc-4.2.0-1.tar.bz2",
+      "sha256": "a8704d11c76746272c2b45d17629e6f274a4853e4243132f589d792439100089",
+      "bytes": 189001,
+      "requires": [],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/lerc/lerc-4.2.0-1-src.tar.bz2"
+    },
+    {
+      "name": "libiconv",
+      "version": "1.17-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libiconv/libiconv-1.17-1.tar.bz2",
+      "sha256": "984c1afe8e7a352bba1bca8918f7feebca854bceeb2a58498cfadb4f202cd265",
+      "bytes": 696966,
+      "requires": [
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libiconv/libiconv-1.17-1-src.tar.bz2"
+    },
+    {
+      "name": "libjpeg-turbo",
+      "version": "3.2.0-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libjpeg-turbo/libjpeg-turbo-3.2.0-1.tar.bz2",
+      "sha256": "ec192033e00b094520f4e4d4c8ce26819b0628517f85baa084f5c5132d876dba",
+      "bytes": 587889,
+      "requires": [
+        "msvcrt2019",
+        "zlib"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libjpeg-turbo/libjpeg-turbo-3.2.0-1-src.tar.bz2"
+    },
+    {
+      "name": "libpng",
+      "version": "1.6.57-2",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libpng/libpng-1.6.57-2.tar.bz2",
+      "sha256": "260852e288bba41649139f69529dc742d547df6b58952c07b5b9d514b888332a",
+      "bytes": 103157,
+      "requires": [
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libpng/libpng-1.6.57-2-src.tar.bz2"
+    },
+    {
+      "name": "librttopo",
+      "version": "1.1.0-18",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/librttopo/librttopo-1.1.0-18.tar.bz2",
+      "sha256": "bdca29ed785258edfac61fbe61dcd7513a8b9674f20880deb9b790a200b39522",
+      "bytes": 220868,
+      "requires": [
+        "msvcrt2019",
+        "geos"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/librttopo/librttopo-1.1.0-18-src.tar.bz2"
+    },
+    {
+      "name": "libspatialite",
+      "version": "5.1.0-9",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libspatialite/libspatialite-5.1.0-9.tar.bz2",
+      "sha256": "bed3af53aac0a4f12183c7c99227cd247c8a86c7f8d0f99004b218448108bbbf",
+      "bytes": 5205825,
+      "requires": [
+        "msvcrt2019",
+        "sqlite3",
+        "libiconv",
+        "geos",
+        "freexl",
+        "libxml2",
+        "librttopo",
+        "zlib",
+        "proj9-runtime"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libspatialite/libspatialite-5.1.0-9-src.tar.bz2"
+    },
+    {
+      "name": "libtiff",
+      "version": "4.7.2rc4-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libtiff/libtiff-4.7.2rc4-1.tar.bz2",
+      "sha256": "998b160f14936482294dd05e61a6f5fe34d67cec44f75e8c5ed48d94de476899",
+      "bytes": 191367,
+      "requires": [
+        "msvcrt2019",
+        "libjpeg-turbo",
+        "zlib",
+        "zstd",
+        "lerc",
+        "libwebp",
+        "xz"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libtiff/libtiff-4.7.2rc4-1-src.tar.bz2"
+    },
+    {
+      "name": "libwebp",
+      "version": "1.6.0-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libwebp/libwebp-1.6.0-1.tar.bz2",
+      "sha256": "d16b1fd4cb46cf7a4e4a78840e95126e93f66e3da926b7ccccb15f27372c0e2b",
+      "bytes": 257893,
+      "requires": [
+        "msvcrt2019",
+        "libtiff",
+        "zlib",
+        "libpng",
+        "libjpeg-turbo"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libwebp/libwebp-1.6.0-1-src.tar.bz2"
+    },
+    {
+      "name": "libxml2",
+      "version": "2.12.10-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libxml2/libxml2-2.12.10-1.tar.bz2",
+      "sha256": "e8e48022ae4150f5540fa93e88e7e55705c280bc8f586b1ca2a7a6eb3068baa5",
+      "bytes": 615384,
+      "requires": [
+        "msvcrt2019",
+        "libiconv",
+        "zlib",
+        "xz"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/libxml2/libxml2-2.12.10-1-src.tar.bz2"
+    },
+    {
+      "name": "msvcrt2019",
+      "version": "14.2-2",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/msvcrt2019/msvcrt2019-14.2-2.tar.bz2",
+      "sha256": "aece614e96bf1fb1752f0b6f698db080c3b60f645594e01c65900c259348b834",
+      "bytes": 942298,
+      "requires": [],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/msvcrt2019/msvcrt2019-14.2-2-src.tar.bz2"
+    },
+    {
+      "name": "openssl",
+      "version": "3.5.9-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/openssl/openssl-3.5.9-1.tar.bz2",
+      "sha256": "d4093d055db9d914b8bc3365876dedfd88da5288dd36f066224f8a14cbca5cb9",
+      "bytes": 2657632,
+      "requires": [
+        "base",
+        "msvcrt2019",
+        "curl-ca-bundle"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/openssl/openssl-3.5.9-1-src.tar.bz2"
+    },
+    {
+      "name": "proj-runtime-data",
+      "version": "9.8.1-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/proj/proj-runtime-data/proj-runtime-data-9.8.1-1.tar.bz2",
+      "sha256": "599b2307ed72001ab1b28b9cf4ac007523687571ee0cc1ec54c511a893f74f1d",
+      "bytes": 1574571,
+      "requires": [],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/proj/proj-9.8.1-1-src.tar.bz2"
+    },
+    {
+      "name": "proj9-runtime",
+      "version": "9.8.1-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/proj/proj9-runtime/proj9-runtime-9.8.1-1.tar.bz2",
+      "sha256": "eabe72d6fe63b401307e27bfcf7fc3faa3405869138f5ccae2b939a0cb184d49",
+      "bytes": 1340560,
+      "requires": [
+        "msvcrt2019",
+        "sqlite3",
+        "libtiff",
+        "curl",
+        "proj-runtime-data",
+        "openssl",
+        "zlib",
+        "zstd",
+        "brotli"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/proj/proj-9.8.1-1-src.tar.bz2"
+    },
+    {
+      "name": "setup",
+      "version": "1.1.2-17",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/setup/setup-1.1.2-17.tar.bz2",
+      "sha256": "cb111b85848dfc8eec33930a05682d86997be0859afdf004e207658f8117e205",
+      "bytes": 462041,
+      "requires": [
+        "msvcrt2019",
+        "base"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/setup/setup-1.1.2-17-src.tar.bz2"
+    },
+    {
+      "name": "sqlite3",
+      "version": "3.53.4-3",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/sqlite3/sqlite3-3.53.4-3.tar.bz2",
+      "sha256": "f0a066b4d34dce25f859466800ae31fe4bfaf0c667022c22e72ea6f4a0a24c38",
+      "bytes": 1062576,
+      "requires": [
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/sqlite3/sqlite3-3.53.4-3-src.tar.bz2"
+    },
+    {
+      "name": "xz",
+      "version": "5.4.7-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/xz/xz-5.4.7-1.tar.bz2",
+      "sha256": "79b563c485cf758feb7ef29324fae865e418170509c88717ba3da3b7b9393bef",
+      "bytes": 99823,
+      "requires": [],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/xz/xz-5.4.7-1-src.tar.bz2"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.2-3",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/zlib/zlib-1.3.2-3.tar.bz2",
+      "sha256": "4a909219dfb40dc611ccef1d32c84ebff99b1298852f21f9a322d181783440ef",
+      "bytes": 54860,
+      "requires": [
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/zlib/zlib-1.3.2-3-src.tar.bz2"
+    },
+    {
+      "name": "zstd",
+      "version": "1.5.7-1",
+      "url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/zstd/zstd-1.5.7-1.tar.bz2",
+      "sha256": "b56668286eda4b5f40c6ff358b1917f23c77f16b11209e33b62232c18b6c5035",
+      "bytes": 255988,
+      "requires": [
+        "msvcrt2019"
+      ],
+      "source_url": "https://download.osgeo.org/osgeo4w/v2/x86_64/release/zstd/zstd-1.5.7-1-src.tar.bz2"
+    }
+  ]
+}

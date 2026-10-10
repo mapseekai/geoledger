@@ -4,10 +4,180 @@ use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
 use tonic::{Code, Request, Response, Status};
-pub fn grpc(service: Service) -> pb::geo_ledger_server::GeoLedgerServer<Service> {
-    pb::geo_ledger_server::GeoLedgerServer::new(service)
-        .max_decoding_message_size(usize::MAX)
-        .max_encoding_message_size(usize::MAX)
+/// The outer Tower service authenticates and admits BEFORE tonic polls/decodes the body.
+#[derive(Clone)]
+pub struct Grpc {
+    inner: pb::geo_ledger_server::GeoLedgerServer<Service>,
+    service: Service,
+}
+impl tonic::server::NamedService for Grpc {
+    const NAME: &'static str =
+        <pb::geo_ledger_server::GeoLedgerServer<Service> as tonic::server::NamedService>::NAME;
+}
+#[derive(Clone)]
+struct Admission {
+    permit: Arc<std::sync::Mutex<Option<ExecutionPermit>>>,
+    call: Call,
+}
+pub fn grpc(service: Service) -> Grpc {
+    let inner = pb::geo_ledger_server::GeoLedgerServer::new(service.clone())
+        .max_decoding_message_size(service.limits.max_request_bytes)
+        .max_encoding_message_size(service.limits.max_response_bytes);
+    Grpc { inner, service }
+}
+impl tower::Service<axum::http::Request<tonic::body::Body>> for Grpc {
+    type Response = axum::http::Response<tonic::body::Body>;
+    type Error = std::convert::Infallible;
+    type Future = std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = std::result::Result<Self::Response, Self::Error>>
+                + Send,
+        >,
+    >;
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
+        tower::Service::<axum::http::Request<tonic::body::Body>>::poll_ready(&mut self.inner, cx)
+    }
+    fn call(&mut self, mut request: axum::http::Request<tonic::body::Body>) -> Self::Future {
+        let method = request.uri().path().rsplit('/').next().unwrap_or("");
+        let mut operation = String::new();
+        for (i, c) in method.chars().enumerate() {
+            if i > 0 && c.is_ascii_uppercase() {
+                operation.push('_');
+            }
+            operation.push(c.to_ascii_lowercase());
+        }
+        if operation == "save_stream" {
+            operation = "save".into();
+        }
+        if operation == "features_stream" {
+            operation = "features".into();
+        }
+        let id = limits::request_id(
+            request
+                .headers()
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok()),
+        );
+        let peer = request
+            .extensions()
+            .get::<tls::PeerAddr>()
+            .map(|p| p.0.ip())
+            .or_else(|| {
+                request
+                    .extensions()
+                    .get::<tonic::transport::server::TcpConnectInfo>()
+                    .and_then(|p| p.remote_addr)
+                    .map(|p| p.ip())
+            })
+            .or_else(|| {
+                request
+                    .extensions()
+                    .get::<tonic::transport::server::TlsConnectInfo<
+                        tonic::transport::server::TcpConnectInfo,
+                    >>()
+                    .and_then(|info| info.get_ref().remote_addr)
+                    .map(|address| address.ip())
+            });
+        let mut call = Call::new("grpc", telemetry::operation_label(&operation), id, peer);
+        let admission = self
+            .service
+            .admit(&mut call, request.headers())
+            .and_then(|permit| {
+                let lease = self.service.responses.reserve(0)?;
+                Ok((permit, lease))
+            });
+        let (permit, lease) = match admission {
+            Ok(v) => v,
+            Err(e) => {
+                let error = self
+                    .service
+                    .finish::<()>(&call, Err(e))
+                    .err()
+                    .unwrap_or_else(bad);
+                return Box::pin(async move { Ok(status(error).into_http()) });
+            }
+        };
+        call.response_lease = Some(lease.clone());
+        let receive = permit.memory.clone();
+        let wire_limit = self
+            .service
+            .limits
+            .max_request_bytes
+            .saturating_mul(2)
+            .saturating_add(8192);
+        request = request.map(|body| {
+            tonic::body::Body::new(resources::BudgetedBody::grpc(
+                body,
+                receive,
+                self.service.limits.max_request_bytes,
+                wire_limit,
+            ))
+        });
+        let transport_call = call.clone();
+        let observer = self.service.clone();
+        request.extensions_mut().insert(Admission {
+            permit: Arc::new(std::sync::Mutex::new(Some(permit))),
+            call,
+        });
+        request.extensions_mut().insert(lease.clone());
+        let future = tower::Service::call(&mut self.inner, request);
+        Box::pin(async move {
+            let mut response = future.await?;
+            if let Some(error) = Status::from_header_map(response.headers()) {
+                if error.code() == Code::OutOfRange
+                    && error.message().contains("decoded message length too large")
+                {
+                    let error = observer
+                        .finish::<()>(
+                            &transport_call,
+                            Err(Error::new(413, "request exceeds byte budget")),
+                        )
+                        .err()
+                        .unwrap_or_else(bad);
+                    response = status(error).into_http();
+                } else if error.code() != Code::Ok
+                    && !transport_call.finished.load(Ordering::Acquire)
+                {
+                    let _ = observer.finish::<()>(
+                        &transport_call,
+                        Err(Error::new(400, "invalid gRPC message")),
+                    );
+                }
+            }
+            use http_body::Body;
+            if let Some(bytes) = response.body().size_hint().exact() {
+                lease.shrink(bytes.min(usize::MAX as u64) as usize);
+            }
+            Ok(
+                response
+                    .map(|body| tonic::body::Body::new(resources::LeasedBody::new(body, lease))),
+            )
+        })
+    }
+}
+impl Service {
+    fn admitted<T>(&self, call: &mut Call, request: &Request<T>) -> Result<ExecutionPermit> {
+        if let Some(admission) = request.extensions().get::<Admission>() {
+            call.subject = admission.call.subject.clone();
+            call.peer = admission.call.peer;
+            call.request_id = admission.call.request_id.clone();
+            call.started = admission.call.started;
+            call.finished = admission.call.finished.clone();
+            call.response_lease = admission.call.response_lease.clone();
+            return admission
+                .permit
+                .lock()
+                .map_err(|_| Error::new(500, "admission state unavailable"))?
+                .take()
+                .ok_or_else(|| Error::new(500, "admission already consumed"));
+        }
+        // Direct Rust trait calls (no transport) still use the same authentication policy.
+        call.response_lease = request.extensions().get::<resources::ByteLease>().cloned();
+        self.admit(call, &request.metadata().clone().into_headers())
+    }
 }
 fn input(mut value: Value) -> Result<Value> {
     if let Some(o) = value.as_object_mut() {
@@ -54,16 +224,20 @@ fn output(value: Value) -> Value {
     }
 }
 fn status(error: Error) -> Status {
-    let code = match error.status {
-        400 | 422 => Code::InvalidArgument,
-        401 => Code::Unauthenticated,
-        403 => Code::PermissionDenied,
-        404 => Code::NotFound,
-        409 => Code::Aborted,
-        413 | 429 => Code::ResourceExhausted,
-        408 | 504 => Code::DeadlineExceeded,
-        503 => Code::Unavailable,
-        _ => Code::Internal,
+    let code = if error.body["error"]["code"] == "cancelled" {
+        Code::Cancelled
+    } else {
+        match error.status {
+            400 | 422 => Code::InvalidArgument,
+            401 => Code::Unauthenticated,
+            403 => Code::PermissionDenied,
+            404 => Code::NotFound,
+            409 => Code::Aborted,
+            413 | 429 => Code::ResourceExhausted,
+            408 | 504 => Code::DeadlineExceeded,
+            503 => Code::Unavailable,
+            _ => Code::Internal,
+        }
     };
     let e = &error.body["error"];
     let mut detail = pb::ErrorDetail {
@@ -127,14 +301,27 @@ fn with_id<T>(mut response: Response<T>, id: &str) -> Response<T> {
     response
 }
 impl Service {
-    async fn call<I: Serialize, O: DeserializeOwned>(
+    async fn call<I: Serialize, O: DeserializeOwned + Message>(
         &self,
         request: Request<I>,
         op: &str,
     ) -> std::result::Result<Response<O>, Status> {
         let mut call = Call::new("grpc", op, incoming_id(&request), peer(&request));
-        let result = self.handle(&mut call, request).await;
+        let lease = request.extensions().get::<resources::ByteLease>().cloned();
+        let result: Result<O> = self.handle(&mut call, request).await;
         let response = self.finish(&call, result).map_err(status)?;
+        if response.encoded_len() > self.limits.max_response_bytes {
+            return Err(status(
+                Error::new(413, "response exceeds byte budget; reduce page size")
+                    .with_request_id(&call.request_id),
+            ));
+        }
+        if let Some(lease) = lease {
+            lease
+                .grow(response.encoded_len().saturating_add(5))
+                .map_err(status)?;
+            lease.shrink(response.encoded_len().saturating_add(5));
+        }
         Ok(with_id(Response::new(response), &call.request_id))
     }
     async fn handle<I: Serialize, O: DeserializeOwned>(
@@ -142,13 +329,12 @@ impl Service {
         call: &mut Call,
         request: Request<I>,
     ) -> Result<O> {
-        let headers = request.metadata().clone().into_headers();
         let timeout = request
             .metadata()
             .get("grpc-timeout")
             .and_then(|v| v.to_str().ok())
             .and_then(parse_timeout);
-        let permit = self.admit(call, &headers)?;
+        let permit = self.admitted(call, &request)?;
         let value = serde_json::to_value(request.into_inner()).map_err(|_| bad())?;
         let value = input(value)?;
         let mut result = self.execute(call, value, timeout, permit).await?;
@@ -196,7 +382,7 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         let mut call = Call::new("grpc", "save", incoming_id(&request), peer(&request));
         let result = async {
             // Authenticate and reserve capacity before accepting the upload.
-            let permit = self.admit(&mut call, &request.metadata().clone().into_headers())?;
+            let permit = self.admitted(&mut call, &request)?;
             let timeout = request
                 .metadata()
                 .get("grpc-timeout")
@@ -204,40 +390,47 @@ impl pb::geo_ledger_server::GeoLedger for Service {
                 .and_then(parse_timeout)
                 .unwrap_or(self.limits.request_timeout)
                 .min(self.limits.request_timeout);
-            let started = std::time::Instant::now();
             let mut stream = request.into_inner();
-            let bytes = tokio::time::timeout(timeout, async {
-                let mut bytes = Vec::new();
-                let mut total = None;
-                while let Some(chunk) = stream
-                    .message()
-                    .await
-                    .map_err(|_| Error::new(400, "upload interrupted"))?
-                {
-                    if total.is_none() {
-                        total = Some(chunk.total_bytes);
-                    } else if chunk.total_bytes != 0 {
-                        return Err(bad());
+            let bytes =
+                tokio::time::timeout(timeout.saturating_sub(call.started.elapsed()), async {
+                    let mut bytes = Vec::new();
+                    let mut total = None;
+                    while let Some(chunk) = stream
+                        .message()
+                        .await
+                        .map_err(|_| Error::new(400, "upload interrupted"))?
+                    {
+                        if total.is_none() {
+                            if chunk.total_bytes > self.limits.max_request_bytes as u64 {
+                                return Err(Error::new(413, "upload exceeds request byte budget"));
+                            }
+                            total = Some(chunk.total_bytes);
+                        } else if chunk.total_bytes != 0 {
+                            return Err(bad());
+                        }
+                        let next = bytes.len().checked_add(chunk.data.len()).ok_or_else(bad)?;
+                        if next > self.limits.max_request_bytes {
+                            return Err(Error::new(413, "upload exceeds request byte budget"));
+                        }
+                        if Some(next as u64) > total {
+                            return Err(bad());
+                        }
+                        bytes.extend_from_slice(&chunk.data);
                     }
-                    bytes.extend_from_slice(&chunk.data);
-                    if Some(bytes.len() as u64) > total {
-                        return Err(bad());
+                    if total != Some(bytes.len() as u64) {
+                        return Err(Error::new(400, "incomplete upload"));
                     }
-                }
-                if total != Some(bytes.len() as u64) {
-                    return Err(Error::new(400, "incomplete upload"));
-                }
-                Ok::<_, Error>(bytes)
-            })
-            .await
-            .map_err(|_| Error::new(408, "upload timeout"))??;
+                    Ok::<_, Error>(bytes)
+                })
+                .await
+                .map_err(|_| Error::new(408, "upload timeout"))??;
             let request = pb::SaveRequest::decode(bytes.as_slice()).map_err(|_| bad())?;
             let value = input(serde_json::to_value(request).map_err(|_| bad())?)?;
-            let remaining = timeout.saturating_sub(started.elapsed());
+            let remaining = timeout.saturating_sub(call.started.elapsed());
             if remaining.is_zero() {
                 return Err(Error::new(408, "upload timeout"));
             }
-            let result = self.execute(&call, value, Some(remaining), permit).await?;
+            let result = self.execute(&call, value, Some(timeout), permit).await?;
             serde_json::from_value(output(result))
                 .map_err(|_| Error::new(500, "response contract violation"))
         }
@@ -248,22 +441,42 @@ impl pb::geo_ledger_server::GeoLedger for Service {
 
     async fn features_stream(
         &self,
-        request: Request<pb::FeaturesRequest>,
+        mut request: Request<pb::FeaturesRequest>,
     ) -> std::result::Result<Response<Self::FeaturesStreamStream>, Status> {
+        // Reserve before querying; retain the lease through stream cancellation/EOF.
+        let lease = match request.extensions().get::<resources::ByteLease>() {
+            Some(lease) => lease.clone(),
+            None => self.responses.reserve(0).map_err(status)?,
+        };
+        request.extensions_mut().insert(lease.clone());
         // Run one Application query so all chunks describe the same snapshot.
         let response: Response<pb::FeaturesReply> = self.call(request, "features").await?;
         let (metadata, value, extensions) = response.into_parts();
+        if value.encoded_len() > self.limits.max_response_bytes {
+            return Err(status(Error::new(
+                413,
+                "response exceeds byte budget; reduce page size",
+            )));
+        }
+        lease.grow(value.encoded_len()).map_err(status)?;
         let bytes = value.encode_to_vec();
+        lease.shrink(bytes.len());
+        let mut bytes = Some(bytes);
+        let mut lease = Some(lease);
         let mut offset = 0;
         let mut emitted = false;
         let chunks = std::iter::from_fn(move || {
-            if emitted && offset == bytes.len() {
+            let source = bytes.as_ref()?;
+            if emitted && offset == source.len() {
+                bytes = None;
+                lease = None;
                 return None;
             }
-            let end = (offset + 64 * 1024).min(bytes.len());
+            let _lease = &lease;
+            let end = offset.saturating_add(64 * 1024).min(source.len());
             let chunk = pb::DataChunk {
-                data: bytes[offset..end].to_vec(),
-                total_bytes: if emitted { 0 } else { bytes.len() as u64 },
+                data: source[offset..end].to_vec(),
+                total_bytes: if emitted { 0 } else { source.len() as u64 },
             };
             emitted = true;
             offset = end;
@@ -278,16 +491,14 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         request: Request<pb::Empty>,
     ) -> std::result::Result<Response<pb::InfoReply>, Status> {
         let mut call = Call::new("grpc", "info", incoming_id(&request), peer(&request));
-        let admitted = self
-            .admit(&mut call, &request.metadata().clone().into_headers())
-            .map(drop);
+        let admitted = self.admitted(&mut call, &request).map(drop);
         self.finish(&call, admitted).map_err(status)?;
         Ok(with_id(
             Response::new(pb::InfoReply {
                 version: env!("CARGO_PKG_VERSION").into(),
                 backend: self.app.backend().into(),
                 format_version: geoledger_engine::FORMAT_VERSION as u32,
-                max_request_bytes: 0, // No application-level message byte cap.
+                max_request_bytes: self.limits.max_request_bytes as u32,
                 max_feature_bytes: 0, // No independent per-feature byte limit.
             }),
             &call.request_id,

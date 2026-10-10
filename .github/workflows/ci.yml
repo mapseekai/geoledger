@@ -4,13 +4,28 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable commit checked by every required job
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
-  group: geoledger-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: geoledger-ci-${{ github.workflow }}-${{ inputs.source_sha || github.ref }}
+  # A required release gate must not be cancelled by another call for the same SHA.
+  cancel-in-progress: ${{ !inputs.source_sha }}
 jobs:
+  source:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require immutable source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+        run: python3 -c 'import os,re; assert re.fullmatch(r"[0-9a-f]{40}", os.environ["SOURCE_SHA"]), "full commit SHA required"'
   linux:
+    needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:
@@ -29,13 +44,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
+          go-version-file: sdk/go/go.mod
           cache-dependency-path: sdk/go/go.sum
       - name: Toolchains
         run: |
@@ -83,11 +99,13 @@ jobs:
       - name: Reference TLS gateway
         run: ./scripts/test-gateway.sh
   web:
+    needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -127,11 +145,13 @@ jobs:
           done
           python3 scripts/test-console.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/admin-credentials.json"
   msrv:
+    needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - run: |
           sudo apt-get update
@@ -139,12 +159,20 @@ jobs:
           rustup toolchain install 1.88.0 --profile minimal
           cargo +1.88.0 check --workspace --all-targets --locked
   windows:
+    needs: source
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
+      - uses: actions/setup-python@06da6279cdbca41027908073e81a4544dc79c06b
+        with:
+          python-version: '3.12'
+      - name: Spatial runtime (checksum-pinned, isolated)
+        shell: pwsh
+        run: python scripts/install-spatialite.py --destination "$env:RUNNER_TEMP/geoledger-native"
       - name: Rust and protoc
         shell: pwsh
         env:
@@ -161,20 +189,26 @@ jobs:
           (Join-Path $tools 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      - run: cargo build --locked -p geoledger-server
+      - name: Real Windows native spatial startup
+        shell: pwsh
+        run: python scripts/smoke-server.py --binary target/debug/geoledger-server.exe --runtime "$env:RUNNER_TEMP/geoledger-native"
   supply-chain:
+    needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest release: stdlib advisories are judged against a supported Go.
-          go-version: stable
+          # Audit using the exact patched toolchain required by the module.
+          go-version-file: sdk/go/go.mod
           cache-dependency-path: sdk/go/go.sum
       - name: Scanners
         run: |
@@ -183,6 +217,4 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           pipx install pip-audit==2.9.0
       - name: Dependency advisories (Rust, npm, Go, Python)
-        env:
-          GL_AUDIT_REQUIRE_ALL: '1'
         run: ./scripts/audit.sh

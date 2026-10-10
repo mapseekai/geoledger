@@ -83,3 +83,46 @@ fn sqlite_commit_failure_preserves_atomic_history_and_original_request_can_retry
     }
     Ok(())
 }
+
+#[test]
+fn sqlite_lock_wait_does_not_hold_native_lifecycle_across_databases()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let locked_path = dir.path().join("locked.sqlite3");
+    let waiting = Application::new(Storage::Sqlite(locked_path.clone()));
+    waiting.migrate()?;
+    let independent = Application::new(Storage::Sqlite(dir.path().join("independent.sqlite3")));
+    independent.migrate()?;
+    let blocker = rusqlite::Connection::open(&locked_path)?;
+    blocker.execute_batch("BEGIN IMMEDIATE")?;
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = started_tx.send(());
+        waiting.with_timeout(Duration::from_secs(2)).execute(
+            "alice",
+            "create_project",
+            json!({"name":"eventually unlocked"}),
+        )
+    });
+    let started = started_rx.recv_timeout(Duration::from_secs(1));
+    std::thread::sleep(Duration::from_millis(50));
+    let before = Instant::now();
+    let result = independent
+        .with_timeout(Duration::from_millis(500))
+        .execute("alice", "list_projects", json!({}));
+    let elapsed = before.elapsed();
+    // Always unblock and join before assertions, including on a regression.
+    blocker.execute_batch("ROLLBACK")?;
+    let completed = worker.join();
+    assert!(started.is_ok());
+    assert!(
+        result.is_ok(),
+        "independent database was blocked: {result:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "cross-database native lock wait: {elapsed:?}"
+    );
+    assert!(matches!(completed, Ok(Ok(_))));
+    Ok(())
+}

@@ -731,6 +731,8 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
+ "tracing",
  "uuid",
 ]
 
@@ -756,6 +758,7 @@ dependencies = [
  "geoledger-engine",
  "geoledger-rpc",
  "getrandom 0.4.3",
+ "http-body",
  "http-body-util",
  "jsonwebtoken",
  "prost",
@@ -783,6 +786,7 @@ dependencies = [
 name = "geoledger-spatialite"
 version = "0.3.0-alpha.1"
 dependencies = [
+ "parking_lot",
  "rusqlite",
 ]
 

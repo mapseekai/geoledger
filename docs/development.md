@@ -50,7 +50,7 @@ npm ci --prefix sdk/ts
 ./scripts/generate-sdk.sh
 ```
 
-生成工具需在 PATH 上。Python 脚本可用 `PYTHON` 指定含 grpcio-tools 的解释器。Go 模块要求 Go 1.25+；TypeScript 构建/运行推荐 Node.js 22；Python 客户端要求 3.10+。
+生成工具需在 PATH 上。Python 脚本可用 `PYTHON` 指定含 grpcio-tools 的解释器。Go 模块要求 Go 1.27.2+；TypeScript 构建/运行推荐 Node.js 22；Python 客户端要求 3.10+。
 
 ## 四语言联调
 
@@ -62,7 +62,7 @@ npm ci --prefix sdk/ts
 ./target/debug/geoledger-server --data-dir ./target/sdk-test
 ```
 
-另一个终端准备 Python 环境、TS 依赖并运行联调（Go 1.25+ 已在 PATH）：
+另一个终端准备 Python 环境、TS 依赖并运行联调（Go 1.27.2+ 已在 PATH）：
 
 ```sh
 python3 -m venv .venv
@@ -161,9 +161,9 @@ python3 scripts/test-console.py \
 
 ## 依赖与发布
 
-[audit.sh](../scripts/audit.sh) 是依赖安全门禁（需要网络）：`cargo audit --deny warnings`（RustSec，已接受的公告和理由写在 [.cargo/audit.toml](../.cargo/audit.toml)）、`web/` 与 `sdk/ts/` 的 `npm audit`（运行时依赖 moderate 及以上、全部依赖 high 及以上）、`sdk/go` 的 `govulncheck`、`sdk/python` 的 `pip-audit --strict`。后两个工具未安装时跳过，设置 `GL_AUDIT_REQUIRE_ALL=1` 时视为失败（CI 设置）。`govulncheck` 按运行它的 Go 版本判断标准库公告，使用当前受支持的 Go 版本运行。
+[audit.sh](../scripts/audit.sh) 是依赖安全门禁（需要网络）：`cargo audit --deny warnings`（RustSec，已接受的公告和理由写在 [.cargo/audit.toml](../.cargo/audit.toml)）、`web/` 与 `sdk/ts/` 的 `npm audit`（运行时依赖 moderate 及以上、全部依赖 high 及以上）、`sdk/go` 的 `govulncheck`、`sdk/python` 的 `pip-audit --strict`。所有扫描器均为必需；工具缺失、公告查询失败和策略命中都会返回非零状态，不再将部分扫描报告为整体通过。`govulncheck` 按运行它的 Go 版本判断标准库公告，使用当前受支持的 Go 版本运行。
 
-[Dependabot](../.github/dependabot.yml) 每周为 Cargo、npm（web、sdk/ts）、Go、pip、GitHub Actions 与 Dockerfile 基础镜像提出更新。Actions 固定到完整 commit SHA 并在注释中标注版本；Dockerfile 基础镜像固定 digest，由 Dependabot 刷新。
+[Dependabot](../.github/dependabot.yml) 每周为 Cargo、npm（web、sdk/ts）、Go、pip、GitHub Actions 与 Dockerfile 基础镜像提出更新。Actions 固定到完整 commit SHA；Dockerfile 基础镜像固定 digest，由 Dependabot 刷新。
 
 发布流程：更新 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml`（PEP 440 形式，如 `0.3.0a1`）的版本，把 [CHANGELOG](../CHANGELOG.md) 的 `Unreleased` 段落改为同名版本，合并后在 main 上推送 `vX.Y.Z` 标签。发布 workflow（`.github/workflows/release.yml`）校验标签与各包版本一致，构建 Linux x86_64/aarch64 与 Windows x86_64 二进制（含 SHA256、源码 SBOM 和构建来源证明）、多架构服务与控制台镜像（推送到 GHCR，附 SBOM 与 provenance，cosign 无密钥签名），创建 GitHub Release，并在配置凭证时发布 npm/PyPI SDK、为 Go 模块打 `sdk/go/vX.Y.Z` 标签。协议由 CI 验证生成代码与 SDK 联调，规则见 [当前版本契约](api.md#当前版本契约)；漏洞处理见 [安全策略](../SECURITY.md)。
 
@@ -196,3 +196,20 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 `scripts/test-console-postgis.py` 验证完整 Web 纳管与发布。使用隔离 PostGIS 服务，在当前数据库准备 `business.roads(id bigint PRIMARY KEY, name text NOT NULL, geom geometry(LineString,4326))` 及一条要素，并通过 `GL_ADMIN_SUBJECTS=admin` 授权测试管理员。脚本接收与上传测试相同的 `--url`、`--token-file`、`--chromium` 和 `--screenshots` 参数。
 
 2026-10-10 本机隔离验证：Node.js 22.23.2、Web 生产构建、PostgreSQL 17.10 / PostGIS 3.6.1；服务使用非超级用户并拥有测试业务表。浏览器经 `trackTable` 纳管一条 LineString，编辑属性与几何并发布 r2，直接 SQL 核对原表写回。对该库执行 `pg_dump -Fc` / `pg_restore` 到独立新库后，确认绑定和 r2 快照保留；继续发布 r3、重放原请求，再直接核对原表写回。该验证仅覆盖小规模功能恢复，不代表目标环境的容量、RPO、RTO 或高可用验收。
+
+## 评审回归
+
+格式 12 的 R-001 至 R-016 实现、验证入口与运行边界见 [评审修复记录](review-fixes.md)。`scripts/check.sh` 包含独立 SpatiaLite 构建检查；配置 `GL_TEST_DATABASE_URL` 时同时运行连接清理、锁顺序和热空间查询计划回归。
+
+
+### 发布前置检查与原生产物
+
+正式发布和 Docker Hub 重建均先将目标解析到完整 commit SHA，然后复用同一套 CI：Linux/Windows、MSRV、Web 与浏览器、双后端及 SDK、安全扫描。镜像先构建为本地 OCI 产物，按 amd64/arm64 的准确 manifest 扫描系统包和语言依赖，HIGH/CRITICAL（包括暂无修补版本的公告）阻断发布。通过后使用 `skopeo --all --preserve-digests` 复制同一产物，不重新构建；签名、扫描凭据、发布清单绑定同一 digest。
+
+[发布策略检查](../scripts/check-release-policy.py) 和 [失败注入测试](../scripts/test_supply_chain.py) 随 `scripts/check.sh` 执行。完整工作流使用 actionlint 检查语法。Windows 原生依赖通过 [安装器](../scripts/install-spatialite.py) 和 [版本锁](../.security/windows-spatialite.lock.json) 校验到隔离目录；二进制在打包前执行真实初始化、XYZ 保存发布、bbox 查询与重启测试，而非只检查 `--version`。
+
+[镜像复审工作流](../.github/workflows/image-audit.yml) 每天从最新非草稿 Release 的 `*-images.json` 清单读取镜像 digest，并重扫两个架构；手动输入标签可复审指定版本。无清单、拉取失败、扫描失败均作为失败处理。历史重建所选提交也必须具备当前发布门禁所需的脚本和依赖配置，缺失时停止发布。R-017 至 R-021 的变更与验证见 [供应链修复记录](supply-chain-fixes.md)。
+
+### 容器构建工具链维护
+
+基础镜像由 Dependabot 更新；容器 npm 内置依赖与原生 TypeScript 的源码、Go SDK 和模块文件通过 `.security` 下的构建锁显式管理。更新包版本时同步核对构建锁，发布策略检查会拒绝版本或摘要漂移。当前设计、回归命令与平台验收范围见 [构建环境修复记录](build-environment-fixes.md)。

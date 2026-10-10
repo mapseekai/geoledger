@@ -40,7 +40,7 @@ docker compose logs geoledger
 docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 ```
 
-服务端镜像基于固定 digest 的 `debian:bookworm-slim`，以 UID 10001 运行，内置 `probe` 健康检查，实测约 106 MB（多阶段构建，运行层只含 `geoledger-server`、`gl`、CA 证书与 libssl）。
+服务端镜像基于固定 digest 的 Alpine 3.24，以 UID 10001 运行，内置 `probe` 健康检查，包含 `geoledger-server`、`gl`、CA 证书、OpenSSL、SpatiaLite 及实际原生依赖。容器中的扩展路径显式为 `/usr/lib/mod_spatialite.so.8`；Rust 构建使用动态 CRT 以允许加载扩展。构建环境和运行环境分别经过扫描，实际验证与平台边界见 [构建环境修复记录](build-environment-fixes.md)。
 
 控制台组合部署按 [Web 容器运行](../web/README.md#容器运行) 先设置会话密钥，再启用 console profile。`docker compose down` 停止组合服务，命名卷按数据保留策略管理。
 
@@ -95,6 +95,8 @@ docker compose -f deploy/compose.production.yaml up -d --build
 | GL_HEALTH_LISTEN | 可选明文探针监听地址，只提供 /health 与 /ready |
 | GL_MAX_CONCURRENCY | HTTP 与 gRPC 共用执行槽，默认 20 |
 | GL_REQUEST_TIMEOUT_SECS | 单次操作期限上限，默认 30 |
+| GL_MAX_REQUEST_BYTES / GL_MAX_RESPONSE_BYTES | 编码请求与响应预算，默认各 67108864 字节 |
+| GL_REQUEST_MEMORY_BYTES / GL_RESPONSE_MEMORY_BYTES | 并发传输的编码字节预留预算，默认各 268435456 字节；JSON/原生分配额外计入部署容量 |
 | GL_DB_POOL_SIZE | PostgreSQL 连接上限，默认 20 |
 | GL_DB_STATEMENT_TIMEOUT_SECS / GL_DB_LOCK_TIMEOUT_SECS | PostgreSQL 语句与锁等待期限，默认 30 / 10 |
 | GL_RATE_LIMIT_SUBJECT_RPS / _BURST | 每个身份的持续速率与突发量，默认 0（关闭）/ 50 |
@@ -108,7 +110,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 | GL_DATA_TIMEOUT_SECS | backup、export、import、verify 命令的期限，默认 3600 |
 | RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
-启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 11；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
+启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 12；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
 
 根目录 [.env.example](../.env.example) 提供当前服务配置模板，列出服务端和 `gl` 的全部 `GL_*` 参数及默认值，[check-env.py](../scripts/check-env.py) 在 `check.sh` 中校验它与代码一致。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
 
@@ -118,16 +120,16 @@ docker compose -f deploy/compose.production.yaml up -d --build
 
 公网访问使用服务端 TLS（`GL_TLS_CERT`/`GL_TLS_KEY`，可选 mTLS）或 TLS 网关：HTTP 转发到 HTTP 监听器；gRPC 网关保持 HTTP/2 并转发到 gRPC 监听器，参考 [nginx.conf](../deploy/gateway/nginx.conf) 与 [Caddyfile](../deploy/gateway/Caddyfile)。SDK 的 https 地址启用服务器证书验证；http 地址只用于回环主机，其他主机需要显式开启明文。凭证通过秘密管理注入；浏览器使用只含随机会话 ID 的加密 HttpOnly Cookie，凭证保存在 Web 服务端内存，代理通过过滤认证头和请求体日志保护凭证。
 
-PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装扩展后让服务账号创建应用表。默认 `sslmode=verify-full`，跨主机数据库连接校验证书链与主机名。每个实例的活跃数据库会话上限为 `GL_DB_POOL_SIZE`（默认 20），数据库和网关连接预算按实例数计算。
+PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装扩展后让服务账号创建应用表。默认 `sslmode=verify-full`，跨主机数据库连接校验证书链与主机名。每个实例用于业务的数据库连接名额由 `GL_DB_POOL_SIZE`（默认 20）约束；超时连接在确认 ROLLBACK 完成或原后端已消失之前仍占用名额。清理不确定时名额隔离并报警，避免用新连接无限替代仍在执行的旧会话。每个池最多额外建立一个串行恢复探测连接，用原 PID 和 backend_start 验证会话身份；连接故障排查应为该控制连接预留容量。数据库和网关连接预算按实例数计算。
 
 ## 容量规划
 
 - HTTP 与 RPC 共用 `GL_MAX_CONCURRENCY` 个执行槽（默认 20），耗尽时明确返回繁忙（429）。
 - 默认操作期限 `GL_REQUEST_TIMEOUT_SECS`（30 秒）；RPC 可缩短期限。PostgreSQL 单语句与锁等待期限可配置（默认 30 / 10 秒），同时受总期限约束；SQLite 锁等待服从剩余总期限。
 - 速率限制按身份和客户端 IP 使用令牌桶，超限返回 429 与 `Retry-After: 1`。部署在网关后时，在网关限速（参考 [nginx.conf](../deploy/gateway/nginx.conf) 的 `limit_req`），或开启 `GL_TRUST_FORWARDED_FOR` 让服务按真实客户端地址限速。
-- 请求、响应与单个 Feature 不设应用层固定字节上限，最多 256 个属性；空间坐标为 EPSG:4326 XY/XYZ。
+- 单个编码请求与响应默认分别限 64 MiB，接收与响应的总预留预算默认各 256 MiB，四个预算参数可配置；单个 Feature 受请求/响应总预算约束，最多 256 个属性；空间坐标为 EPSG:4326 XY/XYZ。
 - 每批 Save 最多 100 条修改，单工作区不设累计要素数量上限。批量导入分批保存，发布仍为原子事务；实际容量受可用资源与请求期限影响，客户端为每次发布保留独立请求 ID。
-- 列表默认 100、最多 1000 条；不设独立响应字节上限，复杂几何可降低页大小以控制客户端内存。
+- 列表默认 100、最多 1000 条；结果同时服从响应字节预算，复杂几何可降低页大小以控制客户端内存。
 - 磁盘预算覆盖原始要素、历史、索引、WAL、审计与备份，按数据增长和保留策略预留空间。
 
 容量验收结合当前存储格式、几何类型、历史深度、RPC 请求模型和目标环境开展，测量吞吐、延迟分位数与磁盘增长。专项测试入口见 [容量验证](development.md#容量验证)。
@@ -156,7 +158,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 | `geoledger_auth_failures_total` | 认证失败次数 |
 | `geoledger_rate_limited_total{scope}` | 按 `subject` / `ip` 的限速拒绝次数 |
 | `geoledger_in_flight_requests`、`geoledger_execution_slots_available`、`geoledger_execution_slots_capacity` | 并发占用 |
-| `geoledger_db_pool_connections{state}`、`geoledger_db_pool_capacity`、`geoledger_db_pool_wait_timeouts_total` | PostgreSQL 连接池（postgis 模式） |
+| `geoledger_db_pool_connections{state}`、`geoledger_db_pool_capacity`、`geoledger_db_pool_wait_timeouts_total`、`geoledger_db_pool_retiring` | PostgreSQL 连接池（postgis 模式） |
 | `geoledger_draining`、`geoledger_build_info{version}` | 关闭状态与版本 |
 
 标签只使用固定的操作名与状态码集合，从不使用身份、项目、要素 ID 或请求 ID。建议告警：`internal_errors_total` 增速、`rate(busy_total)`、`db_pool_wait_timeouts_total` 增长、`/ready` 失败。
@@ -165,7 +167,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 ### 存储格式
 
-当前存储格式为 11，包含项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
+当前存储格式为 12，包含项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
 
 - 同格式部署沿用原数据目录，启动后检查 `/ready`、项目列表与历史查询。
 - 存储格式变化时，使用独立的新数据库，通过当前 CLI 或 SDK 导入源业务要素。
@@ -175,7 +177,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 项目 owner 可列出成员（`list_members`）、修改角色、移除成员（`remove_member`，成员也可退出项目），但项目必须保留至少一名 owner。owner 可归档项目（`archive_project`）：归档后数据只读，成员管理、恢复与删除仍可执行。删除（`delete_project`）需提交与项目名称一致的 `confirm_name`，项目从所有列表与查询中隐藏，数据集、工作区、版本历史和发布收据被清除，保留项目删除标记、成员引用与不可变审计。纳管的原业务表及其当前数据保留并解除绑定。
 
-`GL_ADMIN_SUBJECTS` 指定的平台管理员可对任意项目执行上述成员与生命周期操作（审计记录其 subject），用于离职交接和孤儿项目处理，但不因此获得要素、历史或审计的读取权限。`GL_PROJECT_CREATION=admins` 与 `GL_MAX_PROJECTS_PER_SUBJECT` 限制项目创建，拒绝时返回 403。配额为软上限：PostgreSQL 多实例同时创建时可能短暂超出 1 个。
+`GL_ADMIN_SUBJECTS` 指定的平台管理员可对任意项目执行上述成员与生命周期操作（审计记录其 subject），用于离职交接和孤儿项目处理，但不因此获得要素、历史或审计的读取权限。`GL_PROJECT_CREATION=admins` 与 `GL_MAX_PROJECTS_PER_SUBJECT` 限制项目创建，拒绝时返回 403。PostgreSQL 使用 subject 级事务 advisory lock 串行化创建配额检查；并发创建使用同一配额语义。
 
 ### 停止与发布确认
 
@@ -245,4 +247,12 @@ SQLite 观察数据库文件与 WAL 文件大小。两种后端都为数据卷�
 
 ### 业务表纳管部署
 
-将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，配置 `GL_ADMIN_SUBJECTS` 授权表纳管操作。使用格式 11 的独立初始化环境；部署前保存业务数据库备份。服务账号需要业务表增删改权限，以及表所有权或等效的所有者角色权限：纳管与解绑会创建、启用和删除触发器，仅授予 `TRIGGER` 权限不足。业务应用撤销对纳管表的直接写权限，不将保护触发器视为数据库授权边界。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。
+将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，配置 `GL_ADMIN_SUBJECTS` 授权表纳管操作。使用格式 12 的独立初始化环境；部署前保存业务数据库备份。服务账号需要业务表增删改权限，以及表所有权或等效的所有者角色权限：纳管与解绑会创建、启用和删除触发器，仅授予 `TRIGGER` 权限不足。业务应用撤销对纳管表的直接写权限，不将保护触发器视为数据库授权边界。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。
+
+### 格式 12 的运行边界
+
+格式 12 新增事务维护的草稿计数与冲突键索引，仅初始化当前结构。格式 11 数据目录和备份保持原样；验证使用独立的新数据库。当前格式的备份、逻辑导入导出继续作为环境搬迁入口，派生计数在导入时重建，冲突索引按需重建。
+
+请求期限包含接收和执行排队时间。数据库每次执行根据剩余期限设置 statement_timeout/lock_timeout；本地超时后发出取消并等待回滚确认。客户端放弃等待不会提前释放实际操作的执行计数或省略操作完成记录；业务审计依然与数据同事务提交。响应读取缓慢时，编码缓冲区继续计入响应预算。
+
+空间查询事务使用参数敏感的 custom plan，避免热连接将全图与稀疏范围混用通用计划；同一读取快照内的当前 HEAD 查询使用 history_live，历史修订仍使用有效期过滤。根据真实几何、并发量和数据分布验收容量；历史基准不是格式 12 的生产容量承诺。

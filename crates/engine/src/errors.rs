@@ -37,6 +37,14 @@ impl Error {
     pub(crate) fn database(source: tokio_postgres::Error) -> Self {
         let error = if source.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
             Self::new(409, "resource already exists")
+        } else if source.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) {
+            // Cancellation source is classified by the executing session, using
+            // its deadline, not a locale-dependent PostgreSQL message string.
+            let mut error = Self::new(409, "database operation cancelled");
+            error.body["error"]["code"] = json!("cancelled");
+            error
+        } else if source.code() == Some(&tokio_postgres::error::SqlState::LOCK_NOT_AVAILABLE) {
+            Self::new(429, "database lock unavailable")
         } else {
             Self::new(503, "database operation failed")
         };

@@ -4,7 +4,7 @@
 
 GeoLedger 为道路、地块、监测点等空间要素提供版本控制。团队成员在独立工作区中编辑 GeoJSON，通过属性三方合并、冲突解决和原子发布形成共享版本；历史查询、提交撤销、成员权限与审计帮助追踪和管理数据变化。
 
-当前版本为 `0.3.0-alpha.1`，存储格式为 11。默认 SQLite + SpatiaLite（Docker 镜像包含扩展），可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
+当前版本为 `0.3.0-alpha.1`，存储格式为 12。默认 SQLite + SpatiaLite（Docker 镜像包含扩展），可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
 
 ## 获取代码
 
@@ -19,7 +19,7 @@ SSH 克隆使用已配置到 GitHub 账号的 SSH 密钥。仓库根目录是 Ca
 
 | 用途 | 工具 |
 |---|---|
-| 构建服务端和 CLI | [Rust](https://www.rust-lang.org/tools/install) 1.88+，推荐与主 CI 和 Dockerfile 一致的 1.92；[protoc](https://github.com/protocolbuffers/protobuf/releases) 3.21+；C 编译器 |
+| 构建服务端和 CLI | [Rust](https://www.rust-lang.org/tools/install) 1.88+，主 CI 使用 1.92，Docker 构建使用固定的 1.98；[protoc](https://github.com/protocolbuffers/protobuf/releases) 3.21+；C 编译器 |
 | Linux/macOS 数据库连接依赖 | pkg-config、OpenSSL 开发库 |
 | 仓库检查 | [Python](https://www.python.org/downloads/) 3.10+、Rust 的 rustfmt 与 Clippy |
 | Web 控制台和 TS SDK | [Node.js](https://nodejs.org/en/download) 22 与随附 npm |
@@ -44,7 +44,7 @@ curl --fail http://127.0.0.1:7881/ready
 ./target/debug/gl --token-file ./geoledger-data/admin-credentials.json info
 ```
 
-就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 11 等服务信息。首次启动直接创建格式 11 的数据库、服务端摘要文件 `tokens.json` 和客户端凭证文件 `admin-credentials.json`。CLI 和控制台使用客户端凭证中的令牌。
+就绪检查返回 `{"ok":true}`；CLI 输出版本、SQLite 后端与格式 12 等服务信息。首次启动直接创建格式 12 的数据库、服务端摘要文件 `tokens.json` 和客户端凭证文件 `admin-credentials.json`。CLI 和控制台使用客户端凭证中的令牌。
 
 ### Web 开发服务
 
@@ -65,7 +65,7 @@ cargo build --release --locked --bins
 ./scripts/check.sh
 ```
 
-产物为 `target/release/geoledger-server` 和 `target/release/gl`，Windows 使用 `.exe`。Web 的生产构建和检查见 [Web 文档](web/README.md#构建测试与部署)，跨后端及 SDK 验证见 [开发指南](docs/development.md)。
+产物为 `target/release/geoledger-server` 和 `target/release/gl`，Windows 使用 `.exe`，默认 SQLite 后端按 [Windows 环境准备](docs/getting-started.md#windows) 安装校验过的 SpatiaLite 运行时。Web 的生产构建和检查见 [Web 文档](web/README.md#构建测试与部署)，跨后端及 SDK 验证见 [开发指南](docs/development.md)。
 
 容器部署使用仓库中的 Compose 配置：
 
@@ -73,7 +73,7 @@ cargo build --release --locked --bins
 docker compose up --build -d
 ```
 
-服务端、CLI、SDK 和 Web 控制台按同一发布版本部署。格式 11 的已有数据库可直接沿用；新环境可通过当前格式的备份恢复或逻辑导入导出搬迁完整数据。版本关系见 [当前版本契约](docs/api.md#当前版本契约)，部署配置、持久化、TLS、身份与备份见 [生产运行](docs/production.md)。
+服务端、CLI、SDK 和 Web 控制台按同一发布版本部署。格式 12 的已有数据库可直接沿用；格式 11 数据目录应保留备份，开发环境另建格式 12 数据库，不自动改写旧库；新环境可通过当前格式的备份恢复或逻辑导入导出搬迁完整数据。版本关系见 [当前版本契约](docs/api.md#当前版本契约)，部署配置、持久化、TLS、身份与备份见 [生产运行](docs/production.md)。
 
 ## 贡献
 

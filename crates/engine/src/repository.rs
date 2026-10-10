@@ -53,9 +53,23 @@ pub struct FeatureQuery {
     pub bbox: Option<[f64; 4]>,
     pub limit: i64,
 }
+#[derive(Clone, Copy)]
+pub struct ConflictQuery<'a> {
+    pub project: &'a str,
+    pub workspace: &'a str,
+    pub base: i64,
+    pub head: i64,
+    pub after_dataset: &'a str,
+    pub after_key: &'a str,
+    pub limit: i64,
+}
 /// All methods are scoped by a validated project; authorization remains in Application.
 /// begin_merge/stage_merge are transaction-local staging, never durable publication.
 pub trait RepositoryTransaction: Send {
+    fn set_response_limit(&mut self, bytes: usize);
+    fn response_limit(&self) -> usize;
+    fn set_response_reservation(&mut self, reservation: Option<crate::ResponseReservation>);
+    fn response_reservation(&self) -> Option<crate::ResponseReservation>;
     /// (role, project state) for an active member of a project that is not deleted.
     fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>>;
     fn project_head(&mut self, project: &str, lock: bool) -> Result<Option<Row>>;
@@ -190,6 +204,33 @@ pub trait RepositoryTransaction: Send {
         limit: i64,
     ) -> Result<Vec<Row>>;
     fn audit_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>>;
+    /// Transactional conflict index for exactly one workspace/version/HEAD tuple.
+    /// Its rows are derived data and must not grant access without application authorization.
+    fn cached_conflict_count(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        base: i64,
+        version: i64,
+        head: i64,
+    ) -> Result<Option<i64>>;
+    fn reset_conflict_cache(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        base: i64,
+        version: i64,
+        head: i64,
+    ) -> Result<()>;
+    fn cache_conflict_keys(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        keys: &[(String, String)],
+    ) -> Result<()>;
+    fn complete_conflict_cache(&mut self, project: &str, workspace: &str, total: i64)
+    -> Result<()>;
+    fn cached_conflict_page(&mut self, query: &ConflictQuery<'_>) -> Result<Vec<Row>>;
     fn begin_merge(&mut self) -> Result<()>;
     fn merge_page(
         &mut self,

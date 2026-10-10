@@ -72,6 +72,15 @@ struct Args {
     /// Upper bound for every operation, including client gRPC deadlines.
     #[arg(long, env = "GL_REQUEST_TIMEOUT_SECS", default_value_t = 30)]
     request_timeout_secs: u64,
+    /// Maximum encoded request (unary or complete streamed upload).
+    #[arg(long, env = "GL_MAX_REQUEST_BYTES", default_value_t = 64 * 1024 * 1024)]
+    max_request_bytes: usize,
+    #[arg(long, env = "GL_MAX_RESPONSE_BYTES", default_value_t = 64 * 1024 * 1024)]
+    max_response_bytes: usize,
+    #[arg(long, env = "GL_REQUEST_MEMORY_BYTES", default_value_t = 256 * 1024 * 1024)]
+    request_memory_bytes: usize,
+    #[arg(long, env = "GL_RESPONSE_MEMORY_BYTES", default_value_t = 256 * 1024 * 1024)]
+    response_memory_bytes: usize,
     /// Maximum PostgreSQL connections.
     #[arg(long, env = "GL_DB_POOL_SIZE", default_value_t = 20)]
     db_pool_size: usize,
@@ -456,6 +465,10 @@ async fn run(args: Args) -> Result<(), BoxError> {
         per_subject: Rate::new(args.rate_limit_subject_rps, args.rate_limit_subject_burst),
         per_ip: Rate::new(args.rate_limit_ip_rps, args.rate_limit_ip_burst),
         trust_forwarded_for: args.trust_forwarded_for,
+        max_request_bytes: args.max_request_bytes,
+        max_response_bytes: args.max_response_bytes,
+        request_memory_bytes: args.request_memory_bytes,
+        response_memory_bytes: args.response_memory_bytes,
     };
     let service = Service::with_authentication(app, authentication.clone()).with_limits(limits);
     // Bind both before reporting readiness. A failed listener leaves no half-started service.

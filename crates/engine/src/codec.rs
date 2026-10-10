@@ -187,6 +187,98 @@ fn range() -> Error {
 pub(crate) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
     serde_json::to_vec(value).map_err(|_| Error::new(500, "response encoding failed"))
 }
+/// Count/encode without an unbounded intermediate buffer. Reservation grows in KiB steps.
+struct Limited<W> {
+    inner: W,
+    left: usize,
+    written: usize,
+    reserved: usize,
+    reservation: Option<crate::ResponseReservation>,
+    error: Option<Error>,
+}
+impl<W: std::io::Write> std::io::Write for Limited<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.left {
+            self.error = Some(Error::new(
+                413,
+                "response exceeds byte budget; reduce page size",
+            ));
+            return Err(std::io::Error::other("response byte budget exceeded"));
+        }
+        let required = self.written.saturating_add(bytes.len());
+        if required > self.reserved
+            && let Some(reserve) = &self.reservation
+        {
+            if let Err(error) = reserve(required) {
+                self.error = Some(error);
+                return Err(std::io::Error::other("response memory budget exhausted"));
+            }
+            self.reserved = required.div_ceil(1024).saturating_mul(1024);
+        }
+        let n = self.inner.write(bytes)?;
+        self.left -= n;
+        self.written += n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+pub(crate) fn encode_limited(
+    value: &impl Serialize,
+    bytes: usize,
+    reservation: Option<crate::ResponseReservation>,
+) -> Result<Vec<u8>> {
+    let mut out = Limited {
+        inner: Vec::with_capacity(bytes.min(8192)),
+        left: bytes,
+        written: 0,
+        reserved: 0,
+        reservation,
+        error: None,
+    };
+    serde_json::to_writer(&mut out, value).map_err(|_| {
+        out.error
+            .take()
+            .unwrap_or_else(|| Error::new(500, "response encoding failed"))
+    })?;
+    Ok(out.inner)
+}
+pub(crate) struct Budget {
+    left: usize,
+    used: usize,
+    reservation: Option<crate::ResponseReservation>,
+}
+impl Budget {
+    pub fn new(bytes: usize, reservation: Option<crate::ResponseReservation>) -> Self {
+        Self {
+            left: bytes,
+            used: 0,
+            reservation,
+        }
+    }
+    pub fn include(&mut self, value: &impl Serialize) -> Result<()> {
+        let mut out = Limited {
+            inner: std::io::sink(),
+            left: self.left,
+            written: 0,
+            reserved: 0,
+            reservation: None,
+            error: None,
+        };
+        serde_json::to_writer(&mut out, value).map_err(|_| {
+            out.error
+                .take()
+                .unwrap_or_else(|| Error::new(500, "response encoding failed"))
+        })?;
+        self.used = self.used.saturating_add(out.written).saturating_add(1);
+        if let Some(reserve) = &self.reservation {
+            reserve(self.used)?;
+        }
+        self.left = out.left.saturating_sub(1);
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

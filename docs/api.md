@@ -18,7 +18,7 @@ Go、Rust、TypeScript / Node.js、Python 提供普通业务方法和工作区�
 Python 使用 RLock，TypeScript 进行同句柄并发校验。多个独立对象的并发编辑由服务端乐观版本检查协调。
 
 默认 SDK 地址 `http://127.0.0.1:7882`，控制台 HTTP 地址使用另一个端口。
-SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒，不设应用层固定消息字节上限。
+SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒；服务端对编码请求和响应分别设置可配置预算，默认各 64 MiB。
 
 `http://` 地址只用于回环主机（`127.0.0.1`、`::1`、`localhost`）。确需在隔离内网使用明文时，设置环境变量 `GL_ALLOW_INSECURE_TRANSPORT=true` 或使用各语言的显式选项：
 
@@ -178,7 +178,7 @@ Python / TS 捕获 `GeoLedgerError`；Rust 使用 `Error`；Go 用 `errors.As` �
 调用方通过 SDK 的业务错误类型处理结果。
 
 当 `uncertain` 为真时，写入可能已经完成。对同一工作区再次 `publish` 并使用原说明即可重试原请求；
-期间工作区对象保持原要素上下文和发布说明，以便确认原请求。成功后再次调用也返回原发布结果。
+期间工作区对象保持原要素上下文和发布说明，以便确认原请求。成功后再次调用也返回原发布结果，包括项目归档或发布者降级为 viewer 后；当前成员身份和工作区归属仍必须有效。
 发布被明确拒绝时释放待重试请求，保留草稿版本供查询、解决冲突。
 已有待确认请求在重试遇到身份验证失败、权限拒绝或资源不可见时仍然保留；
 先前发布的结果通过原请求确认。恢复访问后继续使用原请求及其请求 ID。
@@ -222,7 +222,7 @@ SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布�
 | 期限耗尽 | 504 |
 | 存储不可用 | 503 |
 
-Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 不设独立字节上限、最多 256 个属性；EPSG:4326，XY/XYZ。
+Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 不设独立于请求/响应预算的字节上限、最多 256 个属性；EPSG:4326，XY/XYZ。
 标识采用有效文本字符，属性键和值使用 U+0000 以外的 JSON 文本；服务统一校验输入并返回业务错误。容量配置见 [生产运行](production.md)。
 
 ## 当前版本契约
@@ -231,15 +231,15 @@ Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / ar
 
 当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-当前存储格式为 11，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+当前存储格式为 12，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
 
-`Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 为 `0` 也表示不设应用层固定请求字节上限。
+`Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 返回当前服务的实际编码请求预算，默认 67,108,864 字节。单要素仍受所在请求和响应的总预算约束。
 
 ### 大数据流式传输
 
 `SaveStream` 接收分块编码的单个 `SaveRequest`，`FeaturesStream` 返回分块编码的单个 `FeaturesReply`。每个流首块携带 `total_bytes`，后续块为 0；总长度不符或流中断时不接受不完整数据。服务端收齐保存请求后通过 Application 原子校验与写入，读取结果来自同一快照。Node.js SDK（含 Web BFF）对超过 64 KiB 的保存请求自动使用流式上传，要素查询使用流式下载，每块目标大小 64 KiB，并保留认证、期限和背压。其他 SDK 的普通 RPC 也已取消 4 MiB 固定上限。
 
-当前业务 API 仍在内存中组装完整请求/结果；流式传输解决消息分块，不代表恒定内存占用。实际容量受可用内存、运行时和 gRPC 协议边界影响。发布请求的原始内容、幂等重试与事务语义不变。
+当前业务 API 仍在内存中组装完整请求/结果；流式传输解决消息分块，不代表恒定内存占用。认证与跨连接准入在 gRPC 解码之前执行。请求与响应分别拥有独立的编码字节预算，接收、查询和编码增长前按实际所需额度预留，完成后归还多余额度；gRPC 帧头声明的尺寸提前计入，响应额度随流和传输层数据帧所有权最终释放。默认单请求/响应各 64 MiB、两个总预算各 256 MiB，可通过 GL_MAX_REQUEST_BYTES、GL_MAX_RESPONSE_BYTES、GL_REQUEST_MEMORY_BYTES、GL_RESPONSE_MEMORY_BYTES 调整。JSON 对象、数据库驱动、原生几何和运行时存在额外开销，因此这些预算不是进程 RSS 硬上限。请求过大返回 413，预算暂时不足返回 429；复杂几何可减小查询页和保存批次。发布请求的原始内容、幂等重试与事务语义不变。
 
 创建数据集必须传 `geometry_type`（SDK TypeScript 使用 `geometryType`）：`point`、`line` 或 `polygon`。列表与创建结果返回该字段。新增 `RenameProject`、`RenameDataset`、`DeleteDataset` RPC，以及同名 snake_case HTTP 操作。重命名请求包含 `project`、`name`，数据集操作还包含 `dataset`。删除数据集包含 `project`、`dataset`、`confirm_name`，确认名称必须完全匹配。项目重命名和项目／数据集删除限 owner 或平台管理员；数据集重命名限可写成员。
 
@@ -263,3 +263,9 @@ Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓�
 | Python | `track_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
 
 原表要求和发布事务见 [已有业务表](storage.md#已有业务表)。
+
+### 冲突分页与结果确定性
+
+冲突分析按 project、workspace、base_revision、workspace_version、head 保存派生键索引。相同状态下翻页复用精确 total，并按复合游标读取本页详情；保存、解决冲突、rebase 或 HEAD 变化后重新计算。索引构建和查询在项目锁保护下执行，每次调用仍检查成员权限及工作区归属，派生缓存不授予额外访问权限。
+
+数据库语句期限耗尽返回 deadline_exceeded/504；明确的外部数据库取消返回 cancelled，gRPC 使用 CANCELLED。提交附近断连或超时不能据此断定写入未发生，继续使用原发布请求确认结果。

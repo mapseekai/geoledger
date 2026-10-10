@@ -30,6 +30,7 @@ fn sqlite_empty_bbox_and_invalidation_do_not_scan_unrelated_drafts() -> Result<(
     let steps = Arc::new(AtomicUsize::new(0));
     let observed = steps.clone();
     if let Backend::Sqlite(c) = &t.0.backend {
+        let c = c.read().map_err(sqlite_error)?;
         c.progress_handler(
             1,
             Some(move || {
@@ -176,6 +177,7 @@ fn sqlite_sparse_bbox_above_page_cap_uses_candidates_in_scoped_history_and_draft
     let steps = Arc::new(AtomicUsize::new(0));
     let observed = steps.clone();
     if let Backend::Sqlite(c) = &t.0.backend {
+        let c = c.read().map_err(sqlite_error)?;
         c.progress_handler(
             1,
             Some(move || {

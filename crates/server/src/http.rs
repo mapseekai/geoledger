@@ -77,28 +77,116 @@ async fn call(State(s): State<Service>, Path(op): Path<String>, request: Request
         .get::<ConnectInfo<tls::PeerAddr>>()
         .map(|c| c.0.0.ip());
     let mut call = Call::new("http", &op, id, peer);
-    let result = handle(&s, &mut call, &op, request).await;
+    let result = async {
+        let permit = s.admit(&mut call, request.headers())?;
+        let lease = s.responses.reserve(0)?;
+        call.response_lease = Some(lease.clone());
+        let value = handle(&s, &mut call, &op, request, permit).await?;
+        let bytes =
+            serde_json::to_vec(&value).map_err(|_| Error::new(500, "response encoding failed"))?;
+        if bytes.len() > s.limits.max_response_bytes {
+            return Err(Error::new(
+                413,
+                "response exceeds byte budget; reduce page size",
+            ));
+        }
+        lease.grow(bytes.len())?;
+        lease.shrink(bytes.len());
+        Ok((bytes, lease))
+    }
+    .await;
     match s.finish(&call, result) {
-        Ok(v) => axum::Json(v).into_response(),
-        Err(e) => error(e),
+        Ok((bytes, lease)) => {
+            let mut response = Response::new(axum::body::Body::new(resources::LeasedBody::new(
+                axum::body::Body::from(bytes),
+                lease,
+            )));
+            response
+                .headers_mut()
+                .insert("content-type", HeaderValue::from_static("application/json"));
+            response
+        }
+        Err(e) => {
+            use http_body::Body as _;
+            let mut response = error(e);
+            if let Some(lease) = &call.response_lease {
+                let bytes = response
+                    .body()
+                    .size_hint()
+                    .exact()
+                    .unwrap_or(0)
+                    .min(usize::MAX as u64) as usize;
+                if bytes > s.limits.max_response_bytes {
+                    response = error(
+                        Error::new(
+                            413,
+                            "error response exceeds byte budget; use paginated details",
+                        )
+                        .with_request_id(&call.request_id),
+                    );
+                    lease.shrink(0);
+                } else if let Err(e) = lease.grow(bytes) {
+                    response = error(e.with_request_id(&call.request_id));
+                    lease.shrink(0);
+                } else {
+                    lease.shrink(bytes);
+                }
+                return response.map(|body| {
+                    axum::body::Body::new(resources::LeasedBody::new(body, lease.clone()))
+                });
+            }
+            response
+        }
     }
 }
-async fn handle(s: &Service, call: &mut Call, op: &str, request: Request) -> Result<Value> {
-    let permit = s.admit(call, request.headers())?;
+async fn handle(
+    s: &Service,
+    call: &mut Call,
+    op: &str,
+    request: Request,
+    permit: ExecutionPermit,
+) -> Result<Value> {
     let body = match tokio::time::timeout(
-        s.limits.request_timeout,
-        axum::body::to_bytes(request.into_body(), usize::MAX),
+        s.limits
+            .request_timeout
+            .saturating_sub(call.started.elapsed()),
+        axum::body::to_bytes(
+            axum::body::Body::new(resources::BudgetedBody::new(
+                request.into_body(),
+                permit.memory.clone(),
+                usize::MAX,
+            )),
+            s.limits.max_request_bytes,
+        ),
     )
     .await
     {
         Err(_) => return Err(Error::new(408, "request body timeout")),
-        Ok(Err(_)) => return Err(Error::new(400, "failed to read request body")),
+        Ok(Err(e)) => {
+            use std::error::Error as _;
+            if e.source()
+                .is_some_and(|e| e.is::<http_body_util::LengthLimitError>())
+            {
+                return Err(Error::new(413, "request exceeds byte budget"));
+            }
+            let mut source = e.source();
+            while let Some(error) = source {
+                if error
+                    .downcast_ref::<tonic::Status>()
+                    .is_some_and(|e| e.code() == tonic::Code::ResourceExhausted)
+                {
+                    return Err(Error::new(429, "receive memory budget exhausted"));
+                }
+                source = error.source();
+            }
+            return Err(Error::new(400, "failed to read request body"));
+        }
         Ok(Ok(b)) => b,
     };
     let input = geoledger_engine::parse_json(&body)?;
     if op == "info" {
         return Ok(
-            json!({"version":env!("CARGO_PKG_VERSION"),"backend":s.app.backend(),"format_version":geoledger_engine::FORMAT_VERSION}),
+            json!({"version":env!("CARGO_PKG_VERSION"),"backend":s.app.backend(),"format_version":geoledger_engine::FORMAT_VERSION,"max_request_bytes":s.limits.max_request_bytes,"max_feature_bytes":0}),
         );
     }
     s.execute(call, input, None, permit).await
