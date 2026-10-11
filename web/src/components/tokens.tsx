@@ -1,10 +1,21 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { ManagedToken, IssuedToken } from "@geoledger/client";
-import { call } from "@/lib/browser-api";
+import { call, type Member, type Project } from "@/lib/browser-api";
 import { Empty, ErrorBox, Loading, Modal, Notice, usePage } from "./common";
 import { Panel, PanelTitle, time, useAction } from "./resource-shared";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
+import { Calendar } from "./ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
+import { zhCN } from "react-day-picker/locale";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import {
@@ -25,7 +36,7 @@ type Pending = {
   label: string;
   expiresAt: string;
 };
-export function TokensPanel() {
+export function TokensPanel({ project }: { project?: Project }) {
   const [refresh, setRefresh] = useState(0);
   const [issuing, setIssuing] = useState<{ previous?: ManagedToken }>();
   const [revoking, setRevoking] = useState<ManagedToken>();
@@ -44,7 +55,12 @@ export function TokensPanel() {
   return (
     <div className="access-layout">
       <Notice tone="muted">
-        令牌用于登录，项目角色决定可访问的数据。此处仅管理控制台签发的个人令牌；运维文件凭据由部署管理员管理。签发后请到项目“访问权限”为同一成员身份分配角色。
+        令牌用于登录，项目角色决定可访问的数据。此处仅管理控制台签发的个人令牌；运维文件凭据由部署管理员管理。请先在项目“访问权限”添加成员，再从当前项目成员中选择签发对象。
+      </Notice>
+      <Notice tone="muted">
+        {project
+          ? `签发范围：${project.name} 的现有成员。令牌按身份登录，可访问该身份获授权的所有项目。`
+          : "请先选择项目，再为现有成员签发令牌。"}
       </Notice>
       <Panel
         toolbar={
@@ -53,7 +69,9 @@ export function TokensPanel() {
               title="个人访问令牌"
               description="明文仅展示一次，丢失后撤销并重新签发。"
             />
-            <Button onClick={() => setIssuing({})}>签发令牌</Button>
+            <Button disabled={!project} onClick={() => setIssuing({})}>
+              签发令牌
+            </Button>
           </>
         }
       >
@@ -123,6 +141,7 @@ export function TokensPanel() {
       </Panel>
       {issuing && (
         <IssueDialog
+          project={project}
           previous={issuing.previous}
           close={() => setIssuing(undefined)}
           changed={() => setRefresh((n) => n + 1)}
@@ -165,14 +184,57 @@ export function TokensPanel() {
   );
 }
 function IssueDialog({
+  project,
   previous,
   close,
   changed,
 }: {
+  project?: Project;
   previous?: ManagedToken;
   close: () => void;
   changed: () => void;
 }) {
+  const [expiry, setExpiry] = useState(
+    () => new Date(Date.now() + 90 * 86400000),
+  );
+  const [members, setMembers] = useState<Member[]>([]);
+  const [membersBusy, setMembersBusy] = useState(!previous);
+  const [membersError, setMembersError] = useState("");
+  const [retryMembers, setRetryMembers] = useState(0);
+  const [subject, setSubject] = useState("");
+  useEffect(() => {
+    if (previous || !project) return;
+    let active = true;
+    setMembersBusy(true);
+    setMembersError("");
+    void (async () => {
+      const all: Member[] = [];
+      let after: string | undefined;
+      do {
+        const rows = await call<Member[]>({
+          action: "members",
+          project: project.id,
+          after,
+          limit: 100,
+        });
+        if (!active) return;
+        all.push(...rows);
+        if (rows.length < 100) break;
+        after = rows[rows.length - 1].subject;
+      } while (active);
+      if (active) setMembers(all);
+    })()
+      .catch((e) => {
+        if (active) setMembersError(e.message);
+      })
+      .finally(() => {
+        if (active) setMembersBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [project?.id, previous, retryMembers]);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [pending, setPending] = useState<Pending>();
   const [result, setResult] = useState<IssuedToken>();
   const [saved, setSaved] = useState(false);
@@ -214,8 +276,8 @@ function IssueDialog({
       close={closeDialog}
     >
       {result ? (
-        <>
-          <p>
+        <div className="token-result grid min-w-0 gap-4">
+          <p className="break-all">
             成员：<strong>{result.credential.subject}</strong>
           </p>
           <p className="mono break-all">令牌 ID：{result.credential.id}</p>
@@ -246,14 +308,17 @@ function IssueDialog({
                 {copied ? "已复制" : "复制令牌"}
               </Button>
               <ErrorBox message={copyError} />
-              <Label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  id="token-saved"
                   checked={saved}
-                  onChange={(e) => setSaved(e.target.checked)}
+                  onCheckedChange={(value) => setSaved(value === true)}
+                  className="mt-0.5"
                 />
-                我已保存令牌，知道关闭后无法找回
-              </Label>
+                <Label htmlFor="token-saved" className="leading-5">
+                  我已保存令牌，知道关闭后无法找回
+                </Label>
+              </div>
               <Button disabled={!saved} onClick={closeDialog}>
                 完成
               </Button>
@@ -267,7 +332,7 @@ function IssueDialog({
               <Button onClick={closeDialog}>返回列表处理</Button>
             </>
           )}
-        </>
+        </div>
       ) : (
         <form
           className="grid gap-4"
@@ -281,11 +346,9 @@ function IssueDialog({
             const request: Pending = {
               action: previous ? "reissueToken" : "issueToken",
               requestId: crypto.randomUUID(),
-              ...(previous
-                ? { tokenId: previous.id }
-                : { subject: String(data.get("subject")).trim() }),
+              ...(previous ? { tokenId: previous.id } : { subject }),
               label: String(data.get("label")).trim(),
-              expiresAt: new Date(String(data.get("expiresAt"))).toISOString(),
+              expiresAt: expiry.toISOString(),
             };
             setPending(request);
             submit(request);
@@ -295,13 +358,43 @@ function IssueDialog({
             {!previous && (
               <div className="field">
                 <Label htmlFor="token-subject">成员身份</Label>
-                <Input
-                  id="token-subject"
+                <Select
                   name="subject"
                   required
-                  maxLength={128}
-                  placeholder="例如 alice，与项目成员身份一致"
-                />
+                  value={subject}
+                  onValueChange={setSubject}
+                  disabled={membersBusy || !!pending || task.busy}
+                >
+                  <SelectTrigger id="token-subject" className="w-full">
+                    <SelectValue
+                      placeholder={
+                        membersBusy ? "正在加载项目成员…" : "选择现有项目成员"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {members.map((member) => (
+                      <SelectItem key={member.subject} value={member.subject}>
+                        {member.subject}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <ErrorBox message={membersError} />
+                {membersError && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setRetryMembers((n) => n + 1)}
+                  >
+                    重试加载成员
+                  </Button>
+                )}
+                {!membersBusy && !membersError && !members.length && (
+                  <Notice tone="muted">
+                    当前项目没有成员，请先到访问权限中添加。
+                  </Notice>
+                )}
               </div>
             )}
             <div className="field">
@@ -316,13 +409,88 @@ function IssueDialog({
             </div>
             <div className="field">
               <Label htmlFor="token-expiry">到期时间（本地时间）</Label>
-              <Input
-                id="token-expiry"
-                name="expiresAt"
-                type="datetime-local"
-                required
-                defaultValue={localDate(Date.now() + 90 * 86400000)}
-              />
+              <div className="token-expiry">
+                <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id="token-expiry"
+                      type="button"
+                      variant="outline"
+                      className="justify-start"
+                      disabled={!!pending || task.busy}
+                    >
+                      {expiry.toLocaleDateString("zh-CN", {
+                        year: "numeric",
+                        month: "long",
+                        day: "numeric",
+                      })}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-auto p-0"
+                    align="start"
+                    onOpenAutoFocus={(event) => {
+                      event.preventDefault();
+                      (event.target as HTMLElement)
+                        .querySelector<HTMLButtonElement>(
+                          "[data-selected-single=true]",
+                        )
+                        ?.focus();
+                    }}
+                  >
+                    <Calendar
+                      autoFocus
+                      mode="single"
+                      required
+                      locale={zhCN}
+                      selected={expiry}
+                      defaultMonth={expiry}
+                      disabled={{
+                        before: new Date(new Date().setHours(0, 0, 0, 0)),
+                      }}
+                      onSelect={(day) => {
+                        const next = new Date(day);
+                        next.setHours(
+                          expiry.getHours(),
+                          expiry.getMinutes(),
+                          0,
+                          0,
+                        );
+                        setExpiry(next);
+                        setCalendarOpen(false);
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
+                {(["小时", "分钟"] as const).map((label, index) => (
+                  <Select
+                    key={label}
+                    disabled={!!pending || task.busy}
+                    value={String(
+                      index ? expiry.getMinutes() : expiry.getHours(),
+                    )}
+                    onValueChange={(value) => {
+                      const next = new Date(expiry);
+                      if (index) next.setMinutes(Number(value));
+                      else next.setHours(Number(value));
+                      next.setSeconds(0, 0);
+                      setExpiry(next);
+                    }}
+                  >
+                    <SelectTrigger aria-label={label}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Array.from({ length: index ? 60 : 24 }, (_, n) => (
+                        <SelectItem key={n} value={String(n)}>
+                          {String(n).padStart(2, "0")}
+                          {index ? " 分" : " 时"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ))}
+              </div>
             </div>
           </fieldset>
           <ErrorBox message={task.error} />
@@ -340,7 +508,12 @@ function IssueDialog({
             >
               取消
             </Button>
-            <Button disabled={task.busy}>
+            <Button
+              disabled={
+                task.busy ||
+                (!previous && (!subject || membersBusy || !!membersError))
+              }
+            >
               {task.busy
                 ? "正在签发…"
                 : pending
@@ -354,10 +527,4 @@ function IssueDialog({
       )}
     </Modal>
   );
-}
-function localDate(ms: number) {
-  const d = new Date(ms);
-  return new Date(ms - d.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 16);
 }

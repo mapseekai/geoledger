@@ -331,7 +331,7 @@ export function Console({
           ) : section === "tokens" ? (
             info ? (
               info.platformAdmin && info.managedTokens ? (
-                <TokensPanel />
+                <TokensPanel key={project?.id || "none"} project={project} />
               ) : (
                 <Empty
                   icon={Shield}

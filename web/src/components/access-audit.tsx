@@ -81,13 +81,14 @@ export function Access({
             />
           </div>
           <p id="member-login-help" className="muted">
-            此处不会创建账号或生成登录令牌。请先由管理员签发个人访问令牌，
-            成员身份须与令牌对应的 subject
-            一致；保存权限后，成员使用自己的令牌登录控制台。
+            此处添加项目成员并分配权限，不会生成登录令牌。保存后，由平台管理员在成员令牌页面选择该成员并签发凭证，成员使用自己的令牌登录。
           </p>
           {canManageTokens && (
             <p>
-              <Link href="/tokens" className="text-primary underline">
+              <Link
+                href={`/tokens?project=${project.id}`}
+                className="text-primary underline"
+              >
                 前往成员令牌管理
               </Link>
             </p>
