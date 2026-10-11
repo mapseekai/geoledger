@@ -55,6 +55,8 @@ services:
       dockerfile: Dockerfile
     image: ${GL_IMAGE:-geoledger:local}
     environment:
+      GL_WEB_ORIGIN: ${GL_WEB_ORIGIN:-https://console.geoledger.example}
+      GL_WEB_SESSION_SECRET: ${GL_WEB_SESSION_SECRET:?set GL_WEB_SESSION_SECRET}
       GL_STORAGE: postgis
       GL_DATABASE_URL: postgresql://geoledger_app:${GL_DB_APP_PASSWORD:?set GL_DB_APP_PASSWORD}@postgis:5432/geoledger?sslmode=verify-full&sslrootcert=/etc/geoledger/tls/ca.crt
       # Plaintext only between the gateway and this service on the private network.
@@ -71,41 +73,18 @@ services:
       postgis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "geoledger-server", "probe"]
+      test: ["CMD", "/nodejs/bin/node", "/app/container.cjs", "probe"]
       interval: 15s
-      timeout: 6s
+      timeout: 8s
       start_period: 30s
       retries: 3
     read_only: true
-    tmpfs: [/tmp]
+    tmpfs: [/tmp, "/app/web/.next/cache:uid=10001,gid=10001,mode=0700"]
     deploy:
       resources:
-        limits: { cpus: "2", memory: 1g }
+        limits: { cpus: "3", memory: 1536m }
     restart: unless-stopped
     stop_grace_period: 60s
-  console:
-    build:
-      context: ..
-      dockerfile: web/Dockerfile
-    image: ${GL_CONSOLE_IMAGE:-geoledger-console:local}
-    environment:
-      GL_WEB_ENDPOINT: http://geoledger:7882
-      GL_ALLOW_INSECURE_TRANSPORT: "true"
-      GL_WEB_ORIGIN: ${GL_WEB_ORIGIN:-https://console.geoledger.example}
-      GL_WEB_SESSION_SECRET: ${GL_WEB_SESSION_SECRET:?set GL_WEB_SESSION_SECRET}
-    depends_on:
-      geoledger:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
-      interval: 15s
-      timeout: 5s
-      start_period: 20s
-      retries: 3
-    deploy:
-      resources:
-        limits: { cpus: "1", memory: 512m }
-    restart: unless-stopped
   gateway:
     image: nginx:1.30-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
     ports:
@@ -117,8 +96,6 @@ services:
       - ${GL_TLS_DIR:-./tls}/gateway.key:/etc/geoledger/tls/gateway.key:ro
     depends_on:
       geoledger:
-        condition: service_healthy
-      console:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null --no-check-certificate https://127.0.0.1/ready --header 'Host: api.geoledger.example' || exit 1"]

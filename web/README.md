@@ -12,7 +12,7 @@ GeoLedger Console 提供空间数据的协作管理界面：项目与数据集�
 
 ## 环境准备
 
-- [Node.js 22](https://nodejs.org/en/download) 与随附 npm，和 Web Dockerfile、主 CI 保持一致。
+- [Node.js 22](https://nodejs.org/en/download) 与随附 npm，和根目录 Dockerfile、主 CI 保持一致。
 - 已运行的 GeoLedger 服务及管理员分配的令牌，启动方式见 [快速开始](../docs/getting-started.md)。
 - OpenSSL 或 Python 3，用于生成随机会话密钥。
 
@@ -109,12 +109,11 @@ npm --prefix web start
 容器构建使用校验和锁定的 Node／npm 工具链，并按原 TypeScript 发布提交重建编译器的 Go 运行时；项目 TypeScript 版本保持 7.0.2。安装依赖后、执行编译前完成版本校验和二进制替换。开发依赖及编译工具保留在单独扫描的构建阶段，只有 standalone 输出进入非 root 运行镜像。维护步骤和验证边界见 [发布验收](../docs/release.md)。
 
 ```sh
-docker build -f web/Dockerfile -t geoledger-console .
 export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
-docker compose --profile console up --build -d
+docker compose up --build -d
 ```
 
-Compose 启动业务服务和控制台，控制台默认使用 `http://localhost:3000`。镜像以 UID 65532 的非 root 用户运行，使用固定 digest 的精简 Node 22 运行时，不携带 npm 或 shell；包含 standalone 产物、SDK 和本地字体/静态资源；运行时注入会话密钥和业务服务地址。持久化与部署配置见 [生产运行](../docs/production.md#容器部署)。
+根目录 Dockerfile 将控制台与业务服务打包为一个 `geoledger` Linux 镜像，支持 AMD64/ARM64，以 UID 10001 运行。控制台默认地址为 `http://localhost:3000`，内部通过 `127.0.0.1:7882` 连接服务端。统一启动器负责两个服务的退出与信号转发，健康检查同时验证后端就绪和控制台存活。Node 22 运行时与 standalone 产物一起进入镜像，构建工具保留在单独扫描的构建阶段。持久化、会话密钥与 HTTPS 配置见 [生产运行](../docs/production.md#容器部署)。
 
 ## 贡献
 

@@ -1,24 +1,19 @@
 # Docker Hub 镜像发布
 
-独立的 `Publish Docker Hub images` Actions 任务使用 Docker Cloud Builder
-`zwishing/mapseekai`（Buildx 0.38.0、cloud 驱动），从已有版本标签重新构建
-`geoledger` 和 `geoledger-console`，发布 Linux AMD64/ARM64 镜像、SBOM 和
-构建来源信息，不触发 SDK 发布。现有 GHCR 发布流程继续保留。
+`geoledger` 是统一的 Linux 镜像，包含 GeoLedger 服务端、Web 控制台和远程 `gl` CLI，提供 AMD64 与 ARM64 两种架构。控制台通过容器内回环地址连接 gRPC；SQLite 数据持久化到 `/data`，PostGIS 使用配置的外部数据库。
 
-1. 在 Docker Hub 的账号或组织中准备 `geoledger`、`geoledger-console` 仓库，
-   需要匿名拉取时将它们设置为 Public。
-2. 创建具有目标仓库写入权限的 Docker Hub Access Token。
-3. 在 GitHub 仓库 Settings → Secrets and variables → Actions 中添加
-   `DOCKERHUB_USERNAME`（登录用户名）和 `DOCKERHUB_TOKEN`（Access Token）。
-   发布到组织时，登录用户须拥有组织仓库的写入权限；不要把 Token 提交到代码。
-4. 在 Actions → Publish Docker Hub images → Run workflow 中选择 main，
-   namespace 填 Docker Hub 用户名或组织名，release_tag 填已有版本标签，
-   如 `v0.3.0-alpha.2`。
-5. 两个构建任务成功后，用 `docker pull 命名空间/geoledger:0.3.0-alpha.2`
-   和 `docker pull 命名空间/geoledger-console:0.3.0-alpha.2` 验证。
+```sh
+export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
+docker run -d --name geoledger --restart unless-stopped --stop-timeout 60 \
+  -p 127.0.0.1:3000:3000 -p 127.0.0.1:7881:7881 -p 127.0.0.1:7882:7882 \
+  -e GL_WEB_SESSION_SECRET -e GL_WEB_ORIGIN=http://localhost:3000 \
+  -v geoledger-data:/data mapseekai/geoledger:0.3.0-alpha.2
+```
 
-任务不会发布或覆盖 latest。存储格式变化仍需遵循版本契约，更新镜像不会
-自动迁移旧数据库。工作流输入版本必须与标签下包版本一致。
+浏览器访问 `http://localhost:3000`。首次启动的管理员凭证位于持久化卷的 `/data/admin-credentials.json`。对外部署时配置实际 HTTPS origin 和 TLS 网关，详见 [生产运行](production.md)。
 
-GitHub Actions 只负责编排，镜像构建实际运行在 Docker Cloud Builder。登录用户
-须有该 Builder 访问权限及目标镜像仓库写权限；当前登录用户名为 zwishing。
+本地构建使用 `docker build -t geoledger:local .`。发布流程将完整构建阶段导出为 OCI，扫描 Rust、Node 与编译工具依赖，再从已验证的构建产物组装统一运行镜像。运行镜像通过双架构扫描后按原摘要上传，保存 SBOM、构建来源和镜像清单。
+
+Actions → Publish Docker Hub images 支持按已有版本标签构建：namespace 使用目标 Docker Hub 账号或组织，release_tag 如 `v0.3.0-alpha.2`。配置 `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`，登录用户需拥有目标仓库写权限。该流程独立发布容器镜像；版本标签与源码中的版本一致。
+
+预发布使用明确版本标签，数据卷按当前存储格式管理，更新前保留可验证的备份。

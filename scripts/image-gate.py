@@ -86,6 +86,15 @@ def verify_image_identity(layout: Path, manifest_digest: str, platform: str, sha
 
 
 def validate_report(report: dict, kind: str) -> None:
+    if kind in ('combined', 'combined-build'):
+        suffix = '-build' if kind.endswith('-build') else ''
+        validate_report(report, 'server' + suffix)
+        validate_report(report, 'console' + suffix)
+        language = {p['Name'] for r in report['Results'] if r.get('Class') == 'lang-pkgs'
+                    for p in (r.get('Packages') or [])}
+        if 'next' not in language:
+            raise ValueError('combined image is missing its console dependency inventory')
+        return
     if kind not in ('server', 'console', 'server-build', 'console-build'):
         raise ValueError('unknown image policy')
     if report.get('SchemaVersion') != 2 or not isinstance(report.get('Results'), list):
@@ -221,7 +230,7 @@ def verify(layout: Path, output: Path, sha: str, kind: str | None = None) -> dic
 
 def publish(layout: Path, output: Path, sha: str, tags: list[str], destination: Path, kind: str | None = None) -> None:
     gate = verify(layout, output, sha, kind)
-    if gate['kind'] not in ('server', 'console'):
+    if gate['kind'] not in ('server', 'console', 'combined'):
         raise ValueError('build environments must never be published as application images')
     if not tags or any(not re.fullmatch(r'(ghcr\.io|docker\.io)/[a-z0-9_.\-/]+:[A-Za-z0-9_.-]+', tag) for tag in tags):
         raise ValueError('explicit ghcr.io/docker.io destination tags required')
@@ -245,7 +254,7 @@ def main() -> None:
     parser.add_argument('--layout', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source-sha', required=True)
-    parser.add_argument('--kind', choices=['server', 'console', 'server-build', 'console-build'], default='server')
+    parser.add_argument('--kind', choices=['server', 'console', 'server-build', 'console-build', 'combined', 'combined-build'], default='server')
     parser.add_argument('--platform', action='append')
     parser.add_argument('--tag', action='append', default=[])
     parser.add_argument('--inventory', type=Path)

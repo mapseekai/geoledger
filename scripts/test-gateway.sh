@@ -30,7 +30,7 @@ server_pid=$!
 sed -e "s#/etc/geoledger/tls/#$work/#g" \
     -e "s#server geoledger:7881#server 127.0.0.1:$http_port#" \
     -e "s#server geoledger:7882#server 127.0.0.1:$grpc_port#" \
-    -e "s#server console:3000#server 127.0.0.1:9#" \
+    -e "s#server geoledger:3000#server 127.0.0.1:9#" \
     -e "s#listen 443 ssl;#listen $tls_port ssl;#" \
     -e "/listen \[::\]/d" \
     -e "s#listen 80;#listen $plain_port;#" \

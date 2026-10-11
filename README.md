@@ -67,9 +67,10 @@ cargo build --release --locked --bins
 
 产物为 `target/release/geoledger-server` 和 `target/release/gl`，Windows 使用 `.exe`，默认 SQLite 后端按 [Windows 环境准备](docs/getting-started.md#windows) 安装校验过的 SpatiaLite 运行时。Web 的生产构建和检查见 [Web 文档](web/README.md#构建测试与部署)，跨后端及 SDK 验证见 [开发指南](docs/development.md)。
 
-容器部署使用仓库中的 Compose 配置：
+服务端和 Web 控制台打包在同一个 Linux 镜像中，使用仓库中的 Compose 配置启动：
 
 ```sh
+export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
 docker compose up --build -d
 ```
 

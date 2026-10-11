@@ -70,6 +70,8 @@ def check(files: dict[str, str]) -> None:
         if required not in images['build-scan']:
             raise ValueError(f'missing image gate requirement: {required}')
     build_job = images['build-scan']
+    if 'kind: combined' not in build_job or 'name: [geoledger]' not in images['publish']:
+        raise ValueError('release must publish the unified geoledger image')
     if 'driver: docker-container' not in build_job or not re.search(r'driver-opts: image=moby/buildkit@sha256:[0-9a-f]{64}', build_job):
         raise ValueError('immutable OCI reuse requires the tested, pinned container BuildKit driver')
     for required in ('target: build', '--kind "$IMAGE_KIND-build"',
@@ -151,11 +153,11 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     workflow = root / '.github/workflows'
     check({p.name: p.read_text() for p in workflow.glob('*.yml')})
-    for path in (root / 'Dockerfile', root / 'web/Dockerfile'):
+    for path in (root / 'Dockerfile',):
         check_bases(path.read_text())
     import json
     lock = json.loads((root / '.security/node-build.lock.json').read_text())
-    recipe = (root / 'web/Dockerfile').read_text()
+    recipe = (root / 'Dockerfile').read_text()
     for entry in [lock['npm'], *lock['bundled_overrides']]:
         url = f"https://registry.npmjs.org/{entry['name']}/-/{entry['name']}-{entry['version']}.tgz"
         if entry['url'] != url or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256']):

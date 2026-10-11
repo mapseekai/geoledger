@@ -11,8 +11,8 @@ import tempfile
 
 
 def validate_inventories(records, source_sha=None):
-    if len(records) != 2 or {r.get('kind') for r in records} != {'server', 'console'}:
-        raise ValueError('release requires server and console image inventories')
+    if len(records) != 1 or {r.get('kind') for r in records} != {'combined'}:
+        raise ValueError('release requires the combined image inventory')
     shas = {r.get('source_sha') for r in records}
     if len(shas) != 1 or not all(re.fullmatch(r'[0-9a-f]{40}', value or '') for value in shas):
         raise ValueError('image inventories must share one immutable source SHA')
@@ -72,7 +72,7 @@ def main() -> None:
         if failures:
             raise RuntimeError('; '.join(failures))
     (args.output / 'audit-status.json').write_text(json.dumps({'tag': tag, 'status': 'passed'}, indent=2))
-    print(f'PASS published {tag}: both image digests and both architectures audited')
+    print(f'PASS published {tag}: combined image digest and both architectures audited')
 
 
 if __name__ == '__main__':

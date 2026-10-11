@@ -10,7 +10,7 @@ on:
       release_tag:
         description: Existing release tag to rebuild (vX.Y.Z or prerelease)
         required: true
-        default: v0.3.0-alpha.1
+        default: v0.3.0-alpha.2
         type: string
 permissions:
   contents: read

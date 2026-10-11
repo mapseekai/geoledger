@@ -16,7 +16,7 @@ GitHub 的 `release` environment 配置 `NPM_TOKEN` secret，授予 `@geoledger/
 
 ## 发布顺序
 
-候选提交先通过同 SHA 的完整 CI、双后端 SDK、受限数据库角色原生恢复与浏览器测试。npm 与 PyPI 的发布配置在构建交付前检查。二进制和镜像完成后创建草稿 Release，验证 server/console 两份镜像清单均属于当前 SHA；SDK 分发成功后才公开 Release。npm 包的 `repository` 指向实际源码仓库及 `sdk/ts` 目录，与 provenance 的发布来源一致。Rust 客户端按同一 tag 从 Git 引用。
+候选提交先通过同 SHA 的完整 CI、双后端 SDK、受限数据库角色原生恢复与浏览器测试。npm 与 PyPI 的发布配置在构建交付前检查。二进制和镜像完成后创建草稿 Release，验证统一 combined 镜像清单属于当前 SHA；SDK 分发成功后才公开 Release。npm 包的 `repository` 指向实际源码仓库及 `sdk/ts` 目录，与 provenance 的发布来源一致。Rust 客户端按同一 tag 从 Git 引用。
 
 发布中断后使用同一次运行的失败 job 重跑，保留已经验收的构建产物。草稿 Release 校验标签提交和已有资产 SHA256，补传缺失资产；npm/PyPI 校验已有包的文件内容与权限（忽略归档时间及压缩差异），仅发布缺失包；Go 标签必须解析到候选 SHA。已有内容不一致时流程停止，保留原产物用于排查。SDK 安装验收连接打包后的服务器，执行新增、修改、删除、历史读取及发布重试，成功后公开 Release。
 

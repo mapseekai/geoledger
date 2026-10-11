@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 scripts/check-docs.py
 python3 scripts/check-env.py
+python3 scripts/test_container.py
 python3 scripts/check-release-policy.py
 python3 -m unittest discover -s scripts -p test_supply_chain.py
 python3 -m unittest discover -s scripts -p 'test_benchmark*.py'

@@ -28,11 +28,8 @@ jobs:
       matrix:
         include:
           - name: geoledger
-            kind: server
+            kind: combined
             file: Dockerfile
-          - name: geoledger-console
-            kind: console
-            file: web/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -131,7 +128,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   publish:
-    # Matrix completion is an all-images barrier, not a per-image partial release.
+    # Publishing waits for the complete build-stage and runtime scans.
     needs: build-scan
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -141,7 +138,7 @@ jobs:
       id-token: write
     strategy:
       matrix:
-        name: [geoledger, geoledger-console]
+        name: [geoledger]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -154,7 +151,7 @@ jobs:
       - name: Verify artifact and gate before registry login
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
-        run: python3 scripts/image-gate.py verify --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "${{ matrix.name == 'geoledger' && 'server' || 'console' }}"
+        run: python3 scripts/image-gate.py verify --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "combined"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
       - name: GHCR credentials
         if: startsWith(inputs.namespace, 'ghcr.io/')
@@ -178,7 +175,7 @@ jobs:
         run: |
           args=(--tag "$IMAGE:$VERSION")
           if [[ $VERSION != *-* ]]; then args+=(--tag "$IMAGE:${VERSION%.*}"); fi
-          python3 scripts/image-gate.py publish --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "${{ matrix.name == 'geoledger' && 'server' || 'console' }}" --inventory "$RUNNER_TEMP/${{ matrix.name }}-images.json" "${args[@]}"
+          python3 scripts/image-gate.py publish --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "combined" --inventory "$RUNNER_TEMP/${{ matrix.name }}-images.json" "${args[@]}"
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign the scanned registry digest
         env:

@@ -24,10 +24,11 @@ cargo build --release --locked --bins
 ## 容器部署
 
 ```sh
+export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
 docker compose up --build -d
 ```
 
-配置使用命名卷 `geoledger-data` 持久化 `/data`，将 HTTP 和 gRPC 映射到本机 7881/7882。检查就绪与日志：
+配置使用命名卷 `geoledger-data` 持久化 `/data`，将控制台、HTTP 和 gRPC 分别映射到本机 3000、7881、7882。检查就绪与日志：
 
 ```sh
 curl --fail http://127.0.0.1:7881/ready
@@ -40,17 +41,17 @@ docker compose logs geoledger
 docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 ```
 
-服务端镜像基于固定 digest 的 Alpine 3.24，以 UID 10001 运行，内置 `probe` 健康检查，包含 `geoledger-server`、`gl`、CA 证书、OpenSSL、SpatiaLite 及实际原生依赖。容器中的扩展路径显式为 `/usr/lib/mod_spatialite.so.8`；Rust 构建使用动态 CRT 以允许加载扩展。构建环境和运行环境分别经过扫描，实际验证与平台边界见 [发布验收](release.md)。
+统一 `geoledger` 镜像基于固定 digest 的 Debian 13，包含服务端、Web 控制台、`gl`、Node 22、CA 证书、OpenSSL 和 SpatiaLite，以 UID 10001 运行。控制台通过容器内回环地址访问 gRPC。启动器同时管理两个服务：任一服务意外退出时终止另一个并返回失败；SIGTERM 转发到两个服务，保留后端的优雅关闭过程。健康检查同时验证后端 `/ready` 和控制台 `/api/health`。构建环境与运行环境分别扫描，验证边界见 [发布验收](release.md)。
 
-控制台组合部署按 [Web 容器运行](../web/README.md#容器运行) 先设置会话密钥，再启用 console profile。`docker compose down` 停止组合服务，命名卷按数据保留策略管理。
+固定保存 `GL_WEB_SESSION_SECRET`，并将 `GL_WEB_ORIGIN` 设置为用户访问的完整地址。`docker compose down` 停止容器，命名卷按数据保留策略管理。
 
 ### Compose 生产参考
 
-[compose.production.yaml](../deploy/compose.production.yaml) 组合 PostGIS、GeoLedger、控制台和 [nginx TLS 网关](../deploy/gateway/nginx.conf)，只有网关发布 80/443 端口：
+[compose.production.yaml](../deploy/compose.production.yaml) 组合 PostGIS、包含控制台的 GeoLedger 和 [nginx TLS 网关](../deploy/gateway/nginx.conf)，只有网关发布 80/443 端口：
 
 - **PostGIS**：使用官方 `postgis/postgis` 镜像（固定 digest），开启 TLS（最低 TLS 1.2），[pg_hba.conf](../deploy/postgis/pg_hba.conf) 只接受 `hostssl` 加 scram-sha-256，明文连接被拒绝。
 - **GeoLedger**：以 `sslmode=verify-full` 和私有 CA 连接 PostGIS。根文件系统只读，只有 `/data` 卷可写。启用按身份和按 IP 的限流，并信任网关传入的 `X-Forwarded-For`。
-- **控制台**：经私有网络访问 gRPC。
+- **控制台**：与业务服务运行在同一容器，通过回环地址访问 gRPC。
 - **网关**：负责 TLS、HSTS、HTTP→HTTPS 跳转、请求 ID 透传和边缘限流。
 - **资源与健康检查**：每个服务都设置了 CPU/内存上限和健康检查，并按 `service_healthy` 顺序启动。
 
@@ -73,7 +74,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 - **数据库角色**：新数据库由 `geoledger_admin` 初始化，服务使用独立的 `geoledger_app` 非超级用户。`GL_DB_PASSWORD` 与 `GL_DB_APP_PASSWORD` 分别配置两者密码。已有数据库由 DBA 创建运行角色，并只授予版本表 schema 和指定纳管表所需权限；业务表所有者角色的授予范围由 DBA 审核。初始化脚本只在新卷执行。
 - **备份**：PostGIS 按下文 [备份与恢复](#备份与恢复) 使用 `pg_dump` 或 WAL 归档。逻辑导出命令为 `docker compose -f deploy/compose.production.yaml exec geoledger geoledger-server export --output /data/export.jsonl`。
 
-该组合已在 Docker Engine 29 上实测：四个服务均通过健康检查；`gl` 经网关以 TLS 访问 gRPC；HTTPS API 返回 HSTS 和请求 ID；HTTP 跳转到 HTTPS；PostGIS 拒绝明文连接；只读容器内的导出与校验成功。
+TLS 网关与 PostGIS 的既有独立部署演练已在 Docker Engine 29 上验证：`gl` 经网关以 TLS 访问 gRPC；HTTPS API 返回 HSTS 和请求 ID；HTTP 跳转到 HTTPS；PostGIS 拒绝明文连接；只读容器内的导出与校验成功。
 
 ## 配置
 
@@ -141,7 +142,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 `/health` 检查进程，`/ready` 检查数据库格式与连接，失败或关闭中返回 503。gRPC 监听器同时提供标准 [gRPC Health Checking](https://grpc.io/docs/guides/health-checking/) 服务（服务名 `geoledger.v1.GeoLedger`），关闭时切换为 `NOT_SERVING`。启用服务端 TLS 时，可设置 `GL_HEALTH_LISTEN=127.0.0.1:7880` 提供仅含探针的明文监听器。
 
-`geoledger-server probe` 按同一组 `GL_*` 配置访问本机 `/ready`，成功退出码为 0；容器镜像的 `HEALTHCHECK` 与 Compose 健康检查使用该命令。控制台提供 `/api/health` 存活检查。
+`geoledger-server probe` 按同一组 `GL_*` 配置访问本机 `/ready`，成功退出码为 0；统一容器的 `HEALTHCHECK` 先执行该命令，再查询控制台 `/api/health`，两者都成功时才报告健康。
 
 ### 日志与请求关联
 
@@ -244,7 +245,7 @@ SQLite 观察数据库文件与 WAL 文件大小。两种后端都为数据卷�
 服务端调用 TS SDK。数据库仅由 GeoLedger 服务访问。Web 的公开入口使用 HTTPS，
 固定 `GL_WEB_ORIGIN`；随机 `GL_WEB_SESSION_SECRET` 只在运行时配置，多实例共享。会话保存在各实例内存，多实例需会话粘滞，重启后用户重新登录。
 反向代理设置请求体、连接数与登录速率限制。Web 和服务端的内部连接应限制在
-可信网络，跨网络使用 gRPC TLS。`compose.yaml` 的 console profile 提供本地组合启动。
+可信网络，跨网络使用 gRPC TLS。`compose.yaml` 通过一个 GeoLedger 容器启动业务服务和控制台。
 
 ### 业务表纳管部署
 

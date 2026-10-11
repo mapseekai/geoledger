@@ -25,7 +25,7 @@ cargo build --locked --workspace --bins --examples
 ./scripts/check.sh
 ```
 
-`scripts/check.sh` 使用 Python 3 和 Bash，依次执行文档检查、rustfmt、Clippy、独立引擎单元测试和工作区测试。完整检查中的真实服务用例会监听临时本地端口。
+`scripts/check.sh` 使用 Python 3、Bash 和 Node.js 22（容器启动器回归），依次执行文档检查、rustfmt、Clippy、独立引擎单元测试和工作区测试。完整检查中的真实服务用例会监听临时本地端口。
 
 PostGIS 回归通过环境中的 `GL_TEST_DATABASE_URL` 启用，目标库名为 `geoledger_test`。测试服务账号需要对应隔离库的建表和事务权限。Web 检查命令见 [Web 构建与测试](../web/README.md#构建测试与部署)。
 

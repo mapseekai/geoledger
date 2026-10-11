@@ -295,7 +295,7 @@ class CompilerBootstrapTests(unittest.TestCase):
     def setUp(self):
         self.lock = json.loads((ROOT / '.security/typescript-build.lock.json').read_text())
         self.modules = {name: (ROOT / '.security' / ('typescript-' + name)).read_bytes() for name in ('go.mod', 'go.sum')}
-        self.recipe = (ROOT / 'web/Dockerfile').read_text()
+        self.recipe = (ROOT / 'Dockerfile').read_text()
     def check(self):
         policy.check_compiler_lock(self.lock, self.modules, [self.lock['version']] * 2, self.recipe)
     def test_pinned_bootstrap_contract(self): self.check()
@@ -317,6 +317,21 @@ class CompilerBootstrapTests(unittest.TestCase):
 
 
 class NativeImageInventoryTests(unittest.TestCase):
+    def test_combined_image_requires_both_application_inventories(self):
+        value = report()
+        with self.assertRaisesRegex(ValueError, 'console dependency inventory'):
+            gate.validate_report(value, 'combined')
+        value['Results'].append({'Class': 'lang-pkgs', 'Type': 'node-pkg', 'Packages': [{'Name': 'next'}]})
+        gate.validate_report(value, 'combined')
+        broken = copy.deepcopy(value)
+        broken['Results'] = [r for r in broken['Results'] if r.get('Type') != 'cargo']
+        with self.assertRaisesRegex(ValueError, 'Rust dependency inventory'):
+            gate.validate_report(broken, 'combined')
+        with self.assertRaisesRegex(ValueError, 'npm/compiler inventory'):
+            gate.validate_report(value, 'combined-build')
+        value['Results'][-1]['Packages'] += [{'Name': 'npm'}, {'Name': 'typescript'}]
+        gate.validate_report(value, 'combined-build')
+
     def test_alpine_native_components_are_required_not_just_any_os_packages(self):
         value = report(); value['Metadata']['OS']['Family'] = 'alpine'
         value['Results'][0]['Packages'] = [{'Name': name} for name in ('libspatialite', 'libssl3', 'libcrypto3')]
@@ -331,6 +346,12 @@ class NativeImageInventoryTests(unittest.TestCase):
 
 
 class OciBuilderDriverTests(unittest.TestCase):
+    def test_split_images_cannot_replace_unified_release(self):
+        files = {p.name: p.read_text() for p in (ROOT / '.github/workflows').glob('*.yml')}
+        files['secure-images.yml'] = files['secure-images.yml'].replace('name: [geoledger]', 'name: [geoledger, geoledger-console]')
+        with self.assertRaisesRegex(ValueError, 'unified geoledger image'):
+            policy.check(files)
+
     def test_legacy_embedded_driver_cannot_replace_verified_oci_builder(self):
         files = {p.name: p.read_text() for p in (ROOT / '.github/workflows').glob('*.yml')}
         files['secure-images.yml'] = files['secure-images.yml'].replace('driver: docker-container', 'driver: docker')
@@ -342,9 +363,9 @@ if __name__ == '__main__': unittest.main()
 class ReleaseInventoryTests(unittest.TestCase):
     def test_requires_complete_matching_immutable_images(self):
         audit = load('published_audit', 'audit-published-images.py')
-        records = [{'kind': kind, 'source_sha': SHA, 'image': 'ghcr.io/test/' + kind + '@sha256:' + 'b' * 64} for kind in ('server', 'console')]
+        records = [{'kind': kind, 'source_sha': SHA, 'image': 'ghcr.io/test/' + kind + '@sha256:' + 'b' * 64} for kind in ('combined',)]
         audit.validate_inventories(records, SHA)
-        for broken in (records[:1], [records[0], dict(records[1], source_sha='c'*40)], [records[0], dict(records[1], image='ghcr.io/test/console:latest')]):
+        for broken in ([], records * 2, [dict(records[0], source_sha='c'*40)], [dict(records[0], image='ghcr.io/test/combined:latest')]):
             with self.assertRaises(ValueError): audit.validate_inventories(broken, SHA)
 
 
