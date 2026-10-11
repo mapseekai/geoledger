@@ -47,11 +47,7 @@ export function CreateDatasetDialog({
   }>({ offset: 0 });
   const [started, setStarted] = useState(false);
   return (
-    <Modal
-      title="创建数据集"
-      description="从 GeoJSON 文件创建数据集、纳管已有 PostGIS 表，或创建空数据集。"
-      close={task.busy ? () => {} : close}
-    >
+    <Modal title="创建数据集" busy={task.busy} close={close}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -237,10 +233,6 @@ export function CreateDatasetDialog({
                     maxLength={63}
                   />
                 </Field>
-                <p>
-                  由平台管理员纳管当前数据库中的业务表，自动读取类型和维度并建立初始版本。发布时同步修改原表，纳管后的写入通过
-                  GeoLedger 完成。
-                </p>
               </>
             ) : (
               <>
@@ -258,9 +250,6 @@ export function CreateDatasetDialog({
                         setProgress("");
                       }}
                     />
-                    <p>
-                      自动识别文件中的几何类型和坐标维度，创建后将要素保存到新工作区，检查后发布。以下选项用于全部几何为空的文件。
-                    </p>
                   </Field>
                 )}
                 <Field>
@@ -311,11 +300,7 @@ export function CreateDatasetDialog({
           </FieldGroup>
         </fieldset>
         {progress && <p role="status">{progress}</p>}
-        {started && (
-          <p>
-            数据集已创建。导入中断时可重试继续，或稍后在工作区检查已保存的要素。
-          </p>
-        )}
+        {started && <p className="muted">数据集已创建</p>}
         <ErrorBox message={task.error} />
         <div className="form-actions">
           <Button

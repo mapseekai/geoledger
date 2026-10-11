@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "sonner";
 import { call, type Dataset, type Info, type Project } from "@/lib/browser-api";
 import {
   ArrowRight,
@@ -212,6 +213,9 @@ export function Projects({ info }: { info?: Info }) {
                   }
                 : { action: "renameProject", project: manage.item.id, name },
             );
+            toast.success(manage.remove ? "已删除" : "已保存", {
+              description: manage.remove ? manage.item.name : name,
+            });
             setManage(undefined);
             setRefresh((n) => n + 1);
             page.reset();
@@ -224,6 +228,7 @@ export function Projects({ info }: { info?: Info }) {
           close={() => setCreate(false)}
           submit={async (name) => {
             await call({ action: "createProject", name });
+            toast.success("已创建项目", { description: name });
             setCreate(false);
             setRefresh((n) => n + 1);
             page.reset();
@@ -414,6 +419,9 @@ export function Datasets({
                     name,
                   },
             );
+            toast.success(manage.remove ? "已删除" : "已保存", {
+              description: manage.remove ? manage.item.name : name,
+            });
             setManage(undefined);
             setRefresh((n) => n + 1);
             page.reset();

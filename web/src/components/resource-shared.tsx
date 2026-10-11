@@ -17,8 +17,7 @@ const labels: Record<string, string> = {
 export const role = (v: string) => labels[v] ?? v;
 export const short = (v: string) =>
   v.length > 20 ? `${v.slice(0, 8)}…${v.slice(-6)}` : v;
-export const time = (v: string) =>
-  new Date(v).toLocaleString("zh-CN", { hour12: false });
+export { fullTime as time } from "@/lib/format";
 export function useAction() {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -117,7 +116,9 @@ export function NameDialog({
     <Modal
       title={title}
       description={description}
-      close={task.busy ? () => {} : close}
+      size="sm"
+      busy={task.busy}
+      close={close}
     >
       <form
         onSubmit={(e) => {
