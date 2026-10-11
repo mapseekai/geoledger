@@ -52,7 +52,15 @@ def inventory(layout: Path) -> tuple[str, dict[str, str]]:
         for layer in document['layers']:
             blob(layer)
         if descriptor.get('annotations', {}).get('vnd.docker.reference.type') == 'attestation-manifest':
-            if (config.get('os'), config.get('architecture')) != ('unknown', 'unknown'):
+            empty_artifact = (config == {}
+                              and document['config'].get('mediaType') == 'application/vnd.oci.empty.v1+json'
+                              and document.get('artifactType') == 'application/vnd.docker.attestation.manifest.v1+json')
+            unknown_config = (config.get('os'), config.get('architecture')) == ('unknown', 'unknown')
+            platform = descriptor.get('platform', {})
+            if (not (empty_artifact or unknown_config)
+                    or (platform.get('os'), platform.get('architecture')) != ('unknown', 'unknown')
+                    or not document['layers']
+                    or any(layer.get('mediaType') != 'application/vnd.in-toto+json' for layer in document['layers'])):
                 raise ValueError('runnable image cannot be excluded as an attestation')
             return
         declared = descriptor.get('platform', {})

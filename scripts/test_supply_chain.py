@@ -29,7 +29,7 @@ installer = load('installer', 'install-spatialite.py')
 SHA = 'a' * 40
 
 
-def fixture(directory, platforms=('amd64', 'arm64')):
+def fixture(directory, platforms=('amd64', 'arm64'), attestation=None):
     directory.mkdir()
     blobs = directory / 'blobs/sha256'
     blobs.mkdir(parents=True)
@@ -42,6 +42,14 @@ def fixture(directory, platforms=('amd64', 'arm64')):
     for arch in platforms:
         config = blob({'os': 'linux', 'architecture': arch, 'config': {'Labels': {'org.opencontainers.image.revision': SHA}}}, 'application/vnd.oci.image.config.v1+json')
         manifests.append(blob({'schemaVersion': 2, 'config': config, 'layers': []}, 'application/vnd.oci.image.manifest.v1+json'))
+    if attestation is not None:
+        value = copy.deepcopy(attestation)
+        value['config'] = blob(value['config'], value.pop('config_media'))
+        value['layers'] = [blob({}, media) for media in value['layers']]
+        platform = value.pop('platform')
+        descriptor = blob(value, 'application/vnd.oci.image.manifest.v1+json')
+        descriptor.update(platform=platform, annotations={'vnd.docker.reference.type': 'attestation-manifest'})
+        manifests.append(descriptor)
     index = blob({'schemaVersion': 2, 'manifests': manifests}, 'application/vnd.oci.image.index.v1+json')
     (directory / 'index.json').write_text(json.dumps({'schemaVersion': 2, 'manifests': [index]}))
     (directory / 'oci-layout').write_text('{"imageLayoutVersion":"1.0.0"}')
@@ -81,6 +89,31 @@ class GateTests(unittest.TestCase):
         self.scan()
         result = gate.verify(self.layout, self.output, SHA)
         self.assertEqual(set(result['platforms']), gate.DEFAULT_PLATFORMS)
+    def test_attestation_formats_and_masquerading_images(self):
+        artifact = {'config': {}, 'config_media': 'application/vnd.oci.empty.v1+json',
+                    'artifactType': 'application/vnd.docker.attestation.manifest.v1+json',
+                    'platform': {'os': 'unknown', 'architecture': 'unknown'},
+                    'layers': ['application/vnd.in-toto+json']}
+        compatible = dict(artifact, config={'os': 'unknown', 'architecture': 'unknown'},
+                          config_media='application/vnd.oci.image.config.v1+json')
+        cases = [(artifact, True), (compatible, True),
+                 (dict(artifact, config={'os': 'linux', 'architecture': 'amd64'}), False),
+                 (dict(artifact, config_media='application/vnd.oci.image.config.v1+json'), False),
+                 (dict(artifact, artifactType='unrelated'), False),
+                 (dict(artifact, platform={'os': 'linux', 'architecture': 'amd64'}), False),
+                 (dict(artifact, layers=['application/vnd.oci.image.layer.v1.tar+gzip']), False),
+                 (dict(artifact, layers=[]), False)]
+        for number, (value, valid) in enumerate(cases):
+            with self.subTest(case=number):
+                self.layout = self.root / f'attestation-{number}'
+                fixture(self.layout, attestation=value)
+                if valid:
+                    self.scan()
+                    self.assertEqual(set(gate.verify(self.layout, self.output, SHA)['platforms']), gate.DEFAULT_PLATFORMS)
+                else:
+                    with self.assertRaises(ValueError):
+                        gate.inventory(self.layout)
+
     def test_high_unfixed_vulnerability_blocks_gate_and_publish(self):
         r = report()
         r['Results'][0]['Vulnerabilities'] = [{'VulnerabilityID': 'TEST-HIGH', 'PkgName': 'native', 'Severity': 'HIGH'}]
