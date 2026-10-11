@@ -13,7 +13,7 @@ export function Logo({ size = 28 }: { size?: number }) {
         fill="currentColor"
         d="M32 4 56 18 48 23 32 14 16 23V37L32 46 48 37V33H32V25H56V42L32 56 8 42V18Z"
       />
-      <path fill="#fa520f" d="m8 47 24 14 24-14v8L32 69 8 55Z" />
+      <path fill="var(--color-brand)" d="m8 47 24 14 24-14v8L32 69 8 55Z" />
     </svg>
   );
 }

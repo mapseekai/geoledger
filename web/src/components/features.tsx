@@ -1,4 +1,5 @@
 "use client";
+import { cn } from "@/lib/utils";
 import {
   call,
   type Dataset,
@@ -279,7 +280,7 @@ function SourcePicker({
               ? `工作区 ${short(value)}${current ? ` · v${current.version}` : ""}`
               : "已发布的数据"}
           </span>
-          <ChevronsUpDown className="source-chevron" />
+          <ChevronsUpDown data-icon="inline-end" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="source-menu">
@@ -1096,7 +1097,10 @@ function LayerPanel({
               <Button
                 variant="ghost"
                 data-id={item.id}
-                className={`feature-row${item.id === selectedId ? " is-selected" : ""}${item.index === hovered ? " is-hovered" : ""}`}
+                className={cn("feature-row", {
+                  "is-selected": item.id === selectedId,
+                  "is-hovered": item.index === hovered,
+                })}
                 aria-current={item.id === selectedId ? "true" : undefined}
                 onClick={() => select(item)}
                 onMouseEnter={() =>
@@ -1265,15 +1269,17 @@ function Inspector({
                   <>
                     <div>
                       <dt>部件</dt>
-                      <dd className="is-number">{item.parts}</dd>
+                      <dd className="tabular-nums">{item.parts}</dd>
                     </div>
                     <div>
                       <dt>顶点</dt>
-                      <dd className="is-number">{item.vertices}</dd>
+                      <dd className="tabular-nums">{item.vertices}</dd>
                     </div>
                     <div>
                       <dt>范围</dt>
-                      <dd className="is-number">{formatBounds(item.bounds)}</dd>
+                      <dd className="tabular-nums">
+                        {formatBounds(item.bounds)}
+                      </dd>
                     </div>
                   </>
                 )
@@ -1339,16 +1345,16 @@ function LayerSummary({
             </div>
             <div>
               <dt>来源</dt>
-              <dd className="is-number">{source}</dd>
+              <dd className="tabular-nums">{source}</dd>
             </div>
             <div>
               <dt>要素</dt>
-              <dd className="is-number">{layer.items.length}</dd>
+              <dd className="tabular-nums">{layer.items.length}</dd>
             </div>
             {kinds.map((k) => (
               <div key={k}>
                 <dt>{kindLabels[k]}</dt>
-                <dd className="is-number">{layer.counts[k]}</dd>
+                <dd className="tabular-nums">{layer.counts[k]}</dd>
               </div>
             ))}
             <div>
@@ -1358,7 +1364,7 @@ function LayerSummary({
             {layer.bounds && (
               <div>
                 <dt>范围</dt>
-                <dd className="is-number">{formatBounds(layer.bounds)}</dd>
+                <dd className="tabular-nums">{formatBounds(layer.bounds)}</dd>
               </div>
             )}
           </dl>

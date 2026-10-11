@@ -583,6 +583,7 @@ export function Resolution({
                     featureName(item.draft) ??
                     featureName(item.current) ??
                     featureName(item.base);
+                  const itemKind = conflictKind(item);
                   return (
                     <Button
                       key={item.cursor}
@@ -613,12 +614,19 @@ export function Resolution({
                       <span className={styles.itemTags}>
                         <Badge
                           variant="outline"
-                          className={cn(
-                            "kind-badge",
-                            `is-conflict-${conflictKind(item)}`,
-                          )}
+                          className={cn("kind-badge", {
+                            "is-conflict-attributes": itemKind === "attributes",
+                            "is-conflict-geometry": itemKind === "geometry",
+                            "is-conflict-both": itemKind === "both",
+                            "is-conflict-deleted-draft":
+                              itemKind === "deleted-draft",
+                            "is-conflict-deleted-current":
+                              itemKind === "deleted-current",
+                            "is-conflict-stale": itemKind === "stale",
+                            "is-conflict-feature": itemKind === "feature",
+                          })}
                         >
-                          {kindText[conflictKind(item)]}
+                          {kindText[itemKind]}
                         </Badge>
                         {kind && (
                           <span className={styles.choiceTag}>

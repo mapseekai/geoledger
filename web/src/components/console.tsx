@@ -1,4 +1,5 @@
 "use client";
+import { cn } from "@/lib/utils";
 import { call, send, type Info, type Project } from "@/lib/browser-api";
 import {
   ArrowRight,
@@ -200,7 +201,7 @@ export function Console({
         </Tip>
         <nav aria-label="主导航" className="sidebar-nav">
           {groups.map((group) => (
-            <div className="nav-group" key={group.label}>
+            <div key={group.label}>
               <div className="sidebar-label">{group.label}</div>
               {group.ids.map((id) => {
                 if (
@@ -229,7 +230,13 @@ export function Console({
       </div>
       <div className="sidebar-footer">
         <div className="service-card">
-          <span className={`status-dot is-${status}`} aria-hidden="true" />
+          <span
+            className={cn("status-dot", {
+              "is-online": status === "online",
+              "is-offline": status === "offline",
+            })}
+            aria-hidden="true"
+          />
           <span className="service-card-text">
             <strong>{statusText}</strong>
             <small>
@@ -309,8 +316,20 @@ export function Console({
             <span aria-current="page">{meta.title}</span>
           </nav>
           <div className="topbar-end">
-            <Badge variant="outline" className={`status-pill is-${status}`}>
-              <span className={`status-dot is-${status}`} aria-hidden="true" />
+            <Badge
+              variant="outline"
+              className={cn("status-pill", {
+                "is-online": status === "online",
+                "is-offline": status === "offline",
+              })}
+            >
+              <span
+                className={cn("status-dot", {
+                  "is-online": status === "online",
+                  "is-offline": status === "offline",
+                })}
+                aria-hidden="true"
+              />
               {statusText}
             </Badge>
             <Badge variant="secondary" className="version-tag">

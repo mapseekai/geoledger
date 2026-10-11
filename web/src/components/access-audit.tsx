@@ -105,7 +105,7 @@ export function Access({
           <div className="field">
             <Label htmlFor="member-role">项目角色</Label>
             <Select name="role" defaultValue="viewer">
-              <SelectTrigger id="member-role" className="role-select">
+              <SelectTrigger id="member-role">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper" className="menu">

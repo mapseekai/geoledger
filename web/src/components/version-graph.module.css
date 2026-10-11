@@ -1,4 +1,9 @@
 .graph {
+  --graph-mainline: #a3a3a3;
+  --graph-cyan: #0891b2;
+  --graph-yellow: #eab308;
+  --graph-violet: #7c3aed;
+  --graph-orange: #f97316;
   min-width: 0;
 }
 
@@ -95,7 +100,7 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #a3a3a3;
+  background: var(--graph-mainline);
   transform: translate(-50%, -50%);
 }
 
@@ -128,7 +133,7 @@
   grid-column: 4;
 }
 
-.row > time.meta {
+.row > .timestamp {
   grid-column: 5;
 }
 

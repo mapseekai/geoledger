@@ -25,6 +25,12 @@ with sync_playwright() as p:
     project=call({'action':'createProject','name':'shadcn '+uuid.uuid4().hex[:8]})['id']
     page.goto(args.url+'/datasets?project='+project)
     page.get_by_role('button',name='创建数据集',exact=True).click()
+    dialog=page.get_by_role('dialog')
+    expect(dialog).to_be_visible()
+    assert dialog.evaluate("e => getComputedStyle(e).animationName") != 'none', 'Dialog animation CSS missing'
+    page.emulate_media(reduced_motion='reduce')
+    assert dialog.evaluate("e => getComputedStyle(e).animationName") == 'none', 'Reduced motion ignored'
+    page.emulate_media(reduced_motion='no-preference')
     page.get_by_label('名称',exact=True).fill('控件验证')
     select=page.get_by_role('combobox',name='几何类型',exact=True)
     expect(select).to_have_attribute('data-slot','select-trigger')
@@ -54,6 +60,9 @@ with sync_playwright() as p:
     table.press('ArrowLeft')
     expect(graph).to_have_attribute('aria-selected','true')
     source=page.get_by_role('button',name='查看版本 r1 的来源',exact=True)
+    row=page.get_by_role('button',name='查看版本 r1 的变更',exact=True)
+    centers=row.evaluate("e => [...e.parentElement.children].map(c => {const r=c.getBoundingClientRect();return r.y+r.height/2})")
+    assert max(centers)-min(centers)<1, centers
     source.click()
     expect(page.locator('[data-slot="popover-content"]')).to_contain_text(seed)
     page.keyboard.press('Escape');expect(source).to_be_focused()
@@ -62,6 +71,8 @@ with sync_playwright() as p:
     conflict=page.get_by_role('navigation',name='冲突要素',exact=True)
     expect(conflict.get_by_role('button')).to_have_count(2)
     for button in conflict.get_by_role('button').all():expect(button).to_have_attribute('data-slot','button')
+    progress=page.get_by_role('progressbar',name='解决进度')
+    expect(progress).to_have_attribute('aria-valuenow','0')
     second=conflict.get_by_role('button').nth(1);second.click();expect(second).to_have_attribute('aria-current','true')
     page.screenshot(path='/tmp/geoledger-shadcn-conflict.png',full_page=True)
     page.get_by_role('dialog').get_by_role('button',name='取消',exact=True).click()

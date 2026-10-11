@@ -1,4 +1,5 @@
 "use client";
+import { cn } from "@/lib/utils";
 import { useState, type ReactNode } from "react";
 import { ErrorBox, Modal } from "./common";
 import { Badge } from "./ui/badge";
@@ -85,7 +86,12 @@ export function StatusBadge({ value }: { value: string }) {
   return (
     <Badge
       variant="outline"
-      className={`status-badge ${tones[value] ?? "tone-neutral"}`}
+      className={cn("status-badge", {
+        "tone-brand": tones[value] === "tone-brand",
+        "tone-info": tones[value] === "tone-info",
+        "tone-success": tones[value] === "tone-success",
+        "tone-neutral": !tones[value] || tones[value] === "tone-neutral",
+      })}
     >
       <span className="status-badge-dot" aria-hidden="true" />
       {role(value)}

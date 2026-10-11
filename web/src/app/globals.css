@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 /*
  * GeoLedger Console: admin theme.
  * Neutral slate surfaces, dark navigation, GeoLedger orange as the single accent.
@@ -24,6 +25,9 @@
   --color-border: #e4e7ec;
   --color-input: #d0d5dd;
   --color-ring: #fa520f;
+  --color-brand: var(--brand);
+  --color-warning: #b54708;
+  --color-success: #067647;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -315,7 +319,7 @@ label {
   padding: 1px 8px;
   border-radius: 6px;
   background: #ecfdf3;
-  color: #067647;
+  color: var(--color-success);
 }
 .status-badge {
   display: inline-flex;
@@ -2902,14 +2906,14 @@ label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #b54708;
+  color: var(--color-warning);
   font-weight: 500;
 }
 .text-success {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #067647;
+  color: var(--color-success);
   font-weight: 500;
 }
 .alert-action {
@@ -3074,7 +3078,7 @@ label {
   font-size: 12.5px;
 }
 .summary-table .num.is-added {
-  color: #067647;
+  color: var(--color-success);
 }
 .summary-table .num.is-deleted {
   color: #b42318;

@@ -317,7 +317,7 @@ test("credential issuance preserves request IDs and validates the request", asyn
   };
   const client = {
     issueToken: async (r: unknown) => {
-      const { action, ...expected } = request;
+      const { action: _action, ...expected } = request;
       assert.deepEqual(r, expected);
       return { replayed: true };
     },

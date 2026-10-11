@@ -1,0 +1,274 @@
+{
+  "jsPlugins": ["@shadcn/lint"],
+  "rules": {
+    "shadcn/no-restyle": [
+      "error",
+      {
+        "allow": ["layout"],
+        "contracts": [
+          {
+            "pattern": "^Alert$",
+            "allow": [
+              "layout",
+              "alert",
+              "is-muted",
+              "is-success",
+              "is-warning",
+              "map-overlay",
+              "notice"
+            ]
+          },
+          {
+            "pattern": "^AlertDialogContent$",
+            "allow": ["layout", "gl-dialog", "is-alert", "is-sm"]
+          },
+          {
+            "pattern": "^AlertDialogDescription$",
+            "allow": ["layout", "gl-dialog-text"]
+          },
+          {
+            "pattern": "^AlertDialogFooter$",
+            "allow": ["layout", "gl-dialog-footer"]
+          },
+          {
+            "pattern": "^AlertDialogHeader$",
+            "allow": ["layout", "gl-dialog-header"]
+          },
+          {
+            "pattern": "^Badge$",
+            "allow": [
+              "layout",
+              "behind-badge",
+              "code-tag",
+              "head-badge",
+              "is-added",
+              "is-conflict-attributes",
+              "is-conflict-both",
+              "is-conflict-deleted-current",
+              "is-conflict-deleted-draft",
+              "is-conflict-feature",
+              "is-conflict-geometry",
+              "is-conflict-stale",
+              "is-deleted",
+              "is-head",
+              "is-modified",
+              "is-offline",
+              "is-online",
+              "kind-badge",
+              "meta-chip",
+              "revision-tag",
+              "status-badge",
+              "status-pill",
+              "tone-brand",
+              "tone-info",
+              "tone-neutral",
+              "tone-success",
+              "version-tag"
+            ]
+          },
+          {
+            "pattern": "^Button$",
+            "allow": [
+              "layout",
+              "alert-action",
+              "break-all",
+              "copy-button",
+              "disclosure",
+              "feature-row",
+              "inspector-raw-trigger",
+              "is-attention",
+              "is-danger",
+              "is-hovered",
+              "is-selected",
+              "load-more",
+              "login-submit",
+              "mobile-close",
+              "mobile-menu",
+              "name-link",
+              "p-0",
+              "source-trigger",
+              "whitespace-normal"
+            ]
+          },
+          {
+            "pattern": "^Collapsible$",
+            "allow": ["layout", "inspector-raw"]
+          },
+          {
+            "pattern": "^CollapsibleTrigger$",
+            "allow": ["layout", "change-row", "commit-row"]
+          },
+          {
+            "pattern": "^DialogContent$",
+            "allow": ["layout", "gl-dialog", "is-lg", "is-md", "is-sm", "is-xl"]
+          },
+          {
+            "pattern": "^DialogDescription$",
+            "allow": ["layout", "gl-dialog-subtitle"]
+          },
+          {
+            "pattern": "^DialogHeader$",
+            "allow": ["layout", "gl-dialog-header"]
+          },
+          {
+            "pattern": "^DropdownMenuContent$",
+            "allow": ["layout", "basemap-menu", "menu"]
+          },
+          {
+            "pattern": "^Input$",
+            "allow": ["layout", "mono"]
+          },
+          {
+            "pattern": "^Label$",
+            "allow": ["layout", "is-child", "layer-row", "leading-5"]
+          },
+          {
+            "pattern": "^PopoverContent$",
+            "allow": ["layout", "gap-2", "source-menu", "p-0"]
+          },
+          {
+            "pattern": "^ResizableHandle$",
+            "allow": ["layout", "gis-split-handle"]
+          },
+          {
+            "pattern": "^ResizablePanel$",
+            "allow": ["layout", "gis-map-panel", "gis-table-panel"]
+          },
+          {
+            "pattern": "^ResizablePanelGroup$",
+            "allow": ["layout", "gis-split"]
+          },
+          {
+            "pattern": "^ScrollArea$",
+            "allow": [
+              "layout",
+              "feature-scroll",
+              "gis-table-scroll",
+              "inspector-scroll"
+            ]
+          },
+          {
+            "pattern": "^SelectContent$",
+            "allow": ["layout", "menu"]
+          },
+          {
+            "pattern": "^Separator$",
+            "allow": ["layout", "gis-sep", "is-toggles"]
+          },
+          {
+            "pattern": "^SheetContent$",
+            "allow": [
+              "layout",
+              "gis-left",
+              "gis-panel",
+              "gis-right",
+              "gl-dialog",
+              "is-lg",
+              "is-md",
+              "is-sheet",
+              "is-sm",
+              "is-xl",
+              "sidebar"
+            ]
+          },
+          {
+            "pattern": "^SheetDescription$",
+            "allow": ["layout", "gl-dialog-subtitle"]
+          },
+          {
+            "pattern": "^SheetTitle$",
+            "allow": ["layout", "sr-only"]
+          },
+          {
+            "pattern": "^Skeleton$",
+            "allow": ["layout", "is-short", "loading-avatar", "loading-line"]
+          },
+          {
+            "pattern": "^Table$",
+            "allow": ["layout", "summary-table"]
+          },
+          {
+            "pattern": "^TableCaption$",
+            "allow": ["layout", "sr-only"]
+          },
+          {
+            "pattern": "^TableCell$",
+            "allow": [
+              "layout",
+              "cell-actions",
+              "is-added",
+              "is-deleted",
+              "is-modified",
+              "message-cell",
+              "mono",
+              "muted",
+              "num"
+            ]
+          },
+          {
+            "pattern": "^TableHead$",
+            "allow": ["layout", "cell-actions"]
+          },
+          {
+            "pattern": "^TableRow$",
+            "allow": ["layout", "is-hovered", "is-selected", "total-row"]
+          },
+          {
+            "pattern": "^Textarea$",
+            "allow": ["layout", "code-editor"]
+          },
+          {
+            "pattern": "^ToggleGroup$",
+            "allow": ["layout", "filter-group"]
+          }
+        ]
+      }
+    ],
+    "shadcn/no-raw-colors": "error",
+    "shadcn/no-arbitrary-values": "error",
+    "shadcn/no-inline-styles": "error",
+    "shadcn/no-unknown-classes": "error",
+    "shadcn/require-static-classes": "error"
+  },
+  "overrides": [
+    {
+      "files": ["src/components/ui/**"],
+      "rules": {
+        "shadcn/no-restyle": "off",
+        "shadcn/no-arbitrary-values": "off",
+        "shadcn/require-static-classes": "off"
+      }
+    },
+    {
+      "files": ["src/components/ui/progress.tsx"],
+      "rules": {
+        "shadcn/no-inline-styles": [
+          "error",
+          {
+            "allow": ["transform"]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/components/version-graph.tsx"],
+      "rules": {
+        "shadcn/no-inline-styles": [
+          "error",
+          {
+            "allow": ["left", "background"]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/components/conflict-resolution.tsx",
+        "src/components/version-graph.tsx"
+      ],
+      "rules": {
+        "shadcn/require-static-classes": "off"
+      }
+    }
+  ]
+}

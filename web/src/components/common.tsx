@@ -119,7 +119,11 @@ export function Notice({
   return (
     <Alert
       role={role ?? "note"}
-      className={`notice${tone ? ` is-${tone}` : ""}`}
+      className={cn("notice", {
+        "is-success": tone === "success",
+        "is-warning": tone === "warning",
+        "is-muted": tone === "muted",
+      })}
     >
       {icon}
       <AlertDescription>{children}</AlertDescription>
@@ -254,7 +258,16 @@ export function Modal({
   const onOpenChange = (open: boolean) => {
     if (!open && !busy) close();
   };
-  const frame = cn("gl-dialog", `is-${size}`, className);
+  const frame = cn(
+    "gl-dialog",
+    {
+      "is-sm": size === "sm",
+      "is-md": size === "md",
+      "is-lg": size === "lg",
+      "is-xl": size === "xl",
+    },
+    className,
+  );
   // Start on the frame itself: no stray focus ring on the first footer button,
   // Esc works at once, and autoFocus fields still win (Radix skips this then).
   const focusFrame = (event: Event) => {
@@ -522,7 +535,7 @@ export function usePage<T>(
   };
   const footer = (
     <div className="pagination">
-      <span className="pagination-summary">
+      <span>
         第 {cursors.length} 页 · 本页 {rows.length} 项
       </span>
       <div className="pagination-actions">

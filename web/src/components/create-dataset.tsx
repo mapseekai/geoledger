@@ -88,9 +88,8 @@ export function CreateDatasetDialog({
                 );
                 worker.onmessage = (event) => {
                   worker.terminate();
-                  event.data.error
-                    ? reject(new Error(event.data.error))
-                    : resolve(event.data);
+                  if (event.data.error) reject(new Error(event.data.error));
+                  else resolve(event.data);
                 };
                 worker.onerror = () => {
                   worker.terminate();

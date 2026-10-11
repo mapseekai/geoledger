@@ -26,7 +26,12 @@ const ROW_HEIGHT = 64;
 const MAINLINE_X = 18;
 const LANE_START_X = 48;
 const LANE_GAP = 24;
-const LANE_COLORS = ["#0891b2", "#eab308", "#7c3aed", "#f97316"];
+const LANE_COLORS = [
+  "var(--graph-cyan)",
+  "var(--graph-yellow)",
+  "var(--graph-violet)",
+  "var(--graph-orange)",
+];
 
 type HistoryState = { key: string; uppers: string[] };
 type GraphRow =
@@ -234,7 +239,7 @@ export function VersionGraph({
                       {
                         "--branch-color":
                           edge.fromLane === 0
-                            ? "#a3a3a3"
+                            ? "var(--graph-mainline)"
                             : LANE_COLORS[
                                 (edge.fromLane - 1) % LANE_COLORS.length
                               ],
@@ -345,7 +350,7 @@ export function VersionGraph({
                         left: branchX,
                         background:
                           node.lane === 0
-                            ? "#a3a3a3"
+                            ? "var(--graph-mainline)"
                             : LANE_COLORS[(node.lane - 1) % LANE_COLORS.length],
                       }}
                     />
@@ -370,7 +375,7 @@ export function VersionGraph({
                     <span className={styles.meta} title={commit.subject}>
                       {commit.subject}
                     </span>
-                    <span className={styles.meta}>
+                    <span className={`${styles.meta} ${styles.timestamp}`}>
                       <RelativeTime value={commit.createdAt} />
                     </span>
                     <div className={styles.changeCounts}>

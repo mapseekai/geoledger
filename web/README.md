@@ -78,6 +78,7 @@ npm --prefix web run dev -- --port 3001
 
 ```sh
 npm --prefix web test
+npm --prefix web run lint
 npm --prefix web run typecheck
 npm --prefix web run format:check
 npm --prefix web run build
@@ -86,6 +87,12 @@ npm --prefix web run build
 生产构建输出至 `web/.next`；浏览器与真实服务联调入口见 [开发指南](../docs/development.md#控制台浏览器验证)。
 
 GeoJSON 文件上传专项浏览器验证：`python3 scripts/test-console-upload.py --url http://localhost:3000 --token-file target/console-test/admin-credentials.json --screenshots /tmp/geoledger-upload-shots`。使用隔离测试服务，验证创建数据集时的文件上传、大于 1 MiB 的文件、多批次导入、中断重试、提交成功后响应丢失的恢复、并发修改保护、精确数字和手机上传入口。 添加 `--feature-bytes 12582912` 可验证单个 12 MiB 要素经 Web/BFF/gRPC 流式上传、查询及发布；这是验证用例大小，不是产品上限。
+
+### 设计规范检查
+
+`npm --prefix web run lint` 使用 Oxlint，并通过 `.oxlintrc.json` 注册 `@shadcn/lint`。组件目录、导入别名和 Tailwind 主题从 `components.json` 自动发现。六条设计规则均作为错误启用，检查未知 class、主题颜色、任意值、组件样式契约、内联样式和静态 class。命令同时拒绝警告，并由 CI 的 Web 检查执行。组件可接受的手写 CSS 类逐项记录在 `no-restyle.contracts` 中，新增样式需先确认 CSS 定义和使用范围。令牌页允许 Input 使用 `mono`，Label 使用 `leading-5` 保持多行可读性，PopoverContent 使用 `p-0` 由日历管理内部间距。
+
+基础 `src/components/ui/` 组件负责自身样式，按上游建议豁免样式覆盖、任意值和静态 class 检查，继续检查主题颜色及未知 class。`conflict-resolution.tsx` 和 `version-graph.tsx` 使用编译生成类名的 CSS Modules，豁免静态 class 解析；版本图仅允许动态 `left`/`background`，进度条仅允许动态 `transform`。动画工具类由 `tw-animate-css` 提供，全局 CSS 保留减少动态效果的系统偏好适配。规则说明见 [可用规则](https://github.com/shadcn-ui/lint#rules)，配置示例见 [设计系统规则](https://github.com/shadcn-ui/lint/blob/main/docs/design-systems.md)。
 
 ### 生产运行
 

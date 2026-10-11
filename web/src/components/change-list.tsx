@@ -30,7 +30,14 @@ export const kindLabel: Record<ChangeKind, string> = {
 };
 export function KindBadge({ kind }: { kind: ChangeKind }) {
   return (
-    <Badge variant="outline" className={`kind-badge is-${kind}`}>
+    <Badge
+      variant="outline"
+      className={cn("kind-badge", {
+        "is-added": kind === "added",
+        "is-modified": kind === "modified",
+        "is-deleted": kind === "deleted",
+      })}
+    >
       {kindLabel[kind]}
     </Badge>
   );
@@ -213,12 +220,7 @@ function ChangeDetail({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr
-                key={row.key}
-                className={cn({
-                  "is-changed": row.changed && change.kind === "modified",
-                })}
-              >
+              <tr key={row.key}>
                 <th scope="row">{row.label}</th>
                 {change.kind !== "added" && (
                   <td
