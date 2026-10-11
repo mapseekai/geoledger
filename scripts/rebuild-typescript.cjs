@@ -56,10 +56,10 @@ async function build() {
       fs.copyFileSync(file, path.join(compiler, 'source', name));
     }
     const go = path.join(compiler, 'go/bin/go');
-    const env = { ...process.env, CGO_ENABLED: '0', GOTOOLCHAIN: 'local', GOOS: 'linux', GOARCH: architecture,
+    const env = { ...process.env, CGO_ENABLED: '0', GOTOOLCHAIN: 'local', GOMAXPROCS: '2', GOOS: 'linux', GOARCH: architecture,
       GOROOT: path.join(compiler, 'go'), GOPATH: path.join(compiler, 'modules') };
     assert.match(execFileSync(go, ['version'], { env, encoding: 'utf8' }), new RegExp(`go${lock.go_version.replaceAll('.', '\\.')}\\s`));
-    execFileSync(go, ['build', '-mod=readonly', '-trimpath', '-buildvcs=false', '-o', path.join(compiler, 'tsc'), './cmd/tsgo'],
+    execFileSync(go, ['build', '-p=2', '-mod=readonly', '-trimpath', '-buildvcs=false', '-o', path.join(compiler, 'tsc'), './cmd/tsgo'],
       { cwd: path.join(compiler, 'source'), env, stdio: 'inherit', timeout: 1800000 });
     assert.equal(execFileSync(path.join(compiler, 'tsc'), ['--version'], { encoding: 'utf8' }).trim(), 'Version ' + lock.version);
     fs.writeFileSync(path.join(compiler, 'source-lock.json'), JSON.stringify(lock, null, 2));
