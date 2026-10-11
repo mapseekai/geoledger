@@ -1416,3 +1416,66 @@ fn datasets_fix_coordinate_dimension_and_reject_mismatched_edits_atomically() ->
     assert_eq!(renamed["coordinate_dimension"], 3);
     Ok(())
 }
+
+#[test]
+fn receipt_replay_survives_archive_and_downgrade_without_granting_new_writes() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.bob);
+    f.save(&f.bob, &w, 0, json!({"a":1}), Value::Null)?;
+    let request = json!({"workspace":w,"expected_workspace_version":1,"request_id":Uuid::new_v4(),"message":"receipt"});
+    let result = f.call(&f.bob, "publish", request.clone())?;
+    f.call(&f.alice, "archive_project", json!({"archived":true}))?;
+    assert_eq!(f.call(&f.bob, "publish", request.clone())?, result);
+    assert_eq!(
+        f.call(&f.bob, "create_workspace", json!({}))
+            .unwrap_err()
+            .status,
+        409
+    );
+    let mut mismatch = request.clone();
+    mismatch["message"] = json!("changed");
+    assert_eq!(f.call(&f.bob, "publish", mismatch).unwrap_err().status, 409);
+    f.call(
+        &f.alice,
+        "set_member",
+        json!({"subject":f.bob,"role":"viewer"}),
+    )?;
+    assert_eq!(f.call(&f.bob, "publish", request.clone())?, result);
+    f.call(&f.alice, "remove_member", json!({"subject":f.bob}))?;
+    assert_eq!(f.call(&f.bob, "publish", request).unwrap_err().status, 404);
+    Ok(())
+}
+
+#[test]
+fn derived_draft_count_tracks_upserts_deletions_and_failed_batches() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    assert_eq!(
+        f.save(&f.alice, &w, 0, json!({"a":1}), Value::Null)?["changes"],
+        1
+    );
+    assert_eq!(
+        f.save(&f.alice, &w, 1, json!({"a":2}), Value::Null)?["changes"],
+        1
+    );
+    let remove = json!({"dataset":f.d,"feature_id":"one","feature":null});
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "save",
+            json!({"workspace":w,"expected_workspace_version":2,"edits":[remove]})
+        )?["changes"],
+        0
+    );
+    let bad = f.edit(
+        "bad",
+        json!({}),
+        json!({"type":"Point","coordinates":[999,0]}),
+    );
+    assert!(f.call(&f.alice,"save",json!({"workspace":w,"expected_workspace_version":3,"edits":[f.edit("two",json!({}),Value::Null),bad]})).is_err());
+    assert_eq!(
+        f.save(&f.alice, &w, 3, json!({"a":3}), Value::Null)?["changes"],
+        1
+    );
+    Ok(())
+}

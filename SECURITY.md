@@ -38,13 +38,14 @@ GeoLedger 处于 `0.x` 预发布阶段。安全修复发布在最新的预发布
 
 - 需要已经拥有服务器文件系统或数据库超级用户权限的攻击。
 - 违反 [安全配置](docs/security.md) 的部署，例如在公网上明文监听、关闭 PostgreSQL TLS 校验、把 `GL_ALLOW_INSECURE_TRANSPORT` 用于非可信网络。
-- 依赖库中已公开、且仓库依赖门禁（`scripts/audit.sh`、Dependabot）正在跟踪的公告。
 
 ## 供应链
 
-- CI 依赖门禁 [scripts/audit.sh](scripts/audit.sh)：`cargo audit`、`npm audit`、`govulncheck`、`pip-audit`。已接受的公告及理由记录在 [.cargo/audit.toml](.cargo/audit.toml)。
+- CI 与发布共用的必需依赖门禁 [scripts/audit.sh](scripts/audit.sh)：`cargo audit`、`npm audit`、`govulncheck`、`pip-audit`。已接受的公告及理由记录在 [.cargo/audit.toml](.cargo/audit.toml)。
 - [Dependabot](.github/dependabot.yml) 每周提交依赖更新；GitHub Actions 固定到 commit SHA，Dockerfile 基础镜像固定 digest。
 - 发布产物附 SHA256、SBOM 和构建来源证明，容器镜像使用 cosign 无密钥签名，见 [开发指南](docs/development.md#依赖与发布)。
+- 镜像发布前对准确 OCI manifest 扫描系统包、原生库和语言依赖，两个架构全部通过才允许复制同一 digest 到镜像仓库；HIGH/CRITICAL 公告包括无修补版本的条目均阻断。扫描器版本与下载 SHA256 固定在 [.security/trivy.lock.json](.security/trivy.lock.json)，没有默认忽略列表。
+- 已发布镜像按 Release 中的 digest 清单每日复审。上游公告结合实际版本和触发路径评估，不因其已经公开而自动排除产品风险。Windows 运行时使用独立锁定包清单，CI 执行真实空间存储启动检查。
 
 ## 协议与存储契约
 

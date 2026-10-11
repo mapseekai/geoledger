@@ -205,7 +205,7 @@ async fn large_streams_and_http_preserve_atomic_saves_without_four_mib_cap() -> 
     let tokens: Value = serde_json::from_slice(&std::fs::read(token_path)?)?;
     let token = tokens[0]["token"].as_str().ok_or("token")?;
     let client = connect(&server, token).await?;
-    assert_eq!(client.info().await?.max_request_bytes, 0);
+    assert_eq!(client.info().await?.max_request_bytes, 64 * 1024 * 1024);
     let project = client.create_project("large streaming").await?.id;
     let dataset = client
         .create_dataset_with_dimension(&project, "large features", "point", 3)

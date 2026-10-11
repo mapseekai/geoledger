@@ -15,11 +15,11 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { ErrorBox, Loading } from "./common";
+import { ErrorBox, Loading, RelativeTime } from "./common";
 import { Button } from "./ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "./ui/popover";
 import styles from "./version-graph.module.css";
-import { short, time } from "./resource-shared";
+import { short } from "./resource-shared";
 
 const PAGE_SIZE = 20n;
 const ROW_HEIGHT = 64;
@@ -170,7 +170,7 @@ export function VersionGraph({
       ) : busy ? (
         <Loading rows={3} />
       ) : !graphRows.length ? (
-        <p className={styles.empty}>还没有发布记录或进行中的工作区。</p>
+        <p className={styles.empty}>暂无版本</p>
       ) : (
         <div className={styles.graphScroll}>
           <div
@@ -370,13 +370,9 @@ export function VersionGraph({
                     <span className={styles.meta} title={commit.subject}>
                       {commit.subject}
                     </span>
-                    <time
-                      className={styles.meta}
-                      dateTime={commit.createdAt}
-                      title={commit.createdAt}
-                    >
-                      {time(commit.createdAt)}
-                    </time>
+                    <span className={styles.meta}>
+                      <RelativeTime value={commit.createdAt} />
+                    </span>
                     <div className={styles.changeCounts}>
                       <ChangeSummary
                         project={project.id}

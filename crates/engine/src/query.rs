@@ -52,6 +52,7 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
     }
     // Remove ALL shadowed base rows before spatial filtering, including deletes and moves.
     let mut values = Vec::new();
+    let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
     let mut after = r.after.clone();
     while values.len() < r.limit as usize {
         let batch_limit = (r.limit - values.len() as i64).min(32);
@@ -78,6 +79,7 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
                 .map_err(Error::stored_json)?
                 .unwrap_or(Value::Null);
             let item = json!({"type":"Feature","id":row.get::<_,String>(0usize)?,"properties":properties,"geometry":geometry});
+            budget.include(&item)?;
             values.push(item);
         }
     }
@@ -110,6 +112,7 @@ pub(super) fn diff(t: &mut Transaction, s: &str, r: Diff) -> Result<Value> {
     }
     .check()?;
     let mut result = Vec::new();
+    let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
     let mut after = r.after;
     while result.len() < r.limit as usize {
         let limit = (r.limit - result.len() as i64).min(32);
@@ -130,6 +133,7 @@ pub(super) fn diff(t: &mut Transaction, s: &str, r: Diff) -> Result<Value> {
             let key: String = row.get(1usize)?;
             after = format!("{dataset}/{key}");
             let item = json!({"cursor":after,"dataset":dataset,"feature_id":key,"base":feature_row(&row,&key,4,5)?,"draft":feature_row(&row,&key,2,3)?});
+            budget.include(&item)?;
             result.push(item);
         }
     }
@@ -172,6 +176,7 @@ pub(super) fn commit_detail(t: &mut Transaction, s: &str, r: Commit) -> Result<V
     t.commit_exists(&r.project, r.revision)?
         .ok_or_else(missing)?;
     let mut out = Vec::new();
+    let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
     let mut after = r.after;
     while out.len() < r.limit as usize {
         let limit = (r.limit - out.len() as i64).min(32);
@@ -185,6 +190,7 @@ pub(super) fn commit_detail(t: &mut Transaction, s: &str, r: Commit) -> Result<V
             let key: String = row.get(1usize)?;
             after = format!("{d}/{key}");
             let item = json!({"cursor":after,"dataset":d,"feature_id":key,"before":feature_row(&row,&key,2,3)?,"after":feature_row(&row,&key,4,5)?});
+            budget.include(&item)?;
             out.push(item);
         }
     }
@@ -236,9 +242,11 @@ pub(super) fn audit_events(t: &mut Transaction, subject: &str, r: Audit) -> Resu
     }
     let rows = t.audit_page(&r.project, r.after, r.limit)?;
     let mut events = Vec::new();
+    let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
     for row in rows {
         let detail: Value = codec::stored(&row.get::<_, String>(3usize)?)?;
         let event = json!({"id":row.get::<_,i64>(0usize)?,"subject":row.get::<_,String>(1usize)?,"action":row.get::<_,String>(2usize)?,"detail":detail,"created_at":row.get::<_,String>(4usize)?});
+        budget.include(&event)?;
         events.push(event);
     }
     let next = events.last().map(|e| e["id"].clone());

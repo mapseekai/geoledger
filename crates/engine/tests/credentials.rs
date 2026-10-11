@@ -299,3 +299,20 @@ fn postgis_cross_instance_authentication_and_concurrent_reissue() -> TestResult 
     admin.batch_execute(&format!("DROP DATABASE {name} WITH (FORCE)"))?;
     result
 }
+
+#[test]
+fn rejects_either_incompatible_format_twelve_without_modifying_it() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("old.db");
+    let connection = rusqlite::Connection::open(&path)?;
+    connection.execute_batch("CREATE TABLE gl_format(singleton boolean PRIMARY KEY, version integer NOT NULL); INSERT INTO gl_format VALUES(true,12);")?;
+    let app = Application::new(Storage::Sqlite(path));
+    assert!(app.migrate().is_err());
+    assert_eq!(
+        connection.query_row("SELECT version FROM gl_format", [], |row| row
+            .get::<_, i32>(0))?,
+        12
+    );
+    assert_eq!(connection.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('gl_managed_tokens','gl_workspace_sizes')", [], |row| row.get::<_, i32>(0))?, 0);
+    Ok(())
+}

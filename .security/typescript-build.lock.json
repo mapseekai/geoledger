@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "version": "7.0.2",
+  "source": {
+    "commit": "2bd066d87f5bafd315be9f40889d0a60b9e58e0b",
+    "url": "https://codeload.github.com/microsoft/typescript-go/tar.gz/2bd066d87f5bafd315be9f40889d0a60b9e58e0b",
+    "sha256": "5ccb47dbb3f68cd0da58b71e6f445eee36a50bd3e9f9f330cc23a97b88500119"
+  },
+  "go_version": "1.27.2",
+  "go_archives": {
+    "amd64": {
+      "url": "https://go.dev/dl/go1.27.2.linux-amd64.tar.gz",
+      "sha256": "ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5",
+      "bytes": 70590635
+    },
+    "arm64": {
+      "url": "https://go.dev/dl/go1.27.2.linux-arm64.tar.gz",
+      "sha256": "94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8",
+      "bytes": 67076180
+    }
+  },
+  "module_files": {
+    "go.mod": "979a11a550f995ac8ede6faed21f5524e8de38faa7be5324a6872e000dfd2ae8",
+    "go.sum": "0b5e9ae814e32b864d6169b3654942871d3314bcbd44d020e52639120f9c6104"
+  }
+}

@@ -2,6 +2,7 @@
 """Exercise the separate Next.js console against a disposable GeoLedger service."""
 import argparse
 import json
+import re
 from pathlib import Path
 import uuid
 from playwright.sync_api import sync_playwright, expect
@@ -32,10 +33,11 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots/'next-login.png'), full_page=True)
     page.get_by_label('访问令牌',exact=True).fill('invalid-test-token')
     page.get_by_role('button',name='进入控制台').click()
-    expect(page.get_by_role('alert')).to_be_visible()
+    expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_be_visible()
     page.get_by_label('访问令牌',exact=True).fill(token)
     page.get_by_role('button',name='进入控制台').click()
     page.wait_for_url('**/projects')
+    page.wait_for_load_state('networkidle')
     cookies=context.cookies()
     auth=next(c for c in cookies if c['name']=='gl_session')
     assert auth['httpOnly'] and auth['sameSite']=='Strict' and token not in auth['value']
@@ -158,11 +160,85 @@ with sync_playwright() as p:
     page.goto(origin+'/history?project='+project)
     expect(page.get_by_role('cell',name='添加道路',exact=True)).to_be_visible()
     page.get_by_role('button',name='详情',exact=True).click()
+    changes=page.get_by_role('list',name='要素变更',exact=True)
+    changes.get_by_role('button').filter(has_text='road-1').click()
+    expect(page.get_by_role('dialog')).to_contain_text('18446744073709551615')
+    page.get_by_role('dialog').get_by_role('button',name='GeoJSON',exact=True).click()
     expect(page.locator('pre').filter(has_text='18446744073709551615')).to_be_visible()
     page.get_by_role('button',name='Close',exact=True).click()
     page.get_by_role('button',name='撤销',exact=True).click()
     page.get_by_role('button',name='创建撤销工作区',exact=True).click()
     expect(page.get_by_text('工作区已创建：',exact=False)).to_be_visible()
+    # Conflict, update (rebase) and publish dialogs on a real two-workspace conflict.
+    merge=command({'action':'createProject','name':'冲突验证 '+uuid.uuid4().hex[:8]})['id']
+    points=command({'action':'createDataset','geometryType':'point','project':merge,'name':'设施'})['id']
+    def point(key, name, lanes):
+        return {'dataset':points,'featureId':key,'feature':json.dumps({'type':'Feature','id':key,'properties':{'name':name,'lanes':lanes},'geometry':{'type':'Point','coordinates':[104.06,30.66]}})}
+    def merge_save(workspace, edits):
+        return command({'action':'save','project':merge,'workspace':workspace['id'],'version':workspace['version'],'edits':edits})['version']
+    def merge_publish(workspace, version, message):
+        return command({'action':'publish','project':merge,'workspace':workspace['id'],'version':version,'requestId':str(uuid.uuid4()),'message':message})
+    seed=command({'action':'createWorkspace','project':merge})
+    merge_publish(seed,merge_save(seed,[point('p1','天府广场',6),point('p2','春熙路',4)]),'初始数据')
+    theirs=command({'action':'createWorkspace','project':merge})
+    mine=command({'action':'createWorkspace','project':merge})
+    other=command({'action':'createWorkspace','project':merge})
+    theirs_version=merge_save(theirs,[point('p1','天府广场',8),point('p2','春熙路步行街',4)])
+    merge_save(mine,[point('p1','天府广场',10)])
+    merge_save(other,[point('p2','春熙路商圈',4)])
+    merge_publish(theirs,theirs_version,'他人先发布')
+    page.goto(origin+'/workspaces?project='+merge)
+    page.get_by_role('tab',name='表格',exact=True).click()
+    row=page.get_by_role('row').filter(has=page.get_by_role('button',name='更多操作 '+mine['id'],exact=True))
+    expect(row).to_contain_text('落后 1')
+    row.get_by_role('button',name='更新',exact=True).click()
+    update=page.get_by_role('dialog')
+    expect(update).to_contain_text('他人先发布')
+    expect(update).to_contain_text('1 个要素与已发布版本冲突')
+    update.get_by_role('button',name='解决冲突',exact=True).last.click()
+    conflict=page.get_by_role('navigation',name='冲突要素',exact=True)
+    expect(conflict.get_by_role('button')).to_have_count(1)
+    confirm=page.get_by_role('button',name='更新到 r2',exact=True)
+    expect(confirm).to_be_disabled()
+    expect(page.get_by_role('dialog')).to_contain_text('0/1')
+    page.get_by_role('dialog').get_by_role('heading',name='天府广场').click()
+    page.keyboard.press('1')
+    expect(page.get_by_role('dialog')).to_contain_text('1/1')
+    page.screenshot(path=str(shots/'next-conflict-dialog.png'),full_page=True)
+    confirm.click()
+    expect(page.get_by_role('dialog')).to_have_count(0)
+    rebased=command({'action':'workspace','project':merge,'workspace':mine['id']})
+    assert rebased['baseRevision']=='2', rebased
+    assert command({'action':'conflicts','project':merge,'workspace':mine['id']})['total']=='0'
+    page.get_by_role('tab',name='表格',exact=True).click()
+    row.get_by_role('button',name='发布',exact=True).click()
+    publish=page.get_by_role('dialog')
+    expect(publish).to_contain_text('r3')
+    publish.get_by_role('button',name='变更明细').click()
+    expect(publish.get_by_role('list',name='要素变更',exact=True)).to_contain_text('天府广场')
+    page.get_by_label('版本说明',exact=True).fill('采用我的车道数')
+    page.get_by_role('button',name='确认发布',exact=True).click()
+    expect(page.get_by_text('版本 r3 已发布',exact=True)).to_be_visible()
+    page.get_by_role('link',name='查看版本').click()
+    page.wait_for_url(re.compile(r'/history\?.*revision=3'))
+    expect(page.get_by_role('dialog')).to_contain_text('采用我的车道数')
+    page.get_by_role('button',name='Close',exact=True).click()
+    features=command({'action':'features','project':merge,'dataset':points})['features']
+    assert next(f for f in features if f['id']=='p1')['properties']['lanes']==10
+    # Resolve-only flow with a bulk action; the publish dialog flags the conflict first.
+    page.goto(origin+'/workspaces?project='+merge)
+    page.get_by_role('tab',name='表格',exact=True).click()
+    row=page.get_by_role('row').filter(has=page.get_by_role('button',name='更多操作 '+other['id'],exact=True))
+    row.get_by_role('button',name='发布',exact=True).click()
+    expect(page.get_by_role('dialog')).to_contain_text('1 个要素与 r3 冲突')
+    expect(page.get_by_role('button',name='确认发布',exact=True)).to_be_disabled()
+    page.get_by_role('dialog').get_by_role('button',name='解决冲突',exact=True).click()
+    page.get_by_role('button',name='批量操作').click()
+    page.get_by_role('menuitem',name='全部采用已发布').click()
+    page.get_by_role('button',name='应用 1 个解决',exact=True).click()
+    expect(page.get_by_role('dialog',name='发布到新版本')).not_to_contain_text('冲突',timeout=10000)
+    assert command({'action':'conflicts','project':merge,'workspace':other['id']})['total']=='0'
+    page.get_by_role('button',name='关闭',exact=True).click()
     page.goto(origin+'/access?project='+project)
     page.get_by_label('成员身份',exact=True).fill('browser-test-viewer')
     page.get_by_role('button',name='保存权限',exact=True).click()
@@ -256,4 +332,4 @@ with sync_playwright() as p:
     assert response.status==401
     assert not errors, errors
     browser.close()
-print('Console passed: session/CSRF, exact JSON, interrupted publication + expired-login retry, 101 workspaces, long IDs, concurrent draft/published paging, history/undo, access/audit, logout (server-side revocation) and mobile layout.')
+print('Console passed: session/CSRF, exact JSON, interrupted publication + expired-login retry, 101 workspaces, long IDs, concurrent draft/published paging, history/undo, conflict/update/publish dialogs, access/audit, logout (server-side revocation) and mobile layout.')

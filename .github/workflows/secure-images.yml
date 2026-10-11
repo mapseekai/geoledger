@@ -1,0 +1,194 @@
+name: Build, scan and publish immutable images
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      namespace:
+        description: ghcr.io/owner or docker.io/namespace
+        required: true
+        type: string
+    secrets:
+      registry_username:
+        required: false
+      registry_password:
+        required: false
+permissions:
+  contents: read
+jobs:
+  build-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: geoledger
+            kind: server
+            file: Dockerfile
+          - name: geoledger-console
+            kind: console
+            file: web/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Validate source and publication identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, re, subprocess
+          assert re.fullmatch(r'[0-9a-f]{40}', os.environ['SOURCE_SHA'])
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip() == os.environ['SOURCE_SHA']
+          assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?', os.environ['VERSION'])
+          assert re.fullmatch(r'(ghcr\.io|docker\.io)/[a-z0-9][a-z0-9_-]*', os.environ['NAMESPACE'])
+          PYTHON
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          driver: docker-container
+          driver-opts: image=moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+      - name: Install pinned scanner
+        run: python3 scripts/install-trivy.py --destination "$RUNNER_TEMP/scanners"
+      - name: Build the complete development stage for separate scanning
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: build
+          platforms: linux/amd64,linux/arm64
+          push: false
+          labels: org.opencontainers.image.revision=${{ inputs.source_sha }}
+          outputs: type=oci,dest=${{ runner.temp }}/build-stage.tar
+          sbom: true
+          provenance: mode=max
+      - name: Gate the exact build environment and retain its immutable context
+        id: build-gate
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_KIND: ${{ matrix.kind }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/build-layout" "$RUNNER_TEMP/build-reports"
+          tar -xf "$RUNNER_TEMP/build-stage.tar" -C "$RUNNER_TEMP/build-layout"
+          python3 scripts/image-gate.py scan --layout "$RUNNER_TEMP/build-layout" --output "$RUNNER_TEMP/build-reports" --source-sha "$SOURCE_SHA" --kind "$IMAGE_KIND-build"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          gate = json.loads((root / 'build-reports/gate.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'context=build=oci-layout://{root}/build-layout@{gate["root"]}\n')
+          PYTHON
+      - name: Retain build-stage scan evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: build-scan-${{ matrix.name }}
+          path: ${{ runner.temp }}/build-reports
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Build local OCI artifact, never push during build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: false
+          labels: org.opencontainers.image.revision=${{ inputs.source_sha }}
+          build-contexts: ${{ steps.build-gate.outputs.context }}
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar
+          sbom: true
+          provenance: mode=max
+      - name: Scan exact manifests, require both architectures
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE_KIND: ${{ matrix.kind }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/checked/layout" "$RUNNER_TEMP/checked/reports"
+          tar -xf "$RUNNER_TEMP/image.tar" -C "$RUNNER_TEMP/checked/layout"
+          python3 scripts/image-gate.py scan --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "$IMAGE_KIND"
+      - name: Retain scan evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-${{ matrix.name }}
+          path: ${{ runner.temp }}/checked/reports
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Hand off only passed immutable artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: checked-oci-${{ matrix.name }}
+          path: ${{ runner.temp }}/checked
+          if-no-files-found: error
+          retention-days: 1
+  publish:
+    # Matrix completion is an all-images barrier, not a per-image partial release.
+    needs: build-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      matrix:
+        name: [geoledger, geoledger-console]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: checked-oci-${{ matrix.name }}
+          path: ${{ runner.temp }}/checked
+      - name: Verify artifact and gate before registry login
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 scripts/image-gate.py verify --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "${{ matrix.name == 'geoledger' && 'server' || 'console' }}"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+      - name: GHCR credentials
+        if: startsWith(inputs.namespace, 'ghcr.io/')
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker Hub credentials
+        if: startsWith(inputs.namespace, 'docker.io/')
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          username: ${{ secrets.registry_username }}
+          password: ${{ secrets.registry_password }}
+      - name: Publish scanned blobs without rebuilding or rewriting digests
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          IMAGE: ${{ inputs.namespace }}/${{ matrix.name }}
+          REGISTRY_AUTH_FILE: /home/runner/.docker/config.json
+        run: |
+          args=(--tag "$IMAGE:$VERSION")
+          if [[ $VERSION != *-* ]]; then args+=(--tag "$IMAGE:${VERSION%.*}"); fi
+          python3 scripts/image-gate.py publish --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "${{ matrix.name == 'geoledger' && 'server' || 'console' }}" --inventory "$RUNNER_TEMP/${{ matrix.name }}-images.json" "${args[@]}"
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Sign the scanned registry digest
+        env:
+          INVENTORY: ${{ runner.temp }}/${{ matrix.name }}-images.json
+        run: |
+          image=$(python3 -c 'import json,os; print(json.load(open(os.environ["INVENTORY"]))["image"])')
+          cosign sign --yes "$image"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-inventory-${{ matrix.name }}
+          path: ${{ runner.temp }}/${{ matrix.name }}-images.json
+          if-no-files-found: error
+          retention-days: 90

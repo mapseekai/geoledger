@@ -1,3 +1,4 @@
+mod support;
 use geoledger_engine::{Application, Policy, Storage};
 use serde_json::{Value, json};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -15,8 +16,7 @@ fn existing_table_publication_is_atomic() -> TestResult {
     let name = format!("geoledger_binding_{}", uuid::Uuid::new_v4().simple());
     admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
     let result = (|| -> TestResult {
-        let dsn = dsn.replacen("/geoledger_test", &format!("/{name}"), 1);
-        let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+        let (dsn, mut db) = support::connect_isolated(&dsn, &name)?;
         db.batch_execute("CREATE EXTENSION postgis; CREATE SCHEMA business; CREATE TABLE business.points(id bigint PRIMARY KEY,label text NOT NULL CHECK(label <> 'invalid'), n numeric(20,0), geom geometry(PointZ,4326)); INSERT INTO business.points VALUES(1,'original',18446744073709551615,ST_SetSRID(ST_MakePoint(1,2,3),4326))")?;
         let app = Application::new(Storage::Postgis(dsn)).with_policy(Policy {
             admins: ["alice".into()].into(),
@@ -280,8 +280,7 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
     let name = format!("geoledger_deferred_{}", uuid::Uuid::new_v4().simple());
     admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
     let result = (|| -> TestResult {
-        let dsn = dsn.replacen("/geoledger_test", &format!("/{name}"), 1);
-        let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+        let (dsn, mut db) = support::connect_isolated(&dsn, &name)?;
         db.batch_execute("CREATE EXTENSION postgis; CREATE SCHEMA business; CREATE TABLE business.zz_parent(id bigint PRIMARY KEY,label text,geom geometry(Point,4326)); CREATE TABLE business.aa_child(id bigint PRIMARY KEY,parent_id bigint REFERENCES business.zz_parent(id) DEFERRABLE INITIALLY DEFERRED,geom geometry(Point,4326)); CREATE TABLE business.deferred_key(id bigint PRIMARY KEY DEFERRABLE INITIALLY DEFERRED,label text,geom geometry(Point,4326))")?;
         let app = Application::new(Storage::Postgis(dsn)).with_policy(Policy {
             admins: ["alice".into()].into(),

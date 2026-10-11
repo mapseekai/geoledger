@@ -190,3 +190,127 @@ export function mergeConflict(
   if (geometry.present) result.geometry = geometry.value;
   return { feature: result, text: stringify(result)! };
 }
+
+export type Selection = {
+  fields: Partial<Record<string, ConflictSide>>;
+  text?: string;
+};
+/** Exact result text, `null` for a deletion, or undefined while unresolved. */
+export function resolutionOf(
+  conflict: Conflict,
+  selection: Selection | undefined,
+): string | null | undefined {
+  if (!selection) return;
+  if (selection.text !== undefined) return selection.text;
+  const whole = selection.fields["*"];
+  if (whole && !conflict[whole]) return null;
+  return mergeConflict(conflict, selection.fields)?.text;
+}
+/** Keep one side for every conflicting part; other fields still merge three-way. */
+export function sideSelection(
+  conflict: Conflict,
+  side: ConflictSide,
+): Selection {
+  if (isWholeFeatureConflict(conflict)) return { fields: { "*": side } };
+  return {
+    fields: Object.fromEntries(conflict.fields.map((field) => [field, side])),
+  };
+}
+export type ChoiceKind = "draft" | "current" | "mixed" | "custom";
+export function choiceKind(
+  conflict: Conflict,
+  selection: Selection | undefined,
+): ChoiceKind | undefined {
+  if (!selection || resolutionOf(conflict, selection) === undefined) return;
+  if (selection.text !== undefined) return "custom";
+  const whole = selection.fields["*"];
+  if (whole) return whole === "base" ? "mixed" : whole;
+  const sides = new Set(
+    conflict.fields.map((field) => selection.fields[field]),
+  );
+  if (sides.size === 1) {
+    const [only] = sides;
+    if (only === "draft" || only === "current") return only;
+  }
+  return "mixed";
+}
+export type ConflictKind =
+  | "stale"
+  | "deleted-draft"
+  | "deleted-current"
+  | "geometry"
+  | "attributes"
+  | "both"
+  | "feature";
+export function conflictKind(conflict: Conflict): ConflictKind {
+  if (conflict.reason === "stale_resolution") return "stale";
+  if (!conflict.draft) return "deleted-draft";
+  if (!conflict.current) return "deleted-current";
+  if (isWholeFeatureConflict(conflict)) return "feature";
+  const geometry = conflict.fields.includes("/geometry");
+  const attributes = conflict.fields.some((field) => field !== "/geometry");
+  return geometry && attributes ? "both" : geometry ? "geometry" : "attributes";
+}
+
+export type Slot = { present: boolean; value: unknown };
+export type AttributeRow = {
+  key: string;
+  pointer: string;
+  label: string;
+  base: Slot;
+  current: Slot;
+  draft: Slot;
+  /** The server reported this part as conflicting. */
+  conflict: boolean;
+  changed: boolean;
+};
+function slot(feature: ConflictFeature | null, key: string): Slot {
+  if (!feature) return { present: false, value: undefined };
+  if (key === "\0geometry")
+    return { present: own(feature, "geometry"), value: feature.geometry };
+  return valueFor(feature, key);
+}
+function sameSlot(left: Slot, right: Slot): boolean {
+  return (
+    left.present === right.present &&
+    (!left.present || same(left.value, right.value))
+  );
+}
+/** Geometry first, then every property of any side, in first-seen order. */
+export function attributeRows(conflict: Conflict): AttributeRow[] {
+  const sides = [conflict.base, conflict.current, conflict.draft];
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const feature of sides)
+    if (feature)
+      for (const key of Object.keys(properties(feature)))
+        if (!seen.has(key)) {
+          seen.add(key);
+          keys.push(key);
+        }
+  const whole = isWholeFeatureConflict(conflict);
+  return ["\0geometry", ...keys].map((key) => {
+    const geometry = key === "\0geometry";
+    const pointer = geometry ? "/geometry" : pointerForProperty(key);
+    const base = slot(conflict.base, key);
+    const current = slot(conflict.current, key);
+    const draft = slot(conflict.draft, key);
+    const changed = !sameSlot(base, current) || !sameSlot(base, draft);
+    return {
+      key,
+      pointer,
+      label: geometry ? "几何" : key,
+      base,
+      current,
+      draft,
+      conflict: whole ? changed : conflict.fields.includes(pointer),
+      changed,
+    };
+  });
+}
+/** The value a resolved result holds for one attribute row. */
+export function resultSlot(text: string | null, row: AttributeRow): Slot {
+  if (text === null) return { present: false, value: undefined };
+  const feature = parseLosslessJson(text) as ConflictFeature;
+  return slot(feature, row.key);
+}

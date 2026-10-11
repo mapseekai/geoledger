@@ -99,13 +99,15 @@ npm --prefix web start
 
 ### 容器运行
 
+容器构建使用校验和锁定的 Node／npm 工具链，并按原 TypeScript 发布提交重建编译器的 Go 运行时；项目 TypeScript 版本保持 7.0.2。安装依赖后、执行编译前完成版本校验和二进制替换。开发依赖及编译工具保留在单独扫描的构建阶段，只有 standalone 输出进入非 root 运行镜像。维护步骤和验证边界见 [构建环境修复记录](../docs/build-environment-fixes.md)。
+
 ```sh
 docker build -f web/Dockerfile -t geoledger-console .
 export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
 docker compose --profile console up --build -d
 ```
 
-Compose 启动业务服务和控制台，控制台默认使用 `http://localhost:3000`。镜像以非 root 用户运行，包含 standalone 产物、SDK 和本地字体/静态资源；运行时注入会话密钥和业务服务地址。持久化与部署配置见 [生产运行](../docs/production.md#容器部署)。
+Compose 启动业务服务和控制台，控制台默认使用 `http://localhost:3000`。镜像以 UID 65532 的非 root 用户运行，使用固定 digest 的精简 Node 22 运行时，不携带 npm 或 shell；包含 standalone 产物、SDK 和本地字体/静态资源；运行时注入会话密钥和业务服务地址。持久化与部署配置见 [生产运行](../docs/production.md#容器部署)。
 
 ## 贡献
 

@@ -1,6 +1,6 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=12));
-INSERT INTO gl_format VALUES(true,12);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=13));
+INSERT INTO gl_format VALUES(true,13);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -83,3 +83,23 @@ CREATE TRIGGER gl_token_audit_update BEFORE UPDATE ON gl_token_audit BEGIN SELEC
 CREATE TRIGGER gl_token_audit_delete BEFORE DELETE ON gl_token_audit BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
 CREATE TRIGGER gl_token_receipts_update BEFORE UPDATE ON gl_token_receipts BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
 CREATE TRIGGER gl_token_receipts_delete BEFORE DELETE ON gl_token_receipts BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
+
+-- Derived transactional state. These tables are rebuilt during logical import.
+CREATE TABLE gl_workspace_sizes (
+ project text NOT NULL, workspace text NOT NULL, changes bigint NOT NULL DEFAULT 0 CHECK(changes>=0),
+ PRIMARY KEY(project,workspace), FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id) ON DELETE CASCADE);
+CREATE TABLE gl_conflict_cache (
+ project text NOT NULL, workspace text NOT NULL, base_revision bigint NOT NULL, workspace_version bigint NOT NULL,
+ head bigint NOT NULL, total bigint NOT NULL DEFAULT 0, complete boolean NOT NULL DEFAULT false,
+ PRIMARY KEY(project,workspace), FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id) ON DELETE CASCADE);
+CREATE TABLE gl_conflict_keys (
+ project text NOT NULL, workspace text NOT NULL, dataset text NOT NULL, feature_id text COLLATE BINARY NOT NULL,
+ PRIMARY KEY(project,workspace,dataset,feature_id),
+ FOREIGN KEY(project,workspace) REFERENCES gl_conflict_cache(project,workspace) ON DELETE CASCADE);
+
+CREATE TRIGGER gl_workspace_size_init AFTER INSERT ON gl_workspaces BEGIN
+ INSERT INTO gl_workspace_sizes(project,workspace) VALUES(NEW.project,NEW.id); END;
+CREATE TRIGGER gl_workspace_size_insert AFTER INSERT ON gl_workspace_changes BEGIN
+ UPDATE gl_workspace_sizes SET changes=changes+1 WHERE project=NEW.project AND workspace=NEW.workspace; END;
+CREATE TRIGGER gl_workspace_size_delete AFTER DELETE ON gl_workspace_changes BEGIN
+ UPDATE gl_workspace_sizes SET changes=changes-1 WHERE project=OLD.project AND workspace=OLD.workspace; END;
