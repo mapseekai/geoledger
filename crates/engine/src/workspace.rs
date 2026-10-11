@@ -154,7 +154,8 @@ pub(super) fn workspace(
     version: Option<i64>,
 ) -> Result<(i64, i64, String)> {
     if version.is_some() {
-        head(t, p, true)?;
+        id(p)?;
+        t.project_head_for_edit(p)?.ok_or_else(missing)?;
     }
     membership(t, p, s, version.is_some())?;
     id(w)?;
@@ -453,7 +454,11 @@ pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Res
 pub(super) fn create_workspace(t: &mut Transaction, s: &str, r: Project) -> Result<Value> {
     // Project -> membership is the lock order for every project mutation.
     // Validate lifecycle state only after waiting for the project lock.
-    let base = head(t, &r.project, true)?;
+    id(&r.project)?;
+    let base = t
+        .project_head_for_edit(&r.project)?
+        .ok_or_else(missing)?
+        .get(0usize)?;
     membership(t, &r.project, s, true)?;
     new_workspace(t, s, &r.project, base)
 }
@@ -501,6 +506,23 @@ pub(super) struct Save {
     pub(super) expected_workspace_version: i64,
     pub(super) edits: Vec<Edit>,
 }
+fn draft_delta(
+    t: &mut Transaction,
+    p: &str,
+    d: &str,
+    key: &str,
+    v: Option<&Stored>,
+) -> Result<repository::DraftDelta> {
+    if let Some(v) = v {
+        validate_dataset_geometry(t, p, d, v)?;
+    }
+    Ok(repository::DraftDelta {
+        dataset: d.to_owned(),
+        key: key.to_owned(),
+        properties: v.map(|x| json!(x.properties).to_string()),
+        geometry: v.and_then(|x| x.geometry.clone()),
+    })
+}
 pub(super) fn put_delta(
     t: &mut Transaction,
     p: &str,
@@ -509,16 +531,10 @@ pub(super) fn put_delta(
     key: &str,
     v: Option<&Stored>,
 ) -> Result<()> {
-    if let Some(v) = v {
-        validate_dataset_geometry(t, p, d, v)?;
-    }
-    let props = v.map(|x| json!(x.properties).to_string());
-    let g = v.and_then(|x| x.geometry.as_deref());
-    t.put_delta(p, w, d, key, &props, &g)?;
-    Ok(())
+    let delta = draft_delta(t, p, d, key, v)?;
+    t.put_deltas(p, w, &[delta])
 }
 pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
-    head(t, &r.project, true)?;
     let (base, _, _) = workspace(
         t,
         s,
@@ -534,6 +550,8 @@ pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
     t.invalidate_resolutions(&r.project, &r.workspace)?;
     let mut seen = BTreeSet::new();
     let mut warnings = Vec::new();
+    let mut deltas = Vec::new();
+    let mut bytes = 0usize;
     for e in r.edits {
         dataset(t, &r.project, &e.dataset)?;
         text(&e.feature_id, 256)?;
@@ -553,22 +571,30 @@ pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
                 Ok::<_, Error>(value)
             })
             .transpose()?;
-        let was_resolved: bool = t
-            .has_resolution(&r.project, &r.workspace, &e.dataset, &e.feature_id)?
-            .get(0usize)?;
-        if !was_resolved && value == at_revision(t, &r.project, &e.dataset, &e.feature_id, base)? {
+        let context = t.edit_base(&r.project, &r.workspace, &e.dataset, &e.feature_id, base)?;
+        if !context.get::<_, bool>(0usize)? && value == stored_row(&context, 1, 2)? {
             t.remove_delta(&r.project, &r.workspace, &e.dataset, &e.feature_id)?;
         } else {
-            put_delta(
-                t,
-                &r.project,
-                &r.workspace,
-                &e.dataset,
-                &e.feature_id,
-                value.as_ref(),
-            )?;
+            let delta = draft_delta(t, &r.project, &e.dataset, &e.feature_id, value.as_ref())?;
+            let size = delta.dataset.len()
+                + delta.key.len()
+                + delta.properties.as_ref().map_or(0, String::len)
+                + delta.geometry.as_ref().map_or(0, String::len);
+            if bytes.saturating_add(size) > 1024 * 1024 {
+                t.put_deltas(&r.project, &r.workspace, &deltas)?;
+                deltas.clear();
+                bytes = 0;
+            }
+            deltas.push(delta);
+            bytes = bytes.saturating_add(size);
+            if deltas.len() >= 32 || bytes >= 1024 * 1024 {
+                t.put_deltas(&r.project, &r.workspace, &deltas)?;
+                deltas.clear();
+                bytes = 0;
+            }
         }
     }
+    t.put_deltas(&r.project, &r.workspace, &deltas)?;
     let count: i64 = t.count_deltas(&r.project, &r.workspace)?.get(0usize)?;
     let version = bump(t, &r.project, &r.workspace, "open")?;
     audit(

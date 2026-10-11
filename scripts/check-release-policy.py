@@ -22,10 +22,10 @@ def check(files: dict[str, str]) -> None:
     release, hub, images, ci = (jobs(files[n]) for n in ('release.yml', 'dockerhub.yml', 'secure-images.yml', 'ci.yml'))
     # A declared dependency is not a gate when the dependent job overrides
     # failure propagation, or a required quality job is allowed to be skipped.
-    for graph, names in ((release, ('quality', 'binaries', 'images', 'github-release', 'sdks')),
+    for graph, names in ((release, ('quality', 'credentials', 'binaries', 'images', 'github-release', 'sdks', 'complete')),
                          (hub, ('quality', 'images')),
                          (images, ('build-scan', 'publish')),
-                         (ci, ('source', 'linux', 'web', 'msrv', 'windows', 'supply-chain'))):
+                         (ci, ('source', 'linux', 'web', 'msrv', 'windows', 'supply-chain', 'postgis-release'))):
         for name in names:
             if re.search(r'^    if:', graph[name], re.M):
                 raise ValueError(f'{name} must not override required-job execution conditions')
@@ -48,6 +48,20 @@ def check(files: dict[str, str]) -> None:
         raise ValueError('Release bypasses built and scanned artifacts')
     if 'github-release' not in needs(release['sdks']):
         raise ValueError('SDK publication bypasses release gate')
+    if not {'github-release', 'sdks', 'verify'} <= needs(release['complete']):
+        raise ValueError('public release requires completed SDK publication')
+    if 'release-resume.py release' not in release['github-release'] or '--draft=false' not in release['complete']:
+        raise ValueError('release must stay draft until all deliverables complete')
+    if 'validate_inventories' not in release['github-release']:
+        raise ValueError('release requires validated image inventories')
+    if any('credentials' not in needs(release[name]) for name in ('binaries', 'images')):
+        raise ValueError('publishing requires SDK credential preflight')
+    sdk_steps = release['sdks'].replace("      - name: Python client (PyPI trusted publishing)\n        if: steps.python-packages.outputs.pending == 'true'\n", "      - name: Python client (PyPI trusted publishing)\n")
+    for required in ('release-resume.py pypi', 'release-resume.py npm', 'release-resume.py go', '--sdk-consumer'):
+        if required not in release['sdks']:
+            raise ValueError('SDK retry verification and installed-package acceptance are required')
+    if re.search(r'^        if:', sdk_steps, re.M):
+        raise ValueError('SDK publication cannot silently skip a deliverable')
     if needs(images['publish']) != {'build-scan'}:
         raise ValueError('registry writes must wait for all build/scan matrix entries')
     if re.search(r'push:\s*true', files['secure-images.yml']):
@@ -74,7 +88,7 @@ def check(files: dict[str, str]) -> None:
     for required in ('image-gate.py verify', 'image-gate.py publish'):
         if required not in images['publish']:
             raise ValueError(f'missing publishing requirement: {required}')
-    for name in ('linux', 'web', 'msrv', 'windows', 'supply-chain'):
+    for name in ('linux', 'web', 'msrv', 'windows', 'supply-chain', 'postgis-release'):
         if 'source' not in needs(ci[name]) or 'ref: ${{ inputs.source_sha || github.sha }}' not in ci[name]:
             raise ValueError(f'{name} does not check the immutable source')
     if 'install-spatialite.py' not in ci['windows'] or 'smoke-server.py' not in ci['windows']:

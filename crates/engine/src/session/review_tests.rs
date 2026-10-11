@@ -190,3 +190,89 @@ fn postgis_hot_spatial_queries_and_current_history_use_bounded_plans() -> TestRe
     );
     Ok(())
 }
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn postgis_hot_spatial_queries_merge_stage_lookup_is_indexed() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut admin = ::postgres::Client::connect(&dsn, ::postgres::NoTls)?;
+    let database: String = admin.query_one("SELECT current_database()", &[])?.get(0);
+    if database != "geoledger_test" {
+        return Err("requires isolated geoledger_test".into());
+    }
+    let storage = Storage::Postgis(dsn);
+    let pool = Arc::new(postgres::Pool::default());
+    let mut t = Client::open(&storage, &pool, Duration::from_secs(30))?.transaction(false)?;
+    t.begin_merge()?;
+    for n in 0..500 {
+        t.stage_merge("d", &n.to_string(), &None, &Some(n.to_string()))?;
+    }
+    t.flush_stage()?;
+    // Fresh tracking tables can estimate one key; verification must not scan the stage per key.
+    t.batch_execute("CREATE TEMP TABLE tracked_keys(schema_name text,table_name text,feature_id text,PRIMARY KEY(schema_name,table_name,feature_id)); INSERT INTO tracked_keys SELECT 'business','source',feature_id FROM gl_merge_stage")?;
+    let rows = t.query("EXPLAIN (ANALYZE, COSTS OFF) SELECT EXISTS(SELECT 1 FROM tracked_keys k LEFT JOIN gl_merge_stage s ON s.dataset='d' AND s.feature_id=k.feature_id WHERE k.schema_name='business' AND k.table_name='source' AND s.after_value IS DISTINCT FROM k.feature_id)", &[])?;
+    let plan = rows
+        .iter()
+        .map(|r| r.get::<_, String>(0usize))
+        .collect::<Result<Vec<_>>>()?
+        .join("\n");
+    assert!(
+        plan.contains("gl_merge_stage_pkey"),
+        "stage lookup lost index: {plan}"
+    );
+    assert!(
+        !plan.contains("Rows Removed by Join Filter: 249500"),
+        "quadratic stage scan: {plan}"
+    );
+    eprintln!("{plan}");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn postgis_hot_spatial_queries_pipeline_preserves_statement_budgets() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut admin = ::postgres::Client::connect(&dsn, ::postgres::NoTls)?;
+    let name: String = admin.query_one("SELECT current_database()", &[])?.get(0);
+    assert_eq!(name, "geoledger_test");
+    let pool = Arc::new(postgres::Pool::new(crate::StorageOptions {
+        statement_timeout: Duration::from_millis(80),
+        lock_timeout: Duration::from_millis(40),
+        ..crate::StorageOptions::default()
+    }));
+    for batch in [false, true] {
+        let mut client = pool.connect(&dsn, Duration::from_secs(5))?;
+        client.batch_execute("SET statement_timeout=0; SET lock_timeout=0")?;
+        let row = client.query(
+            "SELECT current_setting('statement_timeout'),current_setting('lock_timeout')",
+            &[],
+        )?;
+        assert_eq!(row[0].get::<_, String>(0), "80ms");
+        assert_eq!(row[0].get::<_, String>(1), "40ms");
+        client.batch_execute("SET statement_timeout=0")?;
+        let result = if batch {
+            client.batch_execute("SELECT pg_sleep(1)")
+        } else {
+            client.query("SELECT pg_sleep(1)", &[]).map(|_| ())
+        };
+        assert_eq!(result.err().ok_or("statement must time out")?.status, 504);
+    }
+    let pool = Arc::new(postgres::Pool::default());
+    let mut client = pool.connect(&dsn, Duration::from_secs(2))?;
+    let before: i64 = client.query(
+        "SELECT setting::bigint FROM pg_settings WHERE name='statement_timeout'",
+        &[],
+    )?[0]
+        .get(0);
+    std::thread::sleep(Duration::from_millis(30));
+    let after: i64 = client.query(
+        "SELECT setting::bigint FROM pg_settings WHERE name='statement_timeout'",
+        &[],
+    )?[0]
+        .get(0);
+    assert!(
+        after < before && before <= 2000,
+        "operation budget must shrink: {before} -> {after}"
+    );
+    Ok(())
+}

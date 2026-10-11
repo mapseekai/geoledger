@@ -49,7 +49,7 @@
 | owner_summary | owner_count:i64, target_is_owner:i64（0/1） |
 | list_datasets | dataset:text, name:text, geometry_type:text, coordinate_dimension:i32 |
 | list_workspaces | workspace:text, base_revision:i64, version:i64, status:text |
-| has_resolution | bool |
+| edit_base | resolved: bool, properties?, geometry_json? |
 | count_deltas / count_commit_changes | count:i64 |
 | diff_page | dataset:text, key:text, draft_properties:text?, draft_geometry:text?, base_properties:text?, base_geometry:text? |
 | history_page | revision:i64, subject:text, message:text, created_at:text, source_workspace:text |
@@ -115,3 +115,5 @@ SQLite/SpatiaLite 将要素、原生几何和历史保存在当前数据库；�
 数据集类型/维度在单事务内最多缓存 128 份，元数据修改后清除；合并暂存采用最多 32 行、约 1 MiB 的参数化批写，较大单行单独写入。事务回滚同时清除暂存写入。存储适配器通过 set_response_limit/response_limit 实现结果批次与应用组装的编码预算，不能把上限仅应用在响应发送之后。
 
 PostgreSQL 失败连接在清理确认之前继续占用池名额；明确取消、总期限耗尽和连接故障分别分类。最新版本优化必须依据同一事务的 HEAD/快照，禁止把历史查询统一替换为 valid_to IS NULL。
+
+草稿保存通过 `edit_base` 一次读取基线要素与解决状态，`put_deltas` 批量写入并保留原有解决标记。Application 每批最多 32 条、累计约 1 MiB，超出单批预算的单条要素独立写入；所有批次、草稿版本和审计在同一事务内提交，任一校验或写入失败时整体回滚。

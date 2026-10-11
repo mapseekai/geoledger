@@ -190,7 +190,7 @@ class PolicyTests(unittest.TestCase):
     def test_removing_quality_blocks(self):
         for name in ('release.yml', 'dockerhub.yml'):
             files = copy.deepcopy(self.files)
-            files[name] = files[name].replace('needs: [verify, quality]', 'needs: verify').replace('needs: [validate, quality]', 'needs: validate')
+            files[name] = files[name].replace('needs: [verify, quality, credentials]', 'needs: verify').replace('needs: [validate, quality]', 'needs: validate')
             with self.subTest(name=name), self.assertRaises(ValueError): policy.check(files)
     def test_removing_scan_barrier_blocks(self):
         self.files['secure-images.yml'] = self.files['secure-images.yml'].replace('needs: build-scan', 'needs: unrelated')
@@ -337,3 +337,125 @@ class OciBuilderDriverTests(unittest.TestCase):
         with self.assertRaises(ValueError): policy.check(files)
 
 if __name__ == '__main__': unittest.main()
+
+
+class ReleaseInventoryTests(unittest.TestCase):
+    def test_requires_complete_matching_immutable_images(self):
+        audit = load('published_audit', 'audit-published-images.py')
+        records = [{'kind': kind, 'source_sha': SHA, 'image': 'ghcr.io/test/' + kind + '@sha256:' + 'b' * 64} for kind in ('server', 'console')]
+        audit.validate_inventories(records, SHA)
+        for broken in (records[:1], [records[0], dict(records[1], source_sha='c'*40)], [records[0], dict(records[1], image='ghcr.io/test/console:latest')]):
+            with self.assertRaises(ValueError): audit.validate_inventories(broken, SHA)
+
+
+class ReleaseCompletionTests(unittest.TestCase):
+    def test_incomplete_deliverables_block_public_release(self):
+        files = {p.name: p.read_text() for p in (ROOT / '.github/workflows').glob('*.yml')}
+        for old,new in [('needs: [verify, github-release, sdks]', 'needs: [verify, github-release]'), ('release-resume.py release', 'echo release'), ('needs: [verify, quality, credentials]', 'needs: [verify, quality]')]:
+            broken = dict(files); broken['release.yml'] = files['release.yml'].replace(old,new)
+            with self.assertRaises(ValueError): policy.check(broken)
+
+
+class ProductionRoleTests(unittest.TestCase):
+    def test_runtime_role_is_separate_and_unprivileged(self):
+        compose=(ROOT/'deploy/compose.production.yaml').read_text()
+        initialize=(ROOT/'deploy/postgis/initialize.sh').read_text()
+        self.assertIn('POSTGRES_USER: geoledger_admin',compose)
+        self.assertIn('postgresql://geoledger_app:${GL_DB_APP_PASSWORD:',compose)
+        self.assertIn('LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION',initialize)
+        self.assertIn('REVOKE CREATE ON SCHEMA public FROM PUBLIC',initialize)
+
+
+resume = load('resume', 'release-resume.py')
+
+class ReleaseResumeTests(unittest.TestCase):
+    def archive(self, value=b'client', mtime=1):
+        import io, tarfile
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode='w:gz') as archive:
+            entry = tarfile.TarInfo('package/index.js')
+            entry.size = len(value); entry.mtime = mtime
+            archive.addfile(entry, io.BytesIO(value))
+        return output.getvalue()
+
+    def test_rebuilt_archive_ignores_time_but_rejects_changed_code(self):
+        self.assertEqual(resume.contents(self.archive()), resume.contents(self.archive(mtime=2)))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'client.tgz'; path.write_bytes(self.archive())
+            with self.assertRaises(ValueError): resume.same_archive(path, self.archive(b'other'))
+
+    def test_existing_npm_package_never_republished(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'client.tgz'; path.write_bytes(self.archive())
+            with patch.object(resume, 'fetch', side_effect=[b'{"dist":{"tarball":"https://example.test/package"}}', self.archive(mtime=2)]), patch.object(resume.subprocess, 'run') as write:
+                resume.npm(path, '0.3.0-alpha.2'); write.assert_not_called()
+
+    def test_github_network_failure_is_not_absence(self):
+        import subprocess
+        with patch.object(resume.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'HTTP 503')):
+            with self.assertRaises(RuntimeError): resume.gh('repos/test/ref')
+
+    def test_go_tag_is_immutable(self):
+        with patch.object(resume, 'tag_sha', return_value='a' * 40), patch.object(resume, 'run') as write:
+            resume.go('test/repo', 'v1', 'a' * 40); write.assert_not_called()
+            with self.assertRaises(ValueError): resume.go('test/repo', 'v1', 'b' * 40)
+
+    def test_pypi_partial_upload_only_keeps_missing_files(self):
+        import hashlib, os
+        data = self.archive()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); dist = root / 'dist'; dist.mkdir()
+            (dist / 'client.tar.gz').write_bytes(data)
+            (dist / 'client.whl').write_bytes(b'pending wheel')
+            metadata = json.dumps({'urls': [{'filename': 'client.tar.gz', 'url': 'https://example.test/file', 'digests': {'sha256': hashlib.sha256(data).hexdigest()}}]}).encode()
+            with patch.object(resume, 'fetch', side_effect=[metadata, data]), patch.dict(os.environ, GITHUB_OUTPUT=str(root / 'output')):
+                resume.pypi(dist, '0.3.0-alpha.2')
+            self.assertEqual([p.name for p in dist.iterdir()], ['client.whl'])
+            self.assertEqual((root / 'output').read_text(), 'pending=true\n')
+
+    def test_partial_draft_upload_preserves_existing_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one'); (root / 'two').write_bytes(b'two')
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': True}, [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'one'), patch.object(resume, 'run') as write:
+                resume.release('test/repo', 'v1', 'sha', root)
+                write.assert_called_once_with('gh', 'release', 'upload', 'v1', str(root / 'two'), '--repo', 'test/repo')
+
+    def test_different_release_asset_blocks_upload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': True}, [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'wrong'), patch.object(resume, 'run') as write:
+                with self.assertRaises(ValueError): resume.release('test/repo', 'v1', 'sha', root)
+                write.assert_not_called()
+
+    def test_existing_python_release_skips_only_after_verification(self):
+        import hashlib, os
+        data = self.archive()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); dist = root / 'dist'; dist.mkdir()
+            (dist / 'client.tar.gz').write_bytes(data)
+            metadata = json.dumps({'urls': [{'filename': 'client.tar.gz', 'url': 'https://example.test/file', 'digests': {'sha256': hashlib.sha256(data).hexdigest()}}]}).encode()
+            with patch.object(resume, 'fetch', side_effect=[metadata, data]), patch.dict(os.environ, GITHUB_OUTPUT=str(root / 'output')):
+                resume.pypi(dist, '0.3.0-alpha.2')
+            self.assertEqual((root / 'output').read_text(), 'pending=false\n')
+
+    def test_published_release_cannot_receive_missing_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': False}, []]), patch.object(resume, 'run') as write:
+                with self.assertRaises(ValueError): resume.release('test/repo', 'v1', 'sha', root)
+                write.assert_not_called()
+
+    def test_new_release_stays_draft_and_uploads_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[None, {'id': 1, 'draft': True}, []]), patch.object(resume, 'run') as write:
+                resume.release('test/repo', 'v1-alpha.1', 'sha', root)
+                self.assertIn('--draft', write.call_args_list[0].args)
+                self.assertIn('--verify-tag', write.call_args_list[0].args)
+                self.assertIn('--prerelease', write.call_args_list[0].args)
+                self.assertEqual(write.call_args_list[1].args[1:3], ('release', 'upload'))
+
+    def test_unknown_npm_lookup_outcome_never_publishes(self):
+        with patch.object(resume, 'fetch', side_effect=TimeoutError), patch.object(resume.subprocess, 'run') as write:
+            with self.assertRaises(TimeoutError): resume.npm(Path('package.tgz'), '0.3.0-alpha.2')
+            write.assert_not_called()

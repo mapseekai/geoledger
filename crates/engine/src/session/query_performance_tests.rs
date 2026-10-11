@@ -41,13 +41,25 @@ fn sqlite_empty_bbox_and_invalidation_do_not_scan_unrelated_drafts() -> Result<(
         .map_err(sqlite_error)?;
     }
     assert!(
-        !t.has_resolution("p", "w", "d", "absent")?
+        !t.edit_base("p", "w", "d", "absent", 1)?
             .get::<_, bool>(0usize)?
     );
     let lookup_steps = steps.swap(0, Ordering::Relaxed);
     assert!(
         lookup_steps < 1000,
         "stale ANALYZE caused resolution lookup scan: {lookup_steps}"
+    );
+    t.batch_execute(r#"WITH RECURSIVE ids(n) AS (SELECT 2 UNION ALL SELECT n+1 FROM ids WHERE n<1000)
+        INSERT INTO gl_commits(project,revision,workspace,subject,message) SELECT 'p',n,'w','alice','history' FROM ids;
+        INSERT INTO gl_history(project,dataset,feature_id,valid_from,valid_to,properties)
+        SELECT 'p','d','versions',revision,CASE WHEN revision<1000 THEN revision+1 END,'{"v":'||revision||'}'
+        FROM gl_commits WHERE project='p';"#)?;
+    steps.store(0, Ordering::Relaxed);
+    let historical = t.edit_base("p", "w", "d", "versions", 500)?;
+    assert_eq!(historical.get::<_, String>(1usize)?, r#"{"v":500}"#);
+    assert!(
+        steps.swap(0, Ordering::Relaxed) < 1000,
+        "base lookup scanned earlier versions"
     );
     t.remove_delta("p", "w", "d", "absent")?;
     let delete_steps = steps.swap(0, Ordering::Relaxed);

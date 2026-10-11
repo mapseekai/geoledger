@@ -185,16 +185,34 @@ def self_test_source_crud():
         assert compact(first) == original
 
 
+def check_results(result, count):
+    if result["client"]["exit_code"] != 0:
+        return
+    if result["history_live"] != count or result.get("source_live", count) != count:
+        raise AssertionError("CRUD cycle did not restore background feature count")
+    result["integrity_verified"] = True
+    if result.get("soak", {}).get("exit_code", 0):
+        raise AssertionError("incremental soak failed; integrity checked; see soak.json")
+    if result.get("read_load_exit_code", 0):
+        raise AssertionError("read pressure thresholds failed; integrity checked; see reads.json")
+    result["success"] = True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["server", "client", "fixture", "metadata", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--backend", choices=["sqlite", "postgis"], default="sqlite")
+    parser.add_argument("--postgis-image", default="postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6")
     parser.add_argument("--rounds", type=int, default=10)
     parser.add_argument("--timeout", type=int, default=1200)
     parser.add_argument("--rss-limit-mib", type=int, default=4096)
     parser.add_argument("--k6", type=Path)
+    parser.add_argument("--load-seconds", type=int, default=0)
+    parser.add_argument("--load-workers", type=int, default=20)
     args = parser.parse_args()
+    if not 0 <= args.load_seconds <= 86400 or not 1 <= args.load_workers <= 100:
+        parser.error("invalid load duration or concurrency")
     if not 3 <= args.rounds <= 100 or args.timeout <= 0 or args.rss_limit_mib <= 0:
         parser.error("rounds must be 3..100; timeout and RSS ceiling must be positive")
     output = args.output.resolve()
@@ -222,7 +240,7 @@ def main():
     log = stats_log = None
     result = {"success": False, "backend": args.backend}
     command = [str(args.server.resolve()), "--storage", args.backend, "--data-dir", str(output / "data"), "--http", f"127.0.0.1:{http}", "--grpc", f"127.0.0.1:{grpc}", "--admin-subjects", "admin", "--request-timeout-secs", "600", "--db-statement-timeout-secs", "600"]
-    (output / "environment.json").write_text(json.dumps({"backend": args.backend, "platform": platform.platform(), "server_command": command, "server_sha256": fingerprint(args.server), "client_sha256": fingerprint(args.client), "fixture": str(args.fixture.resolve()), "fixture_sha256": fingerprint(args.fixture), "metadata": metadata, "rounds": args.rounds, "timeout_seconds": args.timeout, "fixture_method": "untimed SQL in fresh disposable storage; measured client RPC only"}, indent=2))
+    (output / "environment.json").write_text(json.dumps({"backend": args.backend, "platform": platform.platform(), "server_command": command, "server_sha256": fingerprint(args.server), "client_sha256": fingerprint(args.client), "fixture": str(args.fixture.resolve()), "fixture_sha256": fingerprint(args.fixture), "metadata": metadata, "rounds": args.rounds, "load_seconds": args.load_seconds, "load_workers": args.load_workers, "postgis_image": args.postgis_image if args.backend == "postgis" else None, "timeout_seconds": args.timeout, "fixture_method": "untimed SQL in fresh disposable storage; measured client RPC only"}, indent=2))
 
     def psql(sql):
         completed = subprocess.run(["docker", "exec", "-i", container, "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "geoledger_test"], input=sql, capture_output=True, text=True)
@@ -252,7 +270,7 @@ def main():
 
     try:
         if args.backend == "postgis":
-            subprocess.run(["docker", "run", "--rm", "-d", "--name", container, "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "-e", "POSTGRES_DB=geoledger_test", "-p", f"127.0.0.1:{dbport}:5432", "imresamu/postgis:17-3.6-alpine3.22"], check=True, capture_output=True)
+            subprocess.run(["docker", "run", "--rm", "-d", "--name", container, "-e", "POSTGRES_HOST_AUTH_METHOD=trust", "-e", "POSTGRES_DB=geoledger_test", "-p", f"127.0.0.1:{dbport}:5432", args.postgis_image], check=True, capture_output=True)
             docker_started = True
             for _ in range(120):
                 if subprocess.run(["docker", "exec", container, "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "geoledger_test"], capture_output=True).returncode == 0:
@@ -310,6 +328,12 @@ SELECT count(*) FROM business.source;
         print(json.dumps({"phase": "fixture_ready", **result}), flush=True)
         env.update(GL_ENDPOINT=f"http://127.0.0.1:{grpc}", GL_TOKEN_FILE=str(token_path), GL_BENCH_DISPOSABLE="1", GL_BENCH_ROUNDS=str(args.rounds))
         result["client"] = monitor([str(args.client.resolve()), str(manifest_path), str(output / "incremental.json")], env, server, output, "incremental", args.timeout, args.rss_limit_mib)
+        if args.load_seconds and result["client"]["exit_code"] == 0:
+            load_env = dict(env, GL_BASE_URL=base)
+            result["soak"] = monitor([sys.executable, "scripts/load-incremental.py", "--manifest", str(manifest_path),
+                                      "--feature", str(args.fixture.resolve()), "--output", str(output / "soak.json"),
+                                      "--seconds", str(args.load_seconds), "--workers", str(args.load_workers)],
+                                     load_env, server, output, "soak", args.load_seconds + 180, args.rss_limit_mib)
         if args.k6 and result["client"]["exit_code"] == 0:
             read_fixture = output / "read-fixture.json"
             read_fixture.write_text(json.dumps({"project": project, "dataset": dataset, "features": count,
@@ -321,8 +345,6 @@ SELECT count(*) FROM business.source;
                                            str(output / "reads.json"), "k6/scripts/large-data-reads.js"],
                                           env=read_env, stdout=read_log, stderr=subprocess.STDOUT, timeout=90)
             result["read_load_exit_code"] = read_run.returncode
-            if read_run.returncode:
-                raise AssertionError("read pressure thresholds failed; see reads.json")
         if platform.system() == "Darwin":
             result["native_memory"] = native_leaks(server.pid, output)
             result["native_leaks_exit_code"] = result["native_memory"]["exit_code"]
@@ -336,10 +358,7 @@ SELECT count(*) FROM business.source;
                 result.update(verify_source_crud(call, psql, project, dataset, first))
             counts = psql(f"SELECT count(*) FROM business.source; SELECT count(*) FROM gl_history WHERE project='{project}' AND dataset='{dataset}' AND valid_to IS NULL AND properties IS NOT NULL;").splitlines()
             result["source_live"], result["history_live"] = map(int, counts)
-        if result["client"]["exit_code"] == 0:
-            if result["history_live"] != count or result.get("source_live", count) != count:
-                raise AssertionError("CRUD cycle did not restore background feature count")
-            result["success"] = True
+        check_results(result, count)
     except BaseException as error:
         result["error"] = str(error)
         (output / "failure.log").write_text(traceback.format_exc())

@@ -1,16 +1,15 @@
 "use client";
 import { call, type Audit, type Member, type Project } from "@/lib/browser-api";
 import { pretty } from "@/lib/geojson";
-import { CircleCheck, Lock, ScrollText, Users } from "lucide-react";
-import Link from "next/link";
-import { useState } from "react";
+import { ScrollText, Users } from "lucide-react";
+import { useState, useRef, type ReactNode } from "react";
+import { toast } from "sonner";
 import {
   copyText,
   Empty,
   ErrorBox,
   Loading,
   Modal,
-  Notice,
   RelativeTime,
   usePage,
 } from "./common";
@@ -18,11 +17,12 @@ import { Panel, PanelTitle, useAction } from "./resource-shared";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
-import { Label } from "./ui/label";
+import { Field, FieldGroup, FieldLabel } from "./ui/field";
 import {
   Select,
   SelectContent,
   SelectItem,
+  SelectGroup,
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
@@ -34,107 +34,127 @@ import {
   TableHeader,
   TableRow,
 } from "./ui/table";
-export function Access({
-  project,
-  canManageTokens,
-}: {
-  project: Project;
-  canManageTokens?: boolean;
-}) {
-  const task = useAction();
-  const [success, setSuccess] = useState("");
+export function Access({ project }: { project: Project }) {
+  const [editing, setEditing] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   const [refresh, setRefresh] = useState(0);
   const owner = project.role === "owner" || project.role === "admin";
   return (
-    <div className="access-layout">
-      <Panel
-        toolbar={
-          <PanelTitle
-            title="设置成员权限"
-            description="为已有身份分配此项目的访问权限。"
-          />
+    <>
+      <Members
+        project={project}
+        refresh={refresh}
+        actions={
+          <Button
+            ref={trigger}
+            disabled={!owner}
+            onClick={() => setEditing(true)}
+          >
+            设置成员权限
+          </Button>
         }
-      >
-        <form
-          className="card-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const data = new FormData(e.currentTarget);
-            setSuccess("");
-            void task.run(async () => {
-              await call({
-                action: "setMember",
-                project: project.id,
-                subject: String(data.get("subject")).trim(),
-                role: String(data.get("role")),
-              });
-              setSuccess("成员权限已更新。");
-              setRefresh((n) => n + 1);
-            });
+      />
+      {editing && (
+        <MemberDialog
+          project={project}
+          close={() => setEditing(false)}
+          restoreFocus={() => trigger.current?.focus()}
+          saved={() => {
+            setRefresh((n) => n + 1);
+            setEditing(false);
+            toast.success("成员权限已更新。");
           }}
-        >
-          {!owner && (
-            <Notice tone="muted" icon={<Lock aria-hidden="true" />}>
-              只有项目所有者可以管理成员权限。
-            </Notice>
-          )}
-          <div className="field">
-            <Label htmlFor="subject">成员身份</Label>
+        />
+      )}
+    </>
+  );
+}
+function MemberDialog({
+  project,
+  close,
+  saved,
+  restoreFocus,
+}: {
+  project: Project;
+  close: () => void;
+  saved: () => void;
+  restoreFocus: () => void;
+}) {
+  const task = useAction();
+  return (
+    <Modal
+      title="设置成员权限"
+      onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        restoreFocus();
+      }}
+      size="sm"
+      close={close}
+      busy={task.busy}
+      footer={
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={task.busy}
+            onClick={close}
+          >
+            取消
+          </Button>
+          <Button type="submit" form="member-permissions" disabled={task.busy}>
+            {task.busy ? "正在保存…" : "保存权限"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id="member-permissions"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const data = new FormData(event.currentTarget);
+          void task.run(async () => {
+            await call({
+              action: "setMember",
+              project: project.id,
+              subject: String(data.get("subject")).trim(),
+              role: String(data.get("role")),
+            });
+            saved();
+          });
+        }}
+      >
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="subject">成员身份</FieldLabel>
             <Input
               id="subject"
               name="subject"
               required
-              placeholder="例如 alice（身份标识 subject）"
-              aria-describedby="member-login-help"
+              autoFocus
+              placeholder="例如 alice"
               maxLength={128}
+              disabled={task.busy}
             />
-          </div>
-          <p id="member-login-help" className="muted">
-            此处添加项目成员并分配权限，不会生成登录令牌。保存后，由平台管理员在成员令牌页面选择该成员并签发凭证，成员使用自己的令牌登录。
-          </p>
-          {canManageTokens && (
-            <p>
-              <Link
-                href={`/tokens?project=${project.id}`}
-                className="text-primary underline"
-              >
-                前往成员令牌管理
-              </Link>
-            </p>
-          )}
-          <div className="field">
-            <Label htmlFor="member-role">项目角色</Label>
-            <Select name="role" defaultValue="viewer">
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="member-role">项目角色</FieldLabel>
+            <Select name="role" defaultValue="viewer" disabled={task.busy}>
               <SelectTrigger id="member-role">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper" className="menu">
-                <SelectItem value="viewer">只读 · 浏览与查询</SelectItem>
-                <SelectItem value="editor">编辑者 · 编辑与发布</SelectItem>
-                <SelectItem value="owner">所有者 · 管理项目与权限</SelectItem>
+                <SelectGroup>
+                  <SelectItem value="viewer">只读 · 浏览与查询</SelectItem>
+                  <SelectItem value="editor">编辑者 · 编辑与发布</SelectItem>
+                  <SelectItem value="owner">所有者 · 管理项目与权限</SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
-          </div>
+          </Field>
           <ErrorBox message={task.error} />
-          {success && (
-            <Notice
-              role="status"
-              tone="success"
-              icon={<CircleCheck aria-hidden="true" />}
-            >
-              {success}
-            </Notice>
-          )}
-          <div className="form-actions is-start">
-            <Button disabled={!owner || task.busy}>
-              {task.busy ? "正在保存…" : "保存权限"}
-            </Button>
-          </div>
-        </form>
-      </Panel>
-      <Members project={project} refresh={refresh} />
-      {owner && <Lifecycle project={project} />}
-    </div>
+        </FieldGroup>
+      </form>
+    </Modal>
   );
 }
 const roleLabels: Record<string, string> = {
@@ -142,7 +162,15 @@ const roleLabels: Record<string, string> = {
   editor: "编辑者",
   viewer: "只读",
 };
-function Members({ project, refresh }: { project: Project; refresh: number }) {
+function Members({
+  project,
+  refresh,
+  actions,
+}: {
+  project: Project;
+  refresh: number;
+  actions: ReactNode;
+}) {
   const task = useAction();
   const [removed, setRemoved] = useState(0);
   const owner = project.role === "owner" || project.role === "admin";
@@ -159,7 +187,14 @@ function Members({ project, refresh }: { project: Project; refresh: number }) {
     };
   }, refresh + removed);
   return (
-    <Panel toolbar={<PanelTitle title="项目成员" />}>
+    <Panel
+      toolbar={
+        <>
+          <PanelTitle title="项目成员" />
+          {actions}
+        </>
+      }
+    >
       <ErrorBox message={page.error || task.error} />
       {page.busy ? (
         <Loading />
@@ -207,71 +242,6 @@ function Members({ project, refresh }: { project: Project; refresh: number }) {
         <Empty icon={Users} title="没有成员" />
       )}
       {page.footer}
-    </Panel>
-  );
-}
-function Lifecycle({ project }: { project: Project }) {
-  const task = useAction();
-  const [state, setState] = useState(project.state);
-  const archived = state === "archived";
-  return (
-    <Panel toolbar={<PanelTitle title="项目状态" />}>
-      <div className="card-form">
-        <p className="muted">{archived ? "已归档 · 只读" : "活跃"}</p>
-        <div className="form-actions is-start">
-          <Button
-            variant="outline"
-            disabled={task.busy}
-            onClick={() =>
-              void task.run(async () => {
-                const next = await call<Project>({
-                  action: "archiveProject",
-                  project: project.id,
-                  archived: !archived,
-                });
-                setState(next.state);
-              })
-            }
-          >
-            {archived ? "恢复项目" : "归档项目"}
-          </Button>
-        </div>
-        <form
-          className="card-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const confirmName = String(
-              new FormData(e.currentTarget).get("confirm"),
-            );
-            void task.run(async () => {
-              await call({
-                action: "deleteProject",
-                project: project.id,
-                confirmName,
-              });
-              window.location.assign("/projects");
-            });
-          }}
-        >
-          <div className="field">
-            <Label htmlFor="confirm-delete">
-              删除项目：输入项目名称“{project.name}”确认
-            </Label>
-            <Input
-              id="confirm-delete"
-              name="confirm"
-              required
-              maxLength={256}
-            />
-          </div>
-          <ErrorBox message={task.error} />
-          <div className="form-actions is-start">
-            <Button variant="destructive" disabled={task.busy}>
-              删除项目
-            </Button>
-          </div>
-        </form>
-      </div>
     </Panel>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
+import { Plus, Upload } from "lucide-react";
 import {
   call,
   type Dataset,
@@ -12,7 +13,8 @@ import { ErrorBox, Modal } from "./common";
 import { useAction } from "./resource-shared";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Field, FieldGroup, FieldLabel } from "./ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "./ui/field";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
 import {
   Select,
   SelectContent,
@@ -42,6 +44,7 @@ export function CreateDatasetDialog({
     dataset?: Dataset;
     workspace?: Workspace;
     rows?: ImportedFeature[];
+    shape?: { geometryType: GeometryType; coordinateDimension: 2 | 3 };
     offset: number;
     pending?: boolean;
   }>({ offset: 0 });
@@ -97,11 +100,14 @@ export function CreateDatasetDialog({
                 };
                 worker.postMessage({ file });
               });
+              if (!result.shape)
+                throw new Error(
+                  "请上传至少包含一个有坐标要素的文件，以自动识别几何类型和坐标维度。",
+                );
               current.rows = result.rows;
-              shape = result.shape ?? shape;
-              setFamily(shape.geometryType);
-              setDimension(shape.coordinateDimension);
+              current.shape = result.shape;
             }
+            if (mode === "file" && current.shape) shape = current.shape;
             if (!current.dataset) {
               current.dataset = await call<Dataset>({
                 action: "createDataset",
@@ -156,6 +162,32 @@ export function CreateDatasetDialog({
         <fieldset disabled={task.busy || started}>
           <FieldGroup>
             <Field>
+              <FieldLabel id="dataset-mode-label">创建方式</FieldLabel>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                className="w-full"
+                aria-labelledby="dataset-mode-label"
+                value={mode === "file" ? "file" : "create"}
+                disabled={task.busy || started}
+                onValueChange={(value) => {
+                  if (!value) return;
+                  setMode(value === "file" ? "file" : "empty");
+                  state.current = { offset: 0 };
+                  setProgress("");
+                }}
+              >
+                <ToggleGroupItem value="create" className="flex-1">
+                  <Plus />
+                  创建模式
+                </ToggleGroupItem>
+                <ToggleGroupItem value="file" className="flex-1">
+                  <Upload />
+                  上传模式
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </Field>
+            <Field>
               <FieldLabel htmlFor="dataset-name">名称</FieldLabel>
               <Input
                 id="dataset-name"
@@ -165,32 +197,31 @@ export function CreateDatasetDialog({
                 autoFocus
               />
             </Field>
-            <Field>
-              <FieldLabel htmlFor="dataset-source">数据来源</FieldLabel>
-              <Select
-                value={mode}
-                onValueChange={(value) => {
-                  setMode(value);
-                  state.current = { offset: 0 };
-                  setProgress("");
-                }}
-              >
-                <SelectTrigger id="dataset-source">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="file">上传 GeoJSON 文件</SelectItem>
-                    {backend === "postgis" && (
+            {backend === "postgis" && mode !== "file" && (
+              <Field>
+                <FieldLabel htmlFor="dataset-source">数据来源</FieldLabel>
+                <Select
+                  value={mode}
+                  onValueChange={(value) => {
+                    setMode(value);
+                    state.current = { offset: 0 };
+                    setProgress("");
+                  }}
+                >
+                  <SelectTrigger id="dataset-source">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
                       <SelectItem value="postgis">
                         纳管已有 PostGIS 表
                       </SelectItem>
-                    )}
-                    <SelectItem value="empty">空数据集</SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
+                      <SelectItem value="empty">空数据集</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
             {mode === "postgis" ? (
               <>
                 <Field>
@@ -249,51 +280,58 @@ export function CreateDatasetDialog({
                         setProgress("");
                       }}
                     />
+                    <FieldDescription>
+                      根据文件内容自动识别几何类型和坐标维度。
+                    </FieldDescription>
                   </Field>
                 )}
-                <Field>
-                  <FieldLabel htmlFor="geometry-type">几何类型</FieldLabel>
-                  <Select
-                    value={family}
-                    onValueChange={(v) => setFamily(v as GeometryType)}
-                  >
-                    <SelectTrigger id="geometry-type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="point">
-                          点（Point / MultiPoint）
-                        </SelectItem>
-                        <SelectItem value="line">
-                          线（LineString / MultiLineString）
-                        </SelectItem>
-                        <SelectItem value="polygon">
-                          面（Polygon / MultiPolygon）
-                        </SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="coordinate-dimension">
-                    坐标维度
-                  </FieldLabel>
-                  <Select
-                    value={String(dimension)}
-                    onValueChange={(v) => setDimension(Number(v) as 2 | 3)}
-                  >
-                    <SelectTrigger id="coordinate-dimension">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="2">二维（XY）</SelectItem>
-                        <SelectItem value="3">三维（XYZ）</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
+                {mode === "empty" && (
+                  <>
+                    <Field>
+                      <FieldLabel htmlFor="geometry-type">几何类型</FieldLabel>
+                      <Select
+                        value={family}
+                        onValueChange={(v) => setFamily(v as GeometryType)}
+                      >
+                        <SelectTrigger id="geometry-type">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem value="point">
+                              点（Point / MultiPoint）
+                            </SelectItem>
+                            <SelectItem value="line">
+                              线（LineString / MultiLineString）
+                            </SelectItem>
+                            <SelectItem value="polygon">
+                              面（Polygon / MultiPolygon）
+                            </SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="coordinate-dimension">
+                        坐标维度
+                      </FieldLabel>
+                      <Select
+                        value={String(dimension)}
+                        onValueChange={(v) => setDimension(Number(v) as 2 | 3)}
+                      >
+                        <SelectTrigger id="coordinate-dimension">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem value="2">二维（XY）</SelectItem>
+                            <SelectItem value="3">三维（XYZ）</SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </>
+                )}
               </>
             )}
           </FieldGroup>

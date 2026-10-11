@@ -55,9 +55,23 @@ with sync_playwright() as p:
     project=page.url.split('project=')[1]
     page.get_by_role('button',name='创建数据集',exact=True).click()
     page.get_by_label('名称',exact=True).fill('道路')
-    page.get_by_role('combobox',name='数据来源',exact=True).click()
-    page.get_by_role('option',name='上传 GeoJSON 文件',exact=True).click()
+    expect(page.get_by_role('radio',name='创建模式',exact=True)).to_have_attribute('aria-checked','true')
+    page.get_by_role('combobox',name='几何类型',exact=True).click()
+    page.get_by_role('option',name='线（LineString / MultiLineString）',exact=True).click()
+    page.get_by_role('combobox',name='坐标维度',exact=True).click()
+    page.get_by_role('option',name='三维（XYZ）',exact=True).click()
+    page.get_by_role('radio',name='上传模式',exact=True).click()
+    expect(page.get_by_role('combobox',name='几何类型',exact=True)).to_have_count(0)
+    expect(page.get_by_role('combobox',name='坐标维度',exact=True)).to_have_count(0)
+    page.get_by_role('radio',name='创建模式',exact=True).click()
+    expect(page.get_by_role('combobox',name='坐标维度',exact=True)).to_contain_text('三维')
+    page.get_by_role('radio',name='上传模式',exact=True).click()
     upload=page.get_by_label('GeoJSON 文件',exact=True)
+    page.screenshot(path=str(shots/'dataset-upload-mode.png'),full_page=True)
+    upload.set_input_files({'name':'null.geojson','mimeType':'application/geo+json','buffer':json.dumps({'type':'Feature','properties':{},'geometry':None}).encode()})
+    page.get_by_role('button',name='创建',exact=True).click()
+    expect(page.get_by_role('alert')).to_contain_text('至少包含一个有坐标要素')
+    assert command({'action':'datasets','project':project})==[]
     upload.set_input_files({'name':'invalid.geojson','mimeType':'application/geo+json','buffer':b'{bad'})
     page.get_by_role('button',name='创建',exact=True).click()
     expect(page.get_by_role('alert')).to_contain_text('有效的 JSON')
@@ -102,7 +116,9 @@ with sync_playwright() as p:
     assert saves[3]['edits'] != saves[4]['edits'], 'committed batch must not be saved twice'
     assert saves[1]['edits']==saves[2]['edits']
     assert saves[1]['version']==saves[2]['version']
-    dataset=command({'action':'datasets','project':project})[0]['id']
+    imported=command({'action':'datasets','project':project})[0]
+    assert imported['geometryType']=='point' and imported['coordinateDimension']==2, imported
+    dataset=imported['id']
     workspace=command({'action':'workspaces','project':project})[0]['id']
     rows=[]
     after=None
@@ -129,8 +145,7 @@ with sync_playwright() as p:
     page.get_by_role('button',name='返回数据集',exact=True).click()
     page.set_viewport_size({'width':390,'height':844})
     page.get_by_role('button',name='创建数据集',exact=True).click()
-    page.get_by_role('combobox',name='数据来源',exact=True).click()
-    page.get_by_role('option',name='上传 GeoJSON 文件',exact=True).click()
+    page.get_by_role('radio',name='上传模式',exact=True).click()
     expect(page.get_by_label('GeoJSON 文件',exact=True)).to_be_visible()
     page.screenshot(path=str(shots/'geojson-upload-mobile.png'),full_page=True)
     page.get_by_label('名称',exact=True).fill('并发导入校验')

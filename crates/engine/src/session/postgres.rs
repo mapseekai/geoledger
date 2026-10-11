@@ -306,36 +306,41 @@ impl Client {
     }
     pub fn query(&mut self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>> {
         let statement = self.statement(sql)?;
-        self.apply_budget()?;
+        let budget = self.budget_sql()?;
         let c = self.connection.as_ref().ok_or_else(expired)?;
         let limit = self.result_limit;
         let reserve = self.response_reservation.clone();
         let result = c.runtime.as_ref().ok_or_else(expired)?.block_on(async {
             tokio::time::timeout_at(self.deadline.into(), async {
-                use tokio_stream::StreamExt;
-                let stream = c
-                    .client
-                    .query_raw(&statement, params.iter().copied())
-                    .await?;
-                let mut stream = std::pin::pin!(stream);
-                let mut rows = Vec::new();
-                let mut bytes = 0usize;
-                while let Some(row) = stream.try_next().await? {
-                    bytes = bytes.saturating_add(row.raw_size_bytes());
-                    if bytes > limit {
-                        return Ok::<_, tokio_postgres::Error>((
-                            Vec::new(),
-                            Some(Error::new(413, "database result batch exceeds byte budget")),
-                        ));
+                let query = async {
+                    use tokio_stream::StreamExt;
+                    let stream = c
+                        .client
+                        .query_raw(&statement, params.iter().copied())
+                        .await?;
+                    let mut stream = std::pin::pin!(stream);
+                    let mut rows = Vec::new();
+                    let mut bytes = 0usize;
+                    while let Some(row) = stream.try_next().await? {
+                        bytes = bytes.saturating_add(row.raw_size_bytes());
+                        if bytes > limit {
+                            return Ok::<_, tokio_postgres::Error>((
+                                Vec::new(),
+                                Some(Error::new(413, "database result batch exceeds byte budget")),
+                            ));
+                        }
+                        if let Some(reserve) = &reserve
+                            && let Err(error) = reserve(bytes)
+                        {
+                            return Ok((Vec::new(), Some(error)));
+                        }
+                        rows.push(row);
                     }
-                    if let Some(reserve) = &reserve
-                        && let Err(error) = reserve(bytes)
-                    {
-                        return Ok((Vec::new(), Some(error)));
-                    }
-                    rows.push(row);
-                }
-                Ok((rows, None))
+                    Ok((rows, None))
+                };
+                // First-poll order keeps SET before the query while avoiding a separate round trip.
+                tokio::try_join!(biased; c.client.batch_execute(&budget), query)
+                    .map(|(_, rows)| rows)
             })
             .await
         });
@@ -374,16 +379,16 @@ impl Client {
         }
     }
     pub fn batch_execute(&mut self, sql: &str) -> Result<()> {
-        self.apply_budget()?;
+        let sql = format!("{};{sql}", self.budget_sql()?);
         let c = self.connection.as_ref().ok_or_else(expired)?;
         let result = c.runtime.as_ref().ok_or_else(expired)?.block_on(async {
-            tokio::time::timeout_at(self.deadline.into(), c.client.batch_execute(sql)).await
+            tokio::time::timeout_at(self.deadline.into(), c.client.batch_execute(&sql)).await
         });
         self.finish(result)
     }
     // Server-side limits track the remaining operation deadline, never a fresh
     // full timeout for every statement. Values are integers, not untrusted SQL.
-    fn apply_budget(&mut self) -> Result<()> {
+    fn budget_sql(&mut self) -> Result<String> {
         self.check_deadline()?;
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         let bounded = |configured: Duration| {
@@ -398,13 +403,9 @@ impl Client {
         let lock_ms = bounded(self.pool.options.lock_timeout);
         self.statement_deadline =
             Instant::now().checked_add(Duration::from_millis(statement_ms as u64));
-        let sql =
-            format!("SET statement_timeout='{statement_ms}ms'; SET lock_timeout='{lock_ms}ms'");
-        let c = self.connection.as_ref().ok_or_else(expired)?;
-        let result = c.runtime.as_ref().ok_or_else(expired)?.block_on(async {
-            tokio::time::timeout_at(self.deadline.into(), c.client.batch_execute(&sql)).await
-        });
-        self.finish(result)
+        Ok(format!(
+            "SET statement_timeout='{statement_ms}ms'; SET lock_timeout='{lock_ms}ms'"
+        ))
     }
     pub(super) fn invalidate(&mut self) {
         self.reusable = false;

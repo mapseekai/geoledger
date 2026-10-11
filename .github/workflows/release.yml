@@ -1,7 +1,7 @@
 name: Release
 # Tag vX.Y.Z (or vX.Y.Z-alpha.N) on main. Builds signed multi-arch images and
 # binaries with SBOMs and provenance, creates the GitHub release, then publishes
-# the TypeScript (npm) and Python (PyPI) SDKs when credentials are configured and
+# the TypeScript (npm) and Python (PyPI) SDKs after credential preflight and
 # tags the Go module. The Rust client is consumed from git until geoledger-rpc
 # vendors its proto for crates.io packaging.
 on:
@@ -19,6 +19,17 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       source_sha: ${{ github.sha }}
+  credentials:
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - name: Require all SDK publishing configuration
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PYPI_ENABLED: ${{ vars.PYPI_TRUSTED_PUBLISHING }}
+        run: |
+          test -n "$NPM_TOKEN" || { echo "NPM_TOKEN is required"; exit 1; }
+          test "$PYPI_ENABLED" = true || { echo "PyPI trusted publishing is required"; exit 1; }
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -33,7 +44,7 @@ jobs:
         name: Exact tag and all package versions
         run: python3 scripts/check-release-version.py --tag "$GITHUB_REF_NAME"
   binaries:
-    needs: [verify, quality]
+    needs: [verify, quality, credentials]
     strategy:
       matrix:
         include:
@@ -135,7 +146,7 @@ jobs:
             geoledger-*.spdx.json
           if-no-files-found: error
   images:
-    needs: [verify, quality]
+    needs: [verify, quality, credentials]
     permissions:
       contents: read
       packages: write
@@ -166,6 +177,15 @@ jobs:
           pattern: image-inventory-*
           merge-multiple: true
           path: dist
+      - name: Validate complete image inventory
+        run: |
+          python3 - <<'PYTHON'
+          import importlib.util, json, os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('audit', 'scripts/audit-published-images.py')
+          audit = importlib.util.module_from_spec(spec); spec.loader.exec_module(audit)
+          audit.validate_inventories([json.loads(p.read_text()) for p in Path('dist').glob('*-images.json')], os.environ['GITHUB_SHA'])
+          PYTHON
       - name: Create release from CHANGELOG
         env:
           GH_TOKEN: ${{ github.token }}
@@ -173,8 +193,8 @@ jobs:
         run: |
           set -euo pipefail
           awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > notes.md
-          prerelease=$([[ "$VERSION" == *-* ]] && echo --prerelease || true)
-          gh release create "$GITHUB_REF_NAME" dist/* --title "GeoLedger $VERSION" --notes-file notes.md --verify-tag $prerelease
+          # Keep the release draft until installed SDK acceptance succeeds.
+          python3 scripts/release-resume.py release --path dist
   sdks:
     needs: [verify, github-release]
     runs-on: ubuntu-24.04
@@ -195,18 +215,22 @@ jobs:
           node-version: '22'
           registry-url: https://registry.npmjs.org
       - name: TypeScript client (npm, provenance)
-        if: ${{ env.NODE_AUTH_TOKEN != '' }}
         run: |
           npm ci --prefix sdk/ts
           npm --prefix sdk/ts run build
-          tag=$([[ "${{ needs.verify.outputs.version }}" == *-* ]] && echo next || echo latest)
-          npm publish ./sdk/ts --provenance --access public --tag "$tag"
+          mkdir -p sdk-packages
+          npm pack ./sdk/ts --pack-destination sdk-packages
+          python3 scripts/release-resume.py npm --path sdk-packages/*.tgz
       - name: Python client build
         run: |
           python3 -m pip install build==1.2.2
+          export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
           python3 -m build sdk/python --outdir sdk/python/dist
+      - name: Verify previously published Python packages
+        id: python-packages
+        run: python3 scripts/release-resume.py pypi --path sdk/python/dist
       - name: Python client (PyPI trusted publishing)
-        if: ${{ vars.PYPI_TRUSTED_PUBLISHING == 'true' }}
+        if: steps.python-packages.outputs.pending == 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: sdk/python/dist
@@ -214,4 +238,38 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/${{ github.repository }}/git/refs -f ref="refs/tags/sdk/go/${GITHUB_REF_NAME}" -f sha="${GITHUB_SHA}"
+          python3 scripts/release-resume.py go
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: binaries-x86_64-unknown-linux-gnu
+          path: packaged-binary
+      - name: Install published SDKs in clean environments
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-mod-spatialite
+          (cd packaged-binary && sha256sum -c *.tar.gz.sha256 && tar xzf *.tar.gz)
+          mkdir "$RUNNER_TEMP/sdk-consumer"
+          cd "$RUNNER_TEMP/sdk-consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --save-exact "@geoledger/client@$VERSION"
+          sed 's#require("../dist")#require("@geoledger/client")#' "$GITHUB_WORKSPACE/sdk/ts/test/smoke.cjs" > smoke.cjs
+          python3 -m venv python
+          python/bin/pip install "geoledger-client==$VERSION"
+          cp "$GITHUB_WORKSPACE/sdk/python/tests/smoke.py" smoke.py
+          python3 "$GITHUB_WORKSPACE/scripts/smoke-server.py" --binary "$GITHUB_WORKSPACE/packaged-binary/geoledger-$VERSION-x86_64-unknown-linux-gnu/geoledger-server" --sdk-consumer "$PWD"
+
+  complete:
+    needs: [verify, github-release, sdks]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

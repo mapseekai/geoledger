@@ -67,12 +67,34 @@ jobs:
           psql -h 127.0.0.1 -U mapseekai -d geoledger_test -c 'CREATE DATABASE geoledger_load'
           psql -h 127.0.0.1 -U mapseekai -d geoledger_load -c 'CREATE EXTENSION postgis'
           GL_DATABASE_URL="${GL_TEST_DATABASE_URL/geoledger_test/geoledger_load}" ./scripts/load-test.sh
+      - name: Incremental CRUD soak on both backends
+        env:
+          GL_SPATIALITE_EXTENSION: /usr/lib/x86_64-linux-gnu/mod_spatialite.so
+        run: |
+          cargo build --release --locked --bins --example incremental
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          with (root/'fixture.jsonl').open('w') as output:
+              for i in range(1,10001):
+                  output.write(json.dumps({'type':'Feature','id':f'{i:012}','properties':{'attributes':{'value':i}},'geometry':{'type':'Point','coordinates':[120,30]}})+'\n')
+          (root/'fixture.meta.json').write_text(json.dumps({'features':10000,'dimension':2,'geometry_type':'point'}))
+          PYTHON
+          for backend in sqlite postgis; do
+            python3 scripts/benchmark_incremental.py --server target/release/geoledger-server --client target/release/examples/incremental --fixture "$RUNNER_TEMP/fixture.jsonl" --metadata "$RUNNER_TEMP/fixture.meta.json" --output "$RUNNER_TEMP/incremental-$backend" --backend "$backend" --rounds 10 --load-seconds 300 --load-workers 20
+          done
       - name: Keep load summaries
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: load-summaries
-          path: ${{ runner.temp }}/load-*.json
+          path: |
+            ${{ runner.temp }}/load-*.json
+            ${{ runner.temp }}/incremental-*/result.json
+            ${{ runner.temp }}/incremental-*/incremental.json
+            ${{ runner.temp }}/incremental-*/soak.json
+            ${{ runner.temp }}/incremental-*/*memory.jsonl
           if-no-files-found: ignore
           retention-days: 30
 

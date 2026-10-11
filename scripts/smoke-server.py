@@ -24,7 +24,7 @@ def port() -> int:
         return listener.getsockname()[1]
 
 
-def exercise(binary: Path, runtime: Path | None) -> None:
+def exercise(binary: Path, runtime: Path | None, sdk_consumer: Path | None = None) -> None:
     env = {k: v for k, v in os.environ.items() if not k.startswith('GL_')}
     if runtime:
         env['GL_SPATIALITE_EXTENSION'] = str(runtime / 'bin/mod_spatialite.dll')
@@ -69,6 +69,11 @@ def exercise(binary: Path, runtime: Path | None) -> None:
                                 return json.load(response)
                         except urllib.error.HTTPError as error:
                             raise RuntimeError(f'{operation} returned HTTP {error.code}') from None
+                    if sdk_consumer and not restart:
+                        sdk_env = dict(env, GL_TOKEN_FILE=str(root / 'data/admin-credentials.json'), GL_ENDPOINT=f'http://127.0.0.1:{grpc}')
+                        sdk_env.pop('PYTHONPATH', None)
+                        subprocess.run(['node', 'smoke.cjs'], cwd=sdk_consumer, env=sdk_env, check=True, timeout=120)
+                        subprocess.run([str(sdk_consumer / 'python/bin/python'), 'smoke.py'], cwd=sdk_consumer, env=sdk_env, check=True, timeout=120)
                     if not restart:
                         project = call('create_project', {'name': 'packaged spatial smoke'})['project']
                         dataset = call('create_dataset', {'project': project, 'name': 'points', 'geometry_type': 'point', 'coordinate_dimension': 3})['dataset']
@@ -97,8 +102,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--runtime', type=Path)
+    parser.add_argument('--sdk-consumer', type=Path, help='Clean environment containing installed SDKs and their smoke clients')
     args = parser.parse_args()
-    exercise(args.binary.resolve(), args.runtime.resolve() if args.runtime else None)
+    exercise(args.binary.resolve(), args.runtime.resolve() if args.runtime else None, args.sdk_consumer.resolve() if args.sdk_consumer else None)
 
 
 if __name__ == '__main__':

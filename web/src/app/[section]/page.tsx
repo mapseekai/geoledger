@@ -17,6 +17,7 @@ export default async function Page({
       "workspaces",
       "history",
       "access",
+      "project-status",
       "tokens",
       "audit",
       "service",

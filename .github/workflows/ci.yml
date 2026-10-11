@@ -135,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
-          target/debug/geoledger-server --data-dir "$RUNNER_TEMP/console-data" --http 127.0.0.1:7895 --grpc 127.0.0.1:7896 > "$RUNNER_TEMP/console-backend.log" 2>&1 &
+          target/debug/geoledger-server --data-dir "$RUNNER_TEMP/console-data" --http 127.0.0.1:7895 --grpc 127.0.0.1:7896 --admin-subjects admin > "$RUNNER_TEMP/console-backend.log" 2>&1 &
           backend_pid=$!
           npm --prefix web start > "$RUNNER_TEMP/console-web.log" 2>&1 &
           web_pid=$!
@@ -145,6 +145,8 @@ jobs:
             sleep .2
           done
           python3 scripts/test-console.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/admin-credentials.json"
+          chromium=$(python3 -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')
+          python3 scripts/test-console-shadcn.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/admin-credentials.json" --chromium "$chromium"
   msrv:
     needs: source
     runs-on: ubuntu-24.04
@@ -219,3 +221,32 @@ jobs:
           pipx install pip-audit==2.9.0
       - name: Dependency advisories (Rust, npm, Go, Python)
         run: ./scripts/audit.sh
+
+  postgis-release:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - name: Build service and console
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          rustup toolchain install 1.92.0 --profile minimal
+          cargo +1.92.0 build --locked -p geoledger-server
+          npm ci --prefix sdk/ts
+          npm --prefix sdk/ts run build
+          npm ci --prefix web
+          npm --prefix web run build
+          python3 -m pip install playwright
+          python3 -m playwright install --with-deps chromium
+      - name: Restricted database role, native restore and browser binding
+        run: |
+          chromium=$(python3 -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')
+          python3 scripts/test-postgis-release.py --output "$RUNNER_TEMP/postgis-release" --web --chromium "$chromium"

@@ -1,6 +1,6 @@
 {
   "name": "@geoledger/client",
-  "version": "0.3.0-alpha.1",
+  "version": "0.3.0-alpha.2",
   "description": "GeoLedger business client for Node.js",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -8,6 +8,11 @@
     "dist"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mapseekai/geoledger.git",
+    "directory": "sdk/ts"
+  },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "test": "node --test test/client.test.cjs"

@@ -42,6 +42,12 @@ pub trait StorageBackend: Send + Sync {
         ))
     }
 }
+pub struct DraftDelta {
+    pub dataset: String,
+    pub key: String,
+    pub properties: Option<String>,
+    pub geometry: Option<String>,
+}
 #[derive(Clone)]
 pub struct FeatureQuery {
     pub project: String,
@@ -96,6 +102,10 @@ pub trait RepositoryTransaction: Send {
     /// (role, project state) for an active member of a project that is not deleted.
     fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>>;
     fn project_head(&mut self, project: &str, lock: bool) -> Result<Option<Row>>;
+    /// Keep project state stable while independent workspaces are edited concurrently.
+    fn project_head_for_edit(&mut self, project: &str) -> Result<Option<Row>> {
+        self.project_head(project, true)
+    }
     fn workspace_state(
         &mut self,
         project: &str,
@@ -180,22 +190,17 @@ pub trait RepositoryTransaction: Send {
         after: &str,
         limit: i64,
     ) -> Result<Vec<Row>>;
-    fn put_delta(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        dataset: &str,
-        key: &str,
-        properties: &Option<String>,
-        geometry: &Option<&str>,
-    ) -> Result<()>;
+    /// Apply a bounded batch, preserving any prior resolution pins on upsert.
+    fn put_deltas(&mut self, project: &str, workspace: &str, deltas: &[DraftDelta]) -> Result<()>;
     fn invalidate_resolutions(&mut self, project: &str, workspace: &str) -> Result<()>;
-    fn has_resolution(
+    /// Resolution flag and feature at the workspace base; absent features have null fields.
+    fn edit_base(
         &mut self,
         project: &str,
         workspace: &str,
         dataset: &str,
         key: &str,
+        base: i64,
     ) -> Result<Row>;
     fn remove_delta(
         &mut self,

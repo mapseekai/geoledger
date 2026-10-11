@@ -4,7 +4,7 @@
 
 GeoLedger 为道路、地块、监测点等空间要素提供版本控制。团队成员在独立工作区中编辑 GeoJSON，通过属性三方合并、冲突解决和原子发布形成共享版本；历史查询、提交撤销、成员权限与审计帮助追踪和管理数据变化。
 
-当前版本为 `0.3.0-alpha.1`，存储格式为 13。默认 SQLite + SpatiaLite（Docker 镜像包含扩展），可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
+当前候选版本为 `0.3.0-alpha.2`，存储格式为 13。默认 SQLite + SpatiaLite（Docker 镜像包含扩展），可选 PostGIS；Go、Rust、TypeScript / Node.js 和 Python SDK、远程 `gl` CLI、独立 Web 控制台共用业务服务。
 
 ## 获取代码
 
@@ -93,5 +93,6 @@ docker compose up --build -d
 | [生产运行](docs/production.md) | 容器、systemd、TLS、身份、容量与备份 |
 | [安全配置](docs/security.md) | 传输加密、令牌轮换与吊销、JWKS、PostgreSQL TLS、控制台会话 |
 | [开发指南](docs/development.md) | 构建、生成 SDK、回归测试与贡献流程 |
+| [发布验收](docs/release.md) | 可重复生成、交付门禁、原生恢复与持续增量负载 |
 | [安全策略](SECURITY.md) | 漏洞报告渠道、支持版本与供应链措施 |
 | [变更记录](CHANGELOG.md) | 各版本的破坏性变化、安全修复与新增功能 |

@@ -71,6 +71,16 @@ const client = new Client(
       client.createDataset(project.id, "places", "point", 3),
       (e) => e.code === "conflict",
     );
+    const updated = { ...feature, properties: { exact: 9007199254740993n }, geometry: { type: "Point", coordinates: [4, 5, 6] } };
+    const edit = await client.createWorkspace(project.id);
+    await edit.save(dataset.id, updated);
+    await edit.publish("installed SDK update");
+    assert.deepEqual((await client.features(project.id, dataset.id)).features[0], updated);
+    const removal = await client.createWorkspace(project.id);
+    await removal.delete(dataset.id, "one");
+    await removal.publish("installed SDK delete");
+    assert.deepEqual((await client.features(project.id, dataset.id)).features, []);
+    assert.deepEqual((await client.features(project.id, dataset.id, { revision: receipt.revision })).features[0], feature);
     assert.equal(parseJson("9007199254740993.0"), 9007199254740993n);
     await client.setMember(project.id, "sdk-viewer", "viewer");
     assert.ok(

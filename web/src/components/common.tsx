@@ -233,6 +233,7 @@ export function Modal({
   size = "md",
   className,
   bodyClassName,
+  onCloseAutoFocus,
 }: {
   title: ReactNode;
   /** Small data shown beside the title (IDs, revisions, status). */
@@ -246,6 +247,7 @@ export function Modal({
   size?: ModalSize;
   className?: string;
   bodyClassName?: string;
+  onCloseAutoFocus?: ComponentProps<typeof DialogContent>["onCloseAutoFocus"];
 }) {
   // Dialogs only mount after user interaction, so reading the viewport is safe.
   const [phone, setPhone] = useState(phoneQuery);
@@ -287,6 +289,7 @@ export function Modal({
       <Sheet open onOpenChange={onOpenChange}>
         <SheetContent
           side="bottom"
+          onCloseAutoFocus={onCloseAutoFocus}
           className={cn(frame, "is-sheet")}
           aria-describedby={undefined}
           onOpenAutoFocus={focusFrame}
@@ -307,6 +310,7 @@ export function Modal({
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
+        onCloseAutoFocus={onCloseAutoFocus}
         className={frame}
         aria-describedby={undefined}
         onOpenAutoFocus={focusFrame}

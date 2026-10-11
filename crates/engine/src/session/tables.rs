@@ -309,6 +309,8 @@ impl SqlTransaction {
                 "SELECT set_config('geoledger.publication_table',$1,true)",
                 &[oid],
             )?;
+            // Keep row ordering for business triggers; ordinary tables can write the staged batch at once.
+            let batch: bool = self.query_one("SELECT NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=$1::text::oid AND NOT tgisinternal AND tgname NOT IN ('gl_versioned_write','gl_versioned_track','gl_versioned_truncate'))", &[oid])?.get(0usize)?;
             let mut after = String::new();
             loop {
                 let rows = self.query("SELECT feature_id,after_value FROM gl_merge_stage WHERE dataset=$1 AND feature_id COLLATE \"C\">$2 ORDER BY feature_id COLLATE \"C\" LIMIT 1000", &[&dataset,&after])?;
@@ -330,6 +332,10 @@ impl SqlTransaction {
                                 400,
                                 "feature properties must match the business table columns",
                             ));
+                        }
+                        if batch {
+                            after = key;
+                            continue;
                         }
                         let props = serde_json::to_string(&stored.properties)
                             .map_err(Error::stored_json)?;
@@ -375,6 +381,10 @@ impl SqlTransaction {
                             ));
                         }
                     } else {
+                        if batch {
+                            after = key;
+                            continue;
+                        }
                         self.execute(&format!("DELETE FROM {table} WHERE {id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,$1::text))).{id}"), &[&key,&source.table.id_column])?;
                         if self
                             .query_opt(
@@ -388,6 +398,25 @@ impl SqlTransaction {
                     }
                     after = key;
                 }
+            }
+            if batch {
+                let names = source.columns.iter().map(|c| quote(c)).collect::<Vec<_>>();
+                let mut columns = vec![id.clone(), geom.clone()];
+                columns.extend(names.clone());
+                let geometry =
+                    "ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field(s.after_value,'geometry')),4326)";
+                let mut values = vec![format!("r.{id}"), geometry.to_owned()];
+                values.extend(names.iter().map(|c| format!("r.{c}")));
+                let mut assignments = vec![format!("{geom}={geometry}")];
+                assignments.extend(names.iter().map(|c| format!("{c}=r.{c}")));
+                let records = format!(
+                    "gl_merge_stage s CROSS JOIN LATERAL jsonb_populate_record(NULL::{table},gl_json_field(s.after_value,'properties')::jsonb || jsonb_build_object($2::text,s.feature_id)) r"
+                );
+                // Final verification must include every requested key as well as trigger side effects.
+                self.execute("INSERT INTO gl_source_changes(schema_name,table_name,feature_id) SELECT $2,$3,feature_id FROM gl_merge_stage WHERE dataset=$1 ON CONFLICT DO NOTHING", &[&dataset,&source.table.schema,&source.table.table])?;
+                self.execute(&format!("UPDATE {table} t SET {} FROM {records} WHERE s.dataset=$1 AND s.after_value IS NOT NULL AND t.{id}=r.{id}",assignments.join(",")), &[&dataset,&source.table.id_column])?;
+                self.execute(&format!("INSERT INTO {table} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM {records} WHERE s.dataset=$1 AND s.after_value IS NOT NULL AND NOT EXISTS(SELECT 1 FROM {table} t WHERE t.{id}=r.{id}) ORDER BY s.feature_id COLLATE \"C\"",columns.join(","),values.join(",")), &[&dataset,&source.table.id_column])?;
+                self.execute(&format!("DELETE FROM {table} t USING gl_merge_stage s WHERE s.dataset=$1 AND s.after_value IS NULL AND t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,s.feature_id))).{id}"), &[&dataset,&source.table.id_column])?;
             }
         }
         // Resolve cross-table constraints only after every source has its final requested rows.

@@ -35,6 +35,7 @@ import { StatusBadge, role, short, useAction } from "./resource-shared";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Sheet, SheetClose, SheetContent, SheetTitle } from "./ui/sheet";
+import { ProjectStatus } from "./project-status";
 import { Workspaces } from "./workspaces";
 type Section = {
   id: string;
@@ -43,6 +44,7 @@ type Section = {
   scoped: boolean;
 };
 const sections: Section[] = [
+  { id: "project-status", title: "项目状态", icon: FolderOpen, scoped: true },
   { id: "tokens", title: "成员令牌", icon: Shield, scoped: false },
   {
     id: "projects",
@@ -89,7 +91,10 @@ const sections: Section[] = [
 ];
 const groups = [
   { label: "数据管理", ids: ["projects", "datasets", "workspaces", "history"] },
-  { label: "系统管理", ids: ["access", "tokens", "audit", "service"] },
+  {
+    label: "系统管理",
+    ids: ["access", "tokens", "project-status", "audit", "service"],
+  },
 ];
 export function Console({
   section,
@@ -390,13 +395,9 @@ export function Console({
               {section === "history" && (
                 <HistoryPanel project={project} writable={writable} />
               )}
-              {section === "access" && (
-                <Access
-                  project={project}
-                  canManageTokens={
-                    !!(info?.platformAdmin && info.managedTokens)
-                  }
-                />
+              {section === "access" && <Access project={project} />}
+              {section === "project-status" && (
+                <ProjectStatus key={project.id} project={project} />
               )}
               {section === "audit" && <AuditPanel project={project} />}
             </>

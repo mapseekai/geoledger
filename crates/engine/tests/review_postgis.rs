@@ -302,3 +302,81 @@ fn create_workspace_rechecks_state_after_management_lock() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn independent_draft_saves_do_not_wait_for_another_workspace() -> TestResult {
+    let mut f = Fixture::new(StorageOptions::default())?;
+    let dataset = f.call(
+        "create_dataset",
+        json!({"name":"parallel","geometry_type":"point"}),
+    )?["dataset"]
+        .clone();
+    let first = f.call("create_workspace", json!({}))?["workspace"].clone();
+    let second = f.call("create_workspace", json!({}))?["workspace"].clone();
+    f.admin.batch_execute("BEGIN")?;
+    f.admin.query_one(
+        "SELECT id FROM gl_workspaces WHERE id=$1 FOR UPDATE",
+        &[&first.as_str().ok_or("workspace")?],
+    )?;
+    let request = |workspace: Value| json!({"project":f.project,"workspace":workspace,"expected_workspace_version":0,"edits":[{"dataset":dataset,"feature_id":"one","feature":{"type":"Feature","id":"one","properties":{},"geometry":null}}]});
+    let first_request = request(first);
+    let second_request = request(second);
+    let app = f.app.clone();
+    let owner = f.owner.clone();
+    let first_thread = std::thread::spawn(move || app.execute(&owner, "save", first_request));
+    if let Err(error) = f.wait_event("Lock", 1) {
+        f.admin.batch_execute("ROLLBACK")?;
+        return Err(format!("{error}; first save: {:?}", first_thread.join()).into());
+    }
+    let app = f.app.clone();
+    let owner = f.owner.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    let second_thread = std::thread::spawn(move || {
+        let result = app.execute(&owner, "save", second_request);
+        let _ = send.send(result);
+    });
+    let result = receive.recv_timeout(Duration::from_secs(2));
+    f.admin.batch_execute("ROLLBACK")?;
+    first_thread.join().map_err(|_| "first save panicked")??;
+    second_thread.join().map_err(|_| "second save panicked")?;
+    assert_eq!(
+        result.map_err(|_| "independent draft blocked by project lock")??["version"],
+        1
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn committed_receipt_replay_does_not_wait_for_project_writer() -> TestResult {
+    let mut f = Fixture::new(StorageOptions::default())?;
+    let dataset = f.call(
+        "create_dataset",
+        json!({"name":"replay","geometry_type":"point"}),
+    )?["dataset"]
+        .clone();
+    let workspace = f.call("create_workspace", json!({}))?["workspace"].clone();
+    f.call("save", json!({"workspace":workspace,"expected_workspace_version":0,"edits":[{"dataset":dataset,"feature_id":"one","feature":{"type":"Feature","id":"one","properties":{},"geometry":null}}]}))?;
+    let request = json!({"project":f.project,"workspace":workspace,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"replay"});
+    let receipt = f.app.execute(&f.owner, "publish", request.clone())?;
+    f.admin.batch_execute("BEGIN")?;
+    f.admin.query_one(
+        "SELECT head FROM gl_projects WHERE id=$1 FOR NO KEY UPDATE",
+        &[&f.project],
+    )?;
+    let app = f.app.clone();
+    let owner = f.owner.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    let replay = std::thread::spawn(move || {
+        let _ = send.send(app.execute(&owner, "publish", request));
+    });
+    let result = receive.recv_timeout(Duration::from_secs(2));
+    f.admin.batch_execute("ROLLBACK")?;
+    replay.join().map_err(|_| "replay panicked")?;
+    assert_eq!(
+        result.map_err(|_| "receipt replay queued behind project writer")??,
+        receipt
+    );
+    Ok(())
+}

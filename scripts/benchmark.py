@@ -38,6 +38,8 @@ def native_leaks(pid, output):
     result = {"test": "native-leaks", "exit_code": code,
               "status": {0: "no_signal", 1: "signal"}.get(code, "error"),
               "restricted": "not debuggable" in log_path.read_text()}
+    if code == 0 and result["restricted"]:
+        result["status"] = "error"
     if code == 1:
         # Preserve evidence before the disposable server and allocation history exit.
         with (output / "native-leaks-graph.log").open("w") as log:

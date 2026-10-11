@@ -799,6 +799,16 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         }
         Ok(row)
     }
+    fn project_head_for_edit(&mut self, project: &str) -> Result<Option<Row>> {
+        let row = self.query_opt(
+            &self.lock_sql("SELECT head FROM gl_projects WHERE id=$1", "FOR SHARE"),
+            &[&project],
+        )?;
+        if let Some(row) = &row {
+            self.1.heads.insert(project.to_owned(), row.get(0usize)?);
+        }
+        Ok(row)
+    }
     fn workspace_state(
         &mut self,
         project: &str,
@@ -1161,34 +1171,58 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     ) -> Result<Vec<Row>> {
         self.query("SELECT id,base_revision,version,status FROM gl_workspaces WHERE project=$1 AND owner=$2 AND id>$3 ORDER BY id LIMIT $4", &[&project, &subject, &after, &limit])
     }
-    fn put_delta(
+    fn put_deltas(
         &mut self,
         project: &str,
         workspace: &str,
-        dataset: &str,
-        key: &str,
-        properties: &Option<String>,
-        geometry: &Option<&str>,
+        deltas: &[crate::repository::DraftDelta],
     ) -> Result<()> {
+        if deltas.is_empty() {
+            return Ok(());
+        }
         let updates = self
             .geometry_columns()
             .split(',')
             .map(|c| format!("{c}=excluded.{c}"))
             .collect::<Vec<_>>()
             .join(",");
-        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) VALUES($1,$2,$3,$4,$5,$6,{values}) ON CONFLICT(project,workspace,dataset,feature_id) DO UPDATE SET properties=excluded.properties,geometry_json=excluded.geometry_json,{updates}", columns=self.geometry_columns(), values=self.geometry_values("$6")), &[&project, &workspace, &dataset, &key, &properties, &geometry])
+        let mut params: Vec<&dyn Parameter> = vec![&project, &workspace];
+        let mut values = Vec::with_capacity(deltas.len());
+        for (i, delta) in deltas.iter().enumerate() {
+            let n = i * 4 + 3;
+            values.push(format!(
+                "($1,$2,${n},${},${},${},{})",
+                n + 1,
+                n + 2,
+                n + 3,
+                self.geometry_values(&format!("${}", n + 3))
+            ));
+            params.extend([
+                &delta.dataset as &dyn Parameter,
+                &delta.key,
+                &delta.properties,
+                &delta.geometry,
+            ]);
+        }
+        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) VALUES {values} ON CONFLICT(project,workspace,dataset,feature_id) DO UPDATE SET properties=excluded.properties,geometry_json=excluded.geometry_json,{updates}", columns=self.geometry_columns(), values=values.join(",")), &params)
     }
     fn invalidate_resolutions(&mut self, project: &str, workspace: &str) -> Result<()> {
         self.execute("UPDATE gl_workspace_changes SET resolution_stale=true WHERE project=$1 AND workspace=$2 AND resolved_head IS NOT NULL AND NOT resolution_stale", &[&project, &workspace])
     }
-    fn has_resolution(
+    fn edit_base(
         &mut self,
         project: &str,
         workspace: &str,
         dataset: &str,
         key: &str,
+        base: i64,
     ) -> Result<Row> {
-        self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL)", self.workspace_key_table()), &[&project, &workspace, &dataset, &key])
+        // Stale SQLite statistics must not turn a single-key lookup into a history scan.
+        let history = match self.0.backend {
+            Backend::Sqlite(_) => "gl_history h INDEXED BY sqlite_autoindex_gl_history_1",
+            Backend::Postgis(_) => "gl_history h",
+        };
+        self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL),h.properties,h.geometry_json FROM (SELECT 1) seed LEFT JOIN (SELECT properties,geometry_json FROM {history} WHERE h.project=$1 AND h.dataset=$3 AND h.feature_id=$4 AND h.valid_from<=$5 AND (h.valid_to IS NULL OR h.valid_to>$5) ORDER BY h.valid_from DESC LIMIT 1) h ON true", self.workspace_key_table()), &[&project, &workspace, &dataset, &key, &base])
     }
     fn remove_delta(
         &mut self,
@@ -1325,7 +1359,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     fn begin_merge(&mut self) -> Result<()> {
         self.1.stage.clear();
         self.1.stage_bytes = 0;
-        self.batch_execute("DROP TABLE IF EXISTS gl_merge_stage; CREATE TEMP TABLE gl_merge_stage(dataset text, feature_id text, before_value text, after_value text)")
+        self.batch_execute("DROP TABLE IF EXISTS gl_merge_stage; CREATE TEMP TABLE gl_merge_stage(dataset text, feature_id text, before_value text, after_value text, PRIMARY KEY(dataset,feature_id))")
     }
     fn merge_page(
         &mut self,

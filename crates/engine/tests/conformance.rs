@@ -1479,3 +1479,67 @@ fn derived_draft_count_tracks_upserts_deletions_and_failed_batches() -> TestResu
     );
     Ok(())
 }
+
+#[test]
+fn buffered_saves_preserve_values_and_rollback_flushed_batches() -> TestResult {
+    for payload_size in [0, 70_000] {
+        let f = Fixture::new()?;
+        let w = f.ws(&f.alice);
+        let edits: Vec<_> = (0..40)
+            .map(|i| {
+                f.edit(
+            &format!("batch-{i:02}"),
+            json!({"row":i,"exact":9007199254740993_u64,"payload":"x".repeat(payload_size)}),
+            if i % 2 == 0 { point(1., 2.) } else { Value::Null },
+        )
+            })
+            .collect();
+        let mut invalid = edits.clone();
+        invalid[39]["feature"]["geometry"] = point(999., 0.);
+        assert!(
+            f.call(
+                &f.alice,
+                "save",
+                json!({"workspace":w,"expected_workspace_version":0,"edits":invalid})
+            )
+            .is_err()
+        );
+        assert_eq!(
+            f.call(&f.alice, "get_workspace", json!({"workspace":w}))?["version"],
+            0
+        );
+        let query = json!({"workspace":w,"dataset":f.d,"limit":100});
+        assert!(
+            f.call(&f.alice, "features", query.clone())?["features"]
+                .as_array()
+                .ok_or("features")?
+                .is_empty()
+        );
+        assert_eq!(
+            f.call(
+                &f.alice,
+                "save",
+                json!({"workspace":w,"expected_workspace_version":0,"edits":edits})
+            )?["changes"],
+            40
+        );
+        let actual = f.call(&f.alice, "features", query)?;
+        let values = actual["features"].as_array().ok_or("features")?;
+        assert_eq!(values.len(), edits.len());
+        for (actual, edit) in values.iter().zip(&edits) {
+            assert_eq!(actual["properties"], edit["feature"]["properties"]);
+            assert_eq!(actual["geometry"], edit["feature"]["geometry"]);
+        }
+        f.publish(&f.alice, &w, 1)?;
+        let unchanged = f.ws(&f.alice);
+        assert_eq!(
+            f.call(
+                &f.alice,
+                "save",
+                json!({"workspace":unchanged,"expected_workspace_version":0,"edits":edits})
+            )?["changes"],
+            0
+        );
+    }
+    Ok(())
+}

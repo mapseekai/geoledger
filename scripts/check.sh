@@ -5,6 +5,7 @@ python3 scripts/check-docs.py
 python3 scripts/check-env.py
 python3 scripts/check-release-policy.py
 python3 -m unittest discover -s scripts -p test_supply_chain.py
+python3 -m unittest discover -s scripts -p 'test_benchmark*.py'
 bash -n scripts/backup-drill.sh
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings

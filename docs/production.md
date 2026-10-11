@@ -40,7 +40,7 @@ docker compose logs geoledger
 docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 ```
 
-服务端镜像基于固定 digest 的 Alpine 3.24，以 UID 10001 运行，内置 `probe` 健康检查，包含 `geoledger-server`、`gl`、CA 证书、OpenSSL、SpatiaLite 及实际原生依赖。容器中的扩展路径显式为 `/usr/lib/mod_spatialite.so.8`；Rust 构建使用动态 CRT 以允许加载扩展。构建环境和运行环境分别经过扫描，实际验证与平台边界见 [构建环境修复记录](build-environment-fixes.md)。
+服务端镜像基于固定 digest 的 Alpine 3.24，以 UID 10001 运行，内置 `probe` 健康检查，包含 `geoledger-server`、`gl`、CA 证书、OpenSSL、SpatiaLite 及实际原生依赖。容器中的扩展路径显式为 `/usr/lib/mod_spatialite.so.8`；Rust 构建使用动态 CRT 以允许加载扩展。构建环境和运行环境分别经过扫描，实际验证与平台边界见 [发布验收](release.md)。
 
 控制台组合部署按 [Web 容器运行](../web/README.md#容器运行) 先设置会话密钥，再启用 console profile。`docker compose down` 停止组合服务，命名卷按数据保留策略管理。
 
@@ -56,7 +56,8 @@ docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 
 ```sh
 scripts/make-test-certs.sh deploy/tls        # 评估用私有 CA；生产放入同名的正式证书
-export GL_DB_PASSWORD=$(openssl rand -hex 32) GL_WEB_SESSION_SECRET=$(openssl rand -base64 48)
+export GL_ADMIN_SUBJECTS=admin
+export GL_DB_PASSWORD=$(openssl rand -hex 32) GL_DB_APP_PASSWORD=$(openssl rand -hex 32) GL_WEB_SESSION_SECRET=$(openssl rand -base64 48)
 docker compose -f deploy/compose.production.yaml up -d --build
 ```
 
@@ -69,7 +70,7 @@ docker compose -f deploy/compose.production.yaml up -d --build
 - **管理员凭证**：首次启动生成的管理员凭证在 `geoledger-data` 卷的 `/data/admin-credentials.json`，取出后从卷中删除。
 - **身份认证**：生产建议改用 JWT（`GL_JWKS_URL` 等），并设置 `GL_BOOTSTRAP_ADMIN=false`。
 - **端口**：`GL_GATEWAY_BIND`、`GL_GATEWAY_HTTPS_PORT`、`GL_GATEWAY_HTTP_PORT` 用于调整网关发布的地址和端口。
-- **数据库角色**：示例复用了 `POSTGRES_USER` 初始化的超级用户；正式部署须将数据库初始化账号与服务运行账号分离，改用专用非超级用户连接，并按业务表纳管所需范围授予所有者权限。
+- **数据库角色**：新数据库由 `geoledger_admin` 初始化，服务使用独立的 `geoledger_app` 非超级用户。`GL_DB_PASSWORD` 与 `GL_DB_APP_PASSWORD` 分别配置两者密码。已有数据库由 DBA 创建运行角色，并只授予版本表 schema 和指定纳管表所需权限；业务表所有者角色的授予范围由 DBA 审核。初始化脚本只在新卷执行。
 - **备份**：PostGIS 按下文 [备份与恢复](#备份与恢复) 使用 `pg_dump` 或 WAL 归档。逻辑导出命令为 `docker compose -f deploy/compose.production.yaml exec geoledger geoledger-server export --output /data/export.jsonl`。
 
 该组合已在 Docker Engine 29 上实测：四个服务均通过健康检查；`gl` 经网关以 TLS 访问 gRPC；HTTPS API 返回 HSTS 和请求 ID；HTTP 跳转到 HTTPS；PostGIS 拒绝明文连接；只读容器内的导出与校验成功。

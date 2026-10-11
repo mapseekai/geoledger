@@ -37,7 +37,7 @@ cargo build --release --locked --bins
 
 ## 生成 SDK
 
-SDK 业务层手工维护，公开接口提供业务客户端、业务模型和业务错误。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：protoc 3.21.12、protoc-gen-go 1.36.12、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.13.0。
+SDK 业务层手工维护，公开接口提供业务客户端、业务模型和业务错误。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：Go、Python、TypeScript 共用 grpcio-tools 内置 protoc，protoc-gen-go 1.36.12、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.13.0。
 
 ```sh
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
@@ -165,7 +165,7 @@ python3 scripts/test-console.py \
 
 [Dependabot](../.github/dependabot.yml) 每周为 Cargo、npm（web、sdk/ts）、Go、pip、GitHub Actions 与 Dockerfile 基础镜像提出更新。Actions 固定到完整 commit SHA；Dockerfile 基础镜像固定 digest，由 Dependabot 刷新。
 
-发布流程：更新 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml`（PEP 440 形式，如 `0.3.0a1`）的版本，把 [CHANGELOG](../CHANGELOG.md) 的 `Unreleased` 段落改为同名版本，合并后在 main 上推送 `vX.Y.Z` 标签。发布 workflow（`.github/workflows/release.yml`）校验标签与各包版本一致，构建 Linux x86_64/aarch64 与 Windows x86_64 二进制（含 SHA256、源码 SBOM 和构建来源证明）、多架构服务与控制台镜像（推送到 GHCR，附 SBOM 与 provenance，cosign 无密钥签名），创建 GitHub Release，并在配置凭证时发布 npm/PyPI SDK、为 Go 模块打 `sdk/go/vX.Y.Z` 标签。协议由 CI 验证生成代码与 SDK 联调，规则见 [当前版本契约](api.md#当前版本契约)；漏洞处理见 [安全策略](../SECURITY.md)。
+发布流程：更新 `Cargo.toml`、`sdk/ts/package.json`、`web/package.json`、`sdk/python/pyproject.toml`（PEP 440 形式，如 `0.3.0a2`）及各自锁文件的版本，把 [CHANGELOG](../CHANGELOG.md) 的 `Unreleased` 段落改为同名版本，合并后在 main 上推送 `vX.Y.Z` 标签。发布 workflow（`.github/workflows/release.yml`）校验标签与各包版本一致，构建 Linux x86_64/aarch64 与 Windows x86_64 二进制（含 SHA256、源码 SBOM 和构建来源证明）、多架构服务与控制台镜像（推送到 GHCR，附 SBOM 与 provenance，cosign 无密钥签名），创建草稿 GitHub Release，发布 npm/PyPI SDK、为 Go 模块打 `sdk/go/vX.Y.Z` 标签；干净环境安装验证通过后公开 Release。发布前预检 npm/PyPI 配置。协议由 CI 验证生成代码与 SDK 联调，规则见 [当前版本契约](api.md#当前版本契约)；漏洞处理见 [安全策略](../SECURITY.md)。
 
 ## 贡献流程
 
@@ -201,11 +201,10 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 
 运行 `cargo test -p geoledger-engine --test credentials` 和 `cargo test -p geoledger-server --test credentials` 验证签发回执、权限边界、撤销、到期、原子重新签发、故障回滚与 SQLite 备份。可选 PostGIS 测试要求 `GL_TEST_DATABASE_URL` 指向隔离的 `geoledger_test`，执行 `cargo test -p geoledger-engine --test credentials -- --ignored`。额外设置 `GL_TEST_PG_BIN` 为包含 `pg_dump` 与 `pg_restore` 的目录时，同一测试还验证原生备份恢复；未设置时不运行原生备份步骤。
 
-本次格式 12 本地验收使用 Node.js 22.23.2、SQLite/SpatiaLite 和隔离 PostGIS 17/3.6：两后端的凭据竞态、回滚与到期测试通过，PostGIS 原生备份恢复步骤已启用并通过。浏览器在独立预览中完成签发、一次性展示关闭、授权、成员登录、重新签发、新令牌登录及旧会话 401、撤销 401；1093px 和 390px 视口均无页面横向溢出。这些是功能验收，不是吞吐、RPO/RTO 或生产部署认证。
 
 ## 评审回归
 
-格式 12 的 R-001 至 R-016 实现、验证入口与运行边界见 [评审修复记录](review-fixes.md)。`scripts/check.sh` 包含独立 SpatiaLite 构建检查；配置 `GL_TEST_DATABASE_URL` 时同时运行连接清理、锁顺序和热空间查询计划回归。
+当前版本的验证入口与运行边界见 [发布验收](release.md)。`scripts/check.sh` 包含独立 SpatiaLite 构建检查；配置 `GL_TEST_DATABASE_URL` 时同时运行连接清理、锁顺序和热空间查询计划回归。
 
 
 ### 发布前置检查与原生产物
@@ -214,8 +213,8 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 
 [发布策略检查](../scripts/check-release-policy.py) 和 [失败注入测试](../scripts/test_supply_chain.py) 随 `scripts/check.sh` 执行。完整工作流使用 actionlint 检查语法。Windows 原生依赖通过 [安装器](../scripts/install-spatialite.py) 和 [版本锁](../.security/windows-spatialite.lock.json) 校验到隔离目录；二进制在打包前执行真实初始化、XYZ 保存发布、bbox 查询与重启测试，而非只检查 `--version`。
 
-[镜像复审工作流](../.github/workflows/image-audit.yml) 每天从最新非草稿 Release 的 `*-images.json` 清单读取镜像 digest，并重扫两个架构；手动输入标签可复审指定版本。无清单、拉取失败、扫描失败均作为失败处理。历史重建所选提交也必须具备当前发布门禁所需的脚本和依赖配置，缺失时停止发布。R-017 至 R-021 的变更与验证见 [供应链修复记录](supply-chain-fixes.md)。
+[镜像复审工作流](../.github/workflows/image-audit.yml) 每天从最新非草稿 Release 的 `*-images.json` 清单读取镜像 digest，并重扫两个架构；手动输入标签可复审指定版本。无清单、拉取失败、扫描失败均作为失败处理。历史重建所选提交也必须具备当前发布门禁所需的脚本和依赖配置，缺失时停止发布。发布交付验收见 [发布验收](release.md)。
 
 ### 容器构建工具链维护
 
-基础镜像由 Dependabot 更新；容器 npm 内置依赖与原生 TypeScript 的源码、Go SDK 和模块文件通过 `.security` 下的构建锁显式管理。更新包版本时同步核对构建锁，发布策略检查会拒绝版本或摘要漂移。当前设计、回归命令与平台验收范围见 [构建环境修复记录](build-environment-fixes.md)。
+基础镜像由 Dependabot 更新；容器 npm 内置依赖与原生 TypeScript 的源码、Go SDK 和模块文件通过 `.security` 下的构建锁显式管理。更新包版本时同步核对构建锁，发布策略检查会拒绝版本或摘要漂移。当前设计、回归命令与平台验收范围见 [发布验收](release.md)。

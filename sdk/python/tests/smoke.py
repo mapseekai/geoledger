@@ -65,6 +65,16 @@ with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as cl
     restored = client.restore(project.id, merged["revision"])
     restored.discard()
     assert client.workspace(project.id, restored.id).info.status == "discarded"
+    changed = {**feature, "geometry": {"type": "Point", "coordinates": [4, 5, 6]}}
+    edit = client.create_workspace(project.id)
+    edit.save(dataset.id, changed)
+    edit.publish("installed SDK update")
+    assert client.features(project.id, dataset.id)["features"][0] == changed
+    removal = client.create_workspace(project.id)
+    removal.delete(dataset.id, "one")
+    removal.publish("installed SDK delete")
+    assert client.features(project.id, dataset.id)["features"] == []
+    assert client.features(project.id, dataset.id, revision=published["revision"])["features"][0] == feature
     client.set_member(project.id, "sdk-viewer", "viewer")
     assert {m.subject for m in client.members(project.id)} >= {"sdk-viewer"}
     client.remove_member(project.id, "sdk-viewer")

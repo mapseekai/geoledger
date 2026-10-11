@@ -37,6 +37,15 @@ class SupervisorTests(unittest.TestCase):
             self.assertEqual(result["status"], "no_signal")
             self.assertEqual(run.call_count, 1)
 
+    def test_restricted_scan_is_not_a_clean_check(self):
+        def inspect(command, **kwargs):
+            kwargs['stdout'].write('Process is not debuggable.\n')
+            return subprocess.CompletedProcess(command, 0)
+        with tempfile.TemporaryDirectory() as folder, patch('benchmark.subprocess.run', side_effect=inspect):
+            result = native_leaks(123, folder)
+            self.assertEqual(result['status'], 'error')
+            self.assertTrue(result['restricted'])
+
     def test_ports_are_unique_and_failure_is_recorded(self):
         self.assertEqual(len(set(ports(3))), 3)
         with tempfile.TemporaryDirectory() as folder:

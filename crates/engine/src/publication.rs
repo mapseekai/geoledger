@@ -268,21 +268,29 @@ pub(super) struct Publish {
     request_id: Uuid,
     message: String,
 }
+fn replay_receipt(row: Row, request: &Publish) -> Result<Value> {
+    let previous: Value = codec::stored(&row.get::<_, String>(0usize)?)?;
+    if previous != serde_json::to_value(request).map_err(|_| bad())? {
+        return Err(Error::new(409, "request_id payload mismatch"));
+    }
+    codec::stored(&row.get::<_, String>(1usize)?)
+}
 pub(super) fn publish(t: &mut Transaction, s: &str, r: Publish) -> Result<Value> {
     text(&r.message, 2048)?;
-    let current = head(t, &r.project, true)?;
-    // A receipt replay is a read, including after archive or role downgrade.
-    // Keep membership and workspace ownership checks ahead of receipt access.
-    workspace(t, s, &r.project, &r.workspace, None)?;
+    id(&r.project)?;
     let request_id = r.request_id.to_string();
-    let payload = serde_json::to_value(&r).map_err(|_| bad())?;
+    // Committed receipts are immutable; authorize their replay without queuing behind new publications.
     if let Some(row) = t.publication_receipt(&r.project, s, &request_id)? {
-        let previous: Value = codec::stored(&row.get::<_, String>(0usize)?)?;
-        if previous != payload {
-            return Err(Error::new(409, "request_id payload mismatch"));
-        }
-        return codec::stored(&row.get::<_, String>(1usize)?);
+        workspace(t, s, &r.project, &r.workspace, None)?;
+        return replay_receipt(row, &r);
     }
+    let current = head(t, &r.project, true)?;
+    workspace(t, s, &r.project, &r.workspace, None)?;
+    // Another publisher may have committed this request while we waited for the head lock.
+    if let Some(row) = t.publication_receipt(&r.project, s, &request_id)? {
+        return replay_receipt(row, &r);
+    }
+    let payload = serde_json::to_value(&r).map_err(|_| bad())?;
     let (base, version, _) = workspace(
         t,
         s,

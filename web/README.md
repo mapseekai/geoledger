@@ -102,11 +102,11 @@ GeoJSON 文件上传专项浏览器验证：`python3 scripts/test-console-upload
 npm --prefix web start
 ```
 
-生产服务使用固定的 `GL_WEB_SESSION_SECRET`，多实例共享密钥和 origin 配置。公开入口使用 HTTPS，反向代理终结 TLS；Node 服务监听内网，代理配置请求体大小、连接数、登录速率和 Origin 转发。SDK 的 `https://` 地址启用 gRPC 服务端证书验证，私有 CA 通过 `NODE_EXTRA_CA_CERTS` 信任；`GL_WEB_ENDPOINT` 使用非回环主机的 `http://` 地址时需要设置 `GL_ALLOW_INSECURE_TRANSPORT=true`（仅限隔离的内部网络）。会话 Cookie 只保存随机会话 ID，凭证保存在控制台服务端内存，退出登录立即失效；空闲期限由 `GL_WEB_SESSION_IDLE_MINUTES` 设置（默认 60 分钟），控制台重启后需要重新登录，多实例部署使用会话粘滞。
+生产控制台采用单实例部署，使用固定的 `GL_WEB_SESSION_SECRET` 和 origin 配置。公开入口使用 HTTPS，反向代理终结 TLS；Node 服务监听内网，代理配置请求体大小、连接数、登录速率和 Origin 转发。SDK 的 `https://` 地址启用 gRPC 服务端证书验证，私有 CA 通过 `NODE_EXTRA_CA_CERTS` 信任；`GL_WEB_ENDPOINT` 使用非回环主机的 `http://` 地址时需要设置 `GL_ALLOW_INSECURE_TRANSPORT=true`（仅限隔离的内部网络）。会话 Cookie 只保存随机会话 ID，凭证保存在控制台服务端内存，退出登录立即失效；空闲期限由 `GL_WEB_SESSION_IDLE_MINUTES` 设置（默认 60 分钟），控制台重启后需要重新登录。
 
 ### 容器运行
 
-容器构建使用校验和锁定的 Node／npm 工具链，并按原 TypeScript 发布提交重建编译器的 Go 运行时；项目 TypeScript 版本保持 7.0.2。安装依赖后、执行编译前完成版本校验和二进制替换。开发依赖及编译工具保留在单独扫描的构建阶段，只有 standalone 输出进入非 root 运行镜像。维护步骤和验证边界见 [构建环境修复记录](../docs/build-environment-fixes.md)。
+容器构建使用校验和锁定的 Node／npm 工具链，并按原 TypeScript 发布提交重建编译器的 Go 运行时；项目 TypeScript 版本保持 7.0.2。安装依赖后、执行编译前完成版本校验和二进制替换。开发依赖及编译工具保留在单独扫描的构建阶段，只有 standalone 输出进入非 root 运行镜像。维护步骤和验证边界见 [发布验收](../docs/release.md)。
 
 ```sh
 docker build -f web/Dockerfile -t geoledger-console .
@@ -155,3 +155,7 @@ Inter 与 Newsreader 字体本地打包，中文衬线采用系统字体。[GeoL
 大文件统计回归：`python3 scripts/test-console-summary.py --url http://localhost:13001 --token-file <临时凭据文件> --chromium <浏览器路径> --fixture-report /tmp/geoledger-large-file-report.json --report /tmp/geoledger-summary-report.json`。复用大文件测试创建的隔离数据，验证工作区和历史统计数量、响应体积、耗时及真实页面展示，并检查没有读取要素明细。
 
 集合响应浏览器验证：`python3 scripts/test-console-features.py --url http://localhost:13001 --token-file <临时凭据文件> --chromium <浏览器路径> --fixture-report /tmp/geoledger-large-file-report.json`。使用隔离服务，覆盖真实 GeoJSON 对象、大整数精度、GET/POST 响应一致、固定版本翻页、工作区过期、bbox、鉴权、地图列表，以及沿 `next` 链接取回整份大文件。
+
+## 生产实例与会话
+
+控制台采用单实例部署，服务端内存保存最多 10,000 个会话。会话密钥由秘密管理系统固定注入，重启后用户重新登录。发布安排维护窗口，先完成或确认在途发布，再更新控制台；发布结果使用原请求 ID 查询确认。需要多副本持续登录的部署，在引入共享会话存储并完成跨实例吊销验收后启用。
