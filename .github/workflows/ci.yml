@@ -56,7 +56,7 @@ jobs:
       - name: Toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite nginx-light
+          sudo apt-get install -y cmake protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite nginx-light
           rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy
           rustup default 1.92.0
           python3 -m pip install grpcio-tools==1.78.0
@@ -123,7 +123,7 @@ jobs:
       - name: Browser toolchain and service
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite
+          sudo apt-get install -y cmake protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite
           rustup toolchain install 1.92.0 --profile minimal
           cargo +1.92.0 build --locked -p geoledger-server
           python3 -m pip install playwright
@@ -158,7 +158,7 @@ jobs:
           persist-credentials: false
       - run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite
+          sudo apt-get install -y cmake protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite
           rustup toolchain install 1.88.0 --profile minimal
           cargo +1.88.0 check --workspace --all-targets --locked
   windows:
@@ -237,7 +237,7 @@ jobs:
       - name: Build service and console
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+          sudo apt-get install -y cmake protobuf-compiler pkg-config libssl-dev
           rustup toolchain install 1.92.0 --profile minimal
           cargo +1.92.0 build --locked -p geoledger-server
           npm ci --prefix sdk/ts

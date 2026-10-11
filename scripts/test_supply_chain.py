@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
+import tomllib
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -48,7 +49,8 @@ def fixture(directory, platforms=('amd64', 'arm64')):
 
 def report():
     return {'SchemaVersion': 2, 'Metadata': {'OS': {'Family': 'debian'}},
-            'Results': [{'Class': 'os-pkgs', 'Packages': [{'Name': 'libssl3'}, {'Name': 'libsqlite3-mod-spatialite'}], 'Vulnerabilities': []}, {'Class': 'lang-pkgs', 'Type': 'cargo', 'Packages': [{'Name': 'rusqlite'}]}]}
+            'Results': [{'Class': 'os-pkgs', 'Packages': [{'Name': 'libssl3'}, {'Name': 'libsqlite3-mod-spatialite'}], 'Vulnerabilities': []},
+                        {'Class': 'lang-pkgs', 'Type': 'cargo', 'Packages': [{'Name': p['name'], 'Version': p['version']} for p in tomllib.loads((ROOT / 'Cargo.lock').read_text())['package']]}]}
 
 
 class GateTests(unittest.TestCase):
@@ -248,11 +250,36 @@ class InstallerTests(unittest.TestCase):
 
 
 class BuildEnvironmentTests(unittest.TestCase):
+    def test_cargo_inventory_requires_every_locked_name_and_version(self):
+        value = report()
+        gate.validate_source_inventory(value, 'combined-build')
+        value['Results'][1]['Packages'].pop()
+        with self.assertRaisesRegex(ValueError, 'Cargo.lock'):
+            gate.validate_source_inventory(value, 'combined-build')
+        value = report()
+        value['Results'][1]['Packages'][0]['Version'] = '0.0.0-mismatch'
+        with self.assertRaisesRegex(ValueError, 'Cargo.lock'):
+            gate.validate_source_inventory(value, 'combined')
+
     def report(self):
         value = report()
         value['Results'].append({'Class': 'lang-pkgs', 'Type': 'node-pkg',
                                  'Packages': [{'Name': 'npm'}, {'Name': 'typescript'}]})
         return value
+    def test_unnamed_graph_root_is_not_a_dependency(self):
+        value = self.report()
+        value['Results'][1]['Packages'].append({'ID': 'root', 'Relationship': 'root'})
+        value['Results'][-1]['Packages'].append({'Name': 'next'})
+        gate.validate_report(value, 'combined-build')
+        gate.validate_report(value, 'combined')
+        for kind in ('server', 'server-build', 'combined', 'combined-build'):
+            broken = copy.deepcopy(value)
+            broken['Results'][1]['Packages'] = [{'ID': 'root', 'Relationship': 'root'}]
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'Rust dependency inventory'):
+                gate.validate_report(broken, kind)
+        value['Results'][1]['Vulnerabilities'] = [{'VulnerabilityID': 'TEST-ROOT', 'PkgName': 'native', 'Severity': 'HIGH'}]
+        with self.assertRaisesRegex(ValueError, 'blocking HIGH/CRITICAL'):
+            gate.validate_report(value, 'combined-build')
     def test_builder_requires_actual_npm_and_compiler_inventory(self):
         value = self.report()
         gate.validate_report(value, 'console-build')

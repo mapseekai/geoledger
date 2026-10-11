@@ -48,8 +48,8 @@ async function build() {
     await download(lock.go_archives[architecture], goArchive);
     await download(lock.source, sourceArchive);
     fs.mkdirSync(path.join(compiler, 'source'));
-    execFileSync('/busybox/tar', ['-xzf', goArchive, '-C', compiler]);
-    execFileSync('/busybox/tar', ['-xzf', sourceArchive, '-C', path.join(compiler, 'source'), '--strip-components=1']);
+    execFileSync('tar', ['-xzf', goArchive, '-C', compiler]);
+    execFileSync('tar', ['-xzf', sourceArchive, '-C', path.join(compiler, 'source'), '--strip-components=1']);
     for (const name of ['go.mod', 'go.sum']) {
       const file = path.join(policy, 'typescript-' + name);
       assert.equal(digest(file), lock.module_files[name], 'Compiler module lock drift');

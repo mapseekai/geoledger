@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import tomllib
 
 DIGEST = re.compile(r'sha256:[0-9a-f]{64}\Z')
 DEFAULT_PLATFORMS = {'linux/amd64', 'linux/arm64'}
@@ -90,7 +91,7 @@ def validate_report(report: dict, kind: str) -> None:
         suffix = '-build' if kind.endswith('-build') else ''
         validate_report(report, 'server' + suffix)
         validate_report(report, 'console' + suffix)
-        language = {p['Name'] for r in report['Results'] if r.get('Class') == 'lang-pkgs'
+        language = {p.get('Name') for r in report['Results'] if r.get('Class') == 'lang-pkgs'
                     for p in (r.get('Packages') or [])}
         if 'next' not in language:
             raise ValueError('combined image is missing its console dependency inventory')
@@ -117,15 +118,15 @@ def validate_report(report: dict, kind: str) -> None:
             native_present = False
         if not native_present:
             raise ValueError('native SpatiaLite/OpenSSL packages absent from supported OS inventory')
-        if not any(r.get('Class') == 'lang-pkgs' and r.get('Type') == 'cargo' and r.get('Packages') for r in report['Results']):
+        if not any(r.get('Class') == 'lang-pkgs' and r.get('Type') == 'cargo' and any(p.get('Name') for p in (r.get('Packages') or [])) for r in report['Results']):
             raise ValueError('server Rust dependency inventory is empty')
     elif kind == 'server-build':
-        if not any(r.get('Class') == 'lang-pkgs' and r.get('Type') == 'cargo' and r.get('Packages') for r in report['Results']):
+        if not any(r.get('Class') == 'lang-pkgs' and r.get('Type') == 'cargo' and any(p.get('Name') for p in (r.get('Packages') or [])) for r in report['Results']):
             raise ValueError('build-stage Rust dependency inventory is empty')
-    elif not any(r.get('Class') == 'lang-pkgs' and r.get('Packages') for r in report['Results']):
+    elif not any(r.get('Class') == 'lang-pkgs' and any(p.get('Name') for p in (r.get('Packages') or [])) for r in report['Results']):
         raise ValueError('console language package inventory is empty')
     if kind == 'console-build':
-        language = {p['Name'] for r in report['Results'] if r.get('Class') == 'lang-pkgs'
+        language = {p.get('Name') for r in report['Results'] if r.get('Class') == 'lang-pkgs'
                     for p in (r.get('Packages') or [])}
         if not {'npm', 'typescript'} <= language:
             raise ValueError('build-stage npm/compiler inventory is incomplete')
@@ -134,6 +135,21 @@ def validate_report(report: dict, kind: str) -> None:
               if v.get('Severity') in ('HIGH', 'CRITICAL')]
     if issues:
         raise ValueError(f'{len(issues)} blocking HIGH/CRITICAL advisories: {issues[:12]}')
+
+
+def validate_cargo_inventory(report: dict, lock: dict) -> None:
+    expected = {(p['name'], p['version']) for p in lock['package']}
+    actual = {(p.get('Name'), p.get('Version')) for r in report['Results']
+              if r.get('Type') == 'cargo' for p in (r.get('Packages') or [])}
+    missing = expected - actual
+    if not expected or missing:
+        raise ValueError(f'Rust inventory does not cover Cargo.lock: {len(missing)} missing packages')
+
+
+def validate_source_inventory(report: dict, kind: str) -> None:
+    if kind.startswith(('server', 'combined')):
+        lock = Path(__file__).resolve().parents[1] / 'Cargo.lock'
+        validate_cargo_inventory(report, tomllib.loads(lock.read_text()))
 
 
 def scan(layout: Path, output: Path, kind: str, platforms: set[str], sha: str) -> dict:
@@ -186,6 +202,7 @@ def scan(layout: Path, output: Path, kind: str, platforms: set[str], sha: str) -
         verify_image_identity(layout, digest, platform, sha, report)
         try:
             validate_report(report, kind)
+            validate_source_inventory(report, kind)
         except ValueError as error:
             failures.append(f'{platform}: {error}')
         reports[platform] = {'manifest': digest, 'report': filename, 'sha256': digest_file(path)}
@@ -225,6 +242,7 @@ def verify(layout: Path, output: Path, sha: str, kind: str | None = None) -> dic
         value = json.loads(report.read_text())
         verify_image_identity(layout, record['manifest'], platform, sha, value)
         validate_report(value, gate['kind'])
+        validate_source_inventory(value, gate['kind'])
     return gate
 
 

@@ -41,7 +41,7 @@ docker compose logs geoledger
 docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 ```
 
-统一 `geoledger` 镜像基于固定 digest 的 Debian 13，包含服务端、Web 控制台、`gl`、Node 22、CA 证书、OpenSSL 和 SpatiaLite，以 UID 10001 运行。控制台通过容器内回环地址访问 gRPC。启动器同时管理两个服务：任一服务意外退出时终止另一个并返回失败；SIGTERM 转发到两个服务，保留后端的优雅关闭过程。健康检查同时验证后端 `/ready` 和控制台 `/api/health`。构建环境与运行环境分别扫描，验证边界见 [发布验收](release.md)。
+统一 `geoledger` 镜像基于固定 digest 的 Alpine 3.24，包含服务端、Web 控制台、`gl`、Node 22、CA 证书、OpenSSL 和 SpatiaLite，以 UID 10001 运行。控制台通过容器内回环地址访问 gRPC。启动器同时管理两个服务：任一服务意外退出时终止另一个并返回失败；SIGTERM 转发到两个服务，保留后端的优雅关闭过程。健康检查同时验证后端 `/ready` 和控制台 `/api/health`。构建环境与运行环境分别扫描，验证边界见 [发布验收](release.md)。
 
 固定保存 `GL_WEB_SESSION_SECRET`，并将 `GL_WEB_ORIGIN` 设置为用户访问的完整地址。`docker compose down` 停止容器，命名卷按数据保留策略管理。
 

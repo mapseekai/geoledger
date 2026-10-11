@@ -202,12 +202,24 @@ mod tests {
             auth.authenticate(&signed(&claims, "test-only")?),
             Some("alice".into())
         );
+        let mut without_nbf = claims.clone();
+        without_nbf.as_object_mut().ok_or("claims")?.remove("nbf");
+        assert_eq!(
+            auth.authenticate(&signed(&without_nbf, "test-only")?),
+            Some("alice".into())
+        );
         for (field, value) in [
             ("iss", json!("https://other.example")),
             ("aud", json!("other")),
             ("sub", json!("")),
             ("exp", json!(now - 120)),
             ("nbf", json!(now + 120)),
+            ("nbf", json!((now + 120).to_string())),
+            ("nbf", json!([now + 120])),
+            ("nbf", json!({"time": now + 120})),
+            ("nbf", json!(true)),
+            ("nbf", json!(null)),
+            ("nbf", json!(-1)),
         ] {
             let mut invalid = claims.clone();
             invalid[field] = value;

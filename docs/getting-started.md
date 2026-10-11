@@ -17,7 +17,7 @@ rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy
 rustup override set 1.92.0
 ```
 
-工具安装入口：[Rust / rustup](https://www.rust-lang.org/tools/install)、[protoc](https://github.com/protocolbuffers/protobuf/releases)、[Node.js 22](https://nodejs.org/en/download)、[Python 3.10+](https://www.python.org/downloads/)。Web 使用 Node.js 22，仓库脚本使用 Python 3 和 Bash。
+工具安装入口：[Rust / rustup](https://www.rust-lang.org/tools/install)、[protoc](https://github.com/protocolbuffers/protobuf/releases)、[Node.js 22](https://nodejs.org/en/download)、[Python 3.11+](https://www.python.org/downloads/)。Web 使用 Node.js 22，仓库脚本使用 Python 3 和 Bash。
 
 ### Linux
 
@@ -25,7 +25,7 @@ Ubuntu/Debian 安装 C 工具链、protoc 和连接库：
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential protobuf-compiler pkg-config libssl-dev python3 python3-venv curl
+sudo apt-get install -y build-essential cmake protobuf-compiler pkg-config libssl-dev python3 python3-venv curl
 ```
 
 ### macOS
@@ -34,14 +34,14 @@ sudo apt-get install -y build-essential protobuf-compiler pkg-config libssl-dev 
 
 ```sh
 xcode-select --install
-brew install protobuf pkg-config openssl@3 python@3.12 node@22
+brew install cmake protobuf pkg-config openssl@3 python@3.12 node@22
 export PATH="$(brew --prefix node@22)/bin:$PATH"
 export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 ```
 
 ### Windows
 
-安装 Visual Studio Build Tools 的 C++ 工具链、Rust MSVC 工具链、Python 和 Node.js 22。将 protoc 的 `bin` 目录加入 PATH。原生构建与测试命令使用 Cargo；仓库 `.sh` 脚本在 Bash 环境运行。主 [CI](../.github/workflows/ci.yml) 包含 Windows 构建和测试配置。
+安装 Visual Studio Build Tools 的 C++ 工具链及 CMake、Rust MSVC 工具链、Python 和 Node.js 22。将 protoc 的 `bin` 目录加入 PATH。原生构建与测试命令使用 Cargo；仓库 `.sh` 脚本在 Bash 环境运行。主 [CI](../.github/workflows/ci.yml) 包含 Windows 构建和测试配置。
 
 Windows 默认 SQLite 后端需要完整的 SpatiaLite 运行时及其依赖 DLL。安装 Python 3.12 后，在 PowerShell 为本次版本选择新的目录：
 
