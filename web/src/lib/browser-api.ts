@@ -89,6 +89,8 @@ export type Dataset = {
   name: string;
   geometryType: GeometryType;
   coordinateDimension: 2 | 3;
+  crs: string;
+  crsDefinition?: string;
 };
 export type Workspace = {
   id: string;

@@ -63,6 +63,7 @@ export function decodeDataset(v: wire.DatasetReply): Dataset {
     name: v.name,
     geometryType: v.geometryType as Dataset["geometryType"],
     coordinateDimension: (v.coordinateDimension || 2) as 2 | 3,
+    crs: v.crs,
   };
 }
 export function decodeWorkspaceInfo(v: wire.WorkspaceReply): WorkspaceInfo {
@@ -85,6 +86,7 @@ export function decodeDiscardResult(v: wire.DiscardReply): DiscardResult {
 }
 export function decodeFeaturePage(v: wire.FeaturesReply): FeaturePage {
   return {
+    crs: v.crs,
     features: v.features.map((item) => feature(item) as Feature),
     revision: BigInt(v.revision),
     workspaceVersion:

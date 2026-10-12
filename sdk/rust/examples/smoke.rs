@@ -10,10 +10,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .create_project(&format!("rust-{}", uuid::Uuid::new_v4()))
         .await?;
     let dataset = client
-        .create_dataset_with_dimension(&project.id, "places", "point", 3)
+        .create_dataset_with_crs(&project.id, "places", "point", 3, "EPSG:3857")
         .await?;
     let mut draft = client.create_workspace(&project.id).await?;
-    let feature = json!({"type":"Feature","id":"one","properties":{"exact":18446744073709551615u64,"nested":{"geojson":"hello"},"detail_json":"plain"},"geometry":{"type":"Point","coordinates":[1,2,3]}});
+    assert_eq!(dataset.crs, "EPSG:3857");
+    let feature = json!({"type":"Feature","id":"one","properties":{"exact":18446744073709551615u64,"nested":{"geojson":"hello"},"detail_json":"plain"},"geometry":{"type":"Point","coordinates":[500000,3500000,3]}});
     assert_eq!(draft.save(&dataset.id, feature.clone()).await?.version, 1);
     assert_eq!(draft.save(&dataset.id, feature.clone()).await?.version, 2);
     assert_eq!(
@@ -88,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert!(!error.uncertain);
     assert_eq!(
         client
-            .create_dataset_with_dimension(&project.id, "places", "point", 3)
+            .create_dataset_with_crs(&project.id, "places", "point", 3, "EPSG:3857")
             .await
             .err()
             .ok_or("duplicate")?

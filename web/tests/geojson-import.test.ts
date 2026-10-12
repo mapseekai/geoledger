@@ -91,31 +91,28 @@ test("large individual features have no byte cap and batches adapt to payload si
   assert.equal(importBatch(rows, 1)[0].id, "1");
 });
 
-test("reprojects declared Web Mercator and preserves properties and altitude", () => {
+test("preserves declared Web Mercator and preserves properties and altitude", () => {
   const [row] = importGeojson(
     '{"type":"Feature","crs":{"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::3857"}},"properties":{"exact":9007199254740993},"geometry":{"type":"Point","coordinates":[1113194.9079327357,1118889.9748579594,12]}}',
     () => "p",
     "point",
   );
-  assert.equal(row.reprojected, true);
+  assert.equal(row.crs, "EPSG:3857");
   assert.match(row.raw, /9007199254740993/);
   const coords = JSON.parse(row.raw).geometry.coordinates;
   assert.ok(
-    Math.abs(coords[0] - 10) < 1e-10 && Math.abs(coords[1] - 10) < 1e-10,
+    coords[0] === 1113194.9079327357 && coords[1] === 1118889.9748579594,
   );
   assert.equal(coords[2], 12);
 });
-test("rejects unknown CRS, undeclared projected coordinates and mixed families", () => {
-  assert.throws(
-    () =>
-      importGeojson(
-        '{"type":"Point","crs":{"type":"name","properties":{"name":"EPSG:9999"}},"coordinates":[1,2]}',
-      ),
-    /坐标系/,
+test("accepts arbitrary CRS and native projected coordinates, rejects mixed families", () => {
+  const [row] = importGeojson(
+    '{"type":"Point","crs":{"type":"name","properties":{"name":"LOCAL:survey"}},"coordinates":[1000000,2000000]}',
   );
-  assert.throws(
-    () => importGeojson('{"type":"Point","coordinates":[1000000,2000000]}'),
-    /经纬度/,
+  assert.equal(row.crs, "LOCAL:survey");
+  assert.deepEqual(
+    JSON.parse(row.raw).geometry.coordinates,
+    [1000000, 2000000],
   );
   assert.throws(
     () =>
@@ -183,5 +180,28 @@ test("infers shape before creating a dataset and rejects mixed files", () => {
         ...importGeojson('{"type":"LineString","coordinates":[[1,2],[2,3]]}'),
       ]),
     /独立文件/,
+  );
+});
+
+test("rejects mixed CRS without converting any input", () => {
+  const raw = JSON.stringify({
+    type: "FeatureCollection",
+    crs: { type: "name", properties: { name: "EPSG:3857" } },
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "Point",
+          coordinates: [1, 2],
+          crs: { type: "name", properties: { name: "EPSG:4490" } },
+        },
+      },
+    ],
+  });
+  assert.throws(() => importGeojson(raw), /坐标系/);
+  assert.throws(
+    () => importGeojson(raw, undefined, undefined, undefined, "EPSG:4326"),
+    /坐标系/,
   );
 });

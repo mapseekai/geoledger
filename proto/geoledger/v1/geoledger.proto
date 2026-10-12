@@ -90,6 +90,8 @@ message DatasetRequest {
  // 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
  uint32 coordinate_dimension = 4;
  PostgisTable postgis_table = 5;
+ // Immutable source CRS (identifier or WKT/PROJ definition); default EPSG:4326.
+ string crs = 6;
 }
 message WorkspaceRequest {
  string project = 1;
@@ -198,6 +200,8 @@ message DatasetReply {
  // 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
  uint32 coordinate_dimension = 4;
  PostgisTable postgis_table = 5;
+ // Immutable source CRS (identifier or WKT/PROJ definition); default EPSG:4326.
+ string crs = 6;
 }
 message DatasetsReply {
  repeated DatasetReply datasets = 1;
@@ -226,6 +230,8 @@ message FeaturesReply {
  int64 revision = 2;
  optional int64 workspace_version = 3;
  optional string next_after = 4;
+ // Features and bbox use this native dataset CRS, always in XY order.
+ string crs = 5;
 }
 message Change {
  string cursor = 1;

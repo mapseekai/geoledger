@@ -2,7 +2,12 @@ import { importGeojson, importedShape } from "./geojson-import";
 import type { GeometryType } from "./browser-api";
 
 self.onmessage = async (
-  event: MessageEvent<{ file: File; family?: GeometryType; dimension?: 2 | 3 }>,
+  event: MessageEvent<{
+    file: File;
+    family?: GeometryType;
+    dimension?: 2 | 3;
+    crs?: string;
+  }>,
 ) => {
   try {
     const text = await event.data.file.text();
@@ -16,8 +21,13 @@ self.onmessage = async (
       undefined,
       event.data.family,
       event.data.dimension,
+      event.data.crs,
     );
-    self.postMessage({ rows, shape: importedShape(rows) });
+    const shape = importedShape(rows);
+    self.postMessage({
+      rows,
+      shape: shape ? { ...shape, crs: rows[0]?.crs } : undefined,
+    });
   } catch (error) {
     self.postMessage({
       error: error instanceof Error ? error.message : "无法读取 GeoJSON 文件。",

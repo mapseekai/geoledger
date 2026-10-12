@@ -50,6 +50,7 @@ class Dataset:
     id: str
     name: str
     geometry_type: str
+    crs: str = "EPSG:4326"
     coordinate_dimension: int = 2
     postgis_table: dict | None = None
 
@@ -265,8 +266,8 @@ class Client:
     def delete_dataset(self, project: str, dataset: str, confirm_name: str) -> None:
         self._call("DeleteDataset", project=project, dataset=dataset, confirm_name=confirm_name)
 
-    def create_dataset(self, project: str, name: str, geometry_type: str, coordinate_dimension: int = 2) -> Dataset:
-        return Dataset(**self._call("CreateDataset", project=project, name=name, geometry_type=geometry_type, coordinate_dimension=coordinate_dimension))
+    def create_dataset(self, project: str, name: str, geometry_type: str, coordinate_dimension: int = 2, crs: str = "EPSG:4326") -> Dataset:
+        return Dataset(**self._call("CreateDataset", project=project, name=name, geometry_type=geometry_type, coordinate_dimension=coordinate_dimension, crs=crs))
 
     def track_table(self, project: str, name: str, *, schema: str, table: str, id_column: str, geometry_column: str) -> Dataset:
         """Track an existing PostGIS table and create its initial published revision."""

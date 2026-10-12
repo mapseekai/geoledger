@@ -10,7 +10,7 @@
 
 ## 候选版本与发布配置
 
-当前候选版本为 `0.3.0-alpha.2`，Python 包使用等价版本 `0.3.0a2`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.2`，将通过检查的提交作为候选 SHA。
+当前候选版本为 `0.3.0-alpha.3`，Python 包使用等价版本 `0.3.0a2`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.3`，将通过检查的提交作为候选 SHA。
 
 GitHub 的 `release` environment 配置 `NPM_TOKEN` secret，授予 `@geoledger/client` 的发布权限。PyPI 项目 `geoledger-client` 配置 Trusted Publisher：仓库 `mapseekai/geoledger`、工作流 `release.yml`、environment `release`；完成绑定后将该 environment 的 `PYPI_TRUSTED_PUBLISHING` variable 设置为 `true`。凭据由仓库与包管理员在平台设置中维护。预检验证配置存在，实际发布验证授权生效。
 

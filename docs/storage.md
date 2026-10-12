@@ -66,13 +66,13 @@ properties/detail/payload/result 为精确 JSON 文本，geometry 为规范化�
 
 SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读事务使用 query_only 和一致快照。RTree 先筛选候选，再以 SpatiaLite 的 ST_Intersects 做精确相交判断。写入排队有总期限，超过期限返回 busy/deadline。
 
-PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。`geom` 使用原生 `geometry` 类型（SRID 4326，兼容 XY/XYZ），直接创建 GiST 索引；bbox 直接查询几何列，不在查询时解析 GeoJSON。几何结构在共同应用层校验，自相交等拓扑问题仍作为警告，保持原始坐标。
+PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。`geom` 使用原生 `geometry` 类型（派生索引 SRID 0，兼容 XY/XYZ；原坐标系保存在数据集 `crs`），直接创建 GiST 索引；bbox 直接查询几何列，不在查询时解析 GeoJSON。几何结构在共同应用层校验，自相交等拓扑问题仍作为警告，保持原始坐标。
 
-当前格式为 13，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
+当前格式为 14，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
 
 SQLite 必须加载 SpatiaLite 5 扩展，使用注册的 `geom`（XY）和 `geom_z`（XYZ）几何 BLOB 列与各自的标准 RTree 索引；两个维度共用业务表，单个要素按维度写入对应列。数据集创建时声明不可变的 `coordinate_dimension`（2 或 3，默认 2），所有要素坐标必须匹配，混合维度返回明确的参数错误。嵌套集合和集合中的多部件几何仅在派生的空间表示中展平，快照保持原样。扩展加载失败时启动失败。默认加载 `mod_spatialite`，可通过 `GL_SPATIALITE_EXTENSION` 指定管理员安装的可信库路径。扩展加载后立即关闭动态加载权限。
 
-两个后端的 `geometry_json` 保留原始几何快照，用于精确响应、版本比较和逻辑导出；空间过滤使用原生几何列。SpatiaLite 不表示空几何集合，因此这类要素仅保留快照、不进入空间索引，仍参与普通分页与计数。导入在同一事务内重建原生几何与索引；备份包含原生几何、空间元数据与索引。格式 13 直接初始化新库，部署使用匹配当前格式的数据目录。
+两个后端的 `geometry_json` 保留原始几何快照，用于精确响应、版本比较和逻辑导出；空间过滤使用原生几何列。SpatiaLite 不表示空几何集合，因此这类要素仅保留快照、不进入空间索引，仍参与普通分页与计数。导入在同一事务内重建原生几何与索引；备份包含原生几何、空间元数据与索引。格式 14 直接初始化新库，部署使用匹配当前格式的数据目录。
 
 ## 新后端验收
 
@@ -90,7 +90,7 @@ SQLite 必须加载 SpatiaLite 5 扩展，使用注册的 `geom`（XY）和 `geo
 
 PostGIS 可以在已有业务数据库中初始化 GeoLedger 版本表，并将业务表绑定为数据集。指定 schema、表名、主键列和几何列，系统分页建立初始快照与首个提交。平台管理员需要具备项目成员身份，数据库服务账号需要读取、增删改及表所有权或等效的所有者角色权限，以执行锁表和触发器的创建、启用与删除；仅授予 `TRIGGER` 权限不足。
 
-业务表使用单列主键（整数、文本或 UUID），以及声明类型的 `geometry(Point/LineString/Polygon/Multi*,4326)` 几何列，坐标为 XY 或 XYZ。其余普通可写列映射为要素属性，保留整数精度；新增与修改提交完整属性集合。表使用完整行可见性，属性列由应用写入，独立普通表的主键负责标识唯一性。每张原表绑定一个数据集。普通主键与可延迟主键均可用于增删改发布。
+业务表使用单列主键（整数、文本或 UUID），以及声明类型的 `geometry(Point/LineString/Polygon/Multi*,SRID)` 几何列，坐标为 XY 或 XYZ。其余普通可写列映射为要素属性，保留整数精度；新增与修改提交完整属性集合。表使用完整行可见性，属性列由应用写入，独立普通表的主键负责标识唯一性。每张原表绑定一个数据集。普通主键与可延迟主键均可用于增删改发布。
 
 工作区草稿与历史快照存入 GeoLedger 版本表。发布获取业务表写锁，将属性、几何和增删改与版本记录放在同一个事务中；全部参与表完成写入后统一校验延迟约束，可在同次发布中创建相互引用的记录；原表约束失败时整体回滚。业务触发器执行后的最终表状态也会与待发布结果核对。纳管表的普通 SQL 写入通过保护触发器要求走 GeoLedger；数据库管理员管理表结构和权限，并保留该保护。发布检查表名、列结构和当前内容，防止意外替换表或越过保护后覆盖数据。
 
@@ -117,3 +117,10 @@ SQLite/SpatiaLite 将要素、原生几何和历史保存在当前数据库；�
 PostgreSQL 失败连接在清理确认之前继续占用池名额；明确取消、总期限耗尽和连接故障分别分类。最新版本优化必须依据同一事务的 HEAD/快照，禁止把历史查询统一替换为 valid_to IS NULL。
 
 草稿保存通过 `edit_base` 一次读取基线要素与解决状态，`put_deltas` 批量写入并保留原有解决标记。Application 每批最多 32 条、累计约 1 MiB，超出单批预算的单条要素独立写入；所有批次、草稿版本和审计在同一事务内提交，任一校验或写入失败时整体回滚。
+
+
+## 格式 14：原始坐标系
+
+数据集新增不可变 `crs`。空间索引列统一使用 SRID 0 进行数据集内的平面相交计算，避免错误标注为 4326；几何 JSON 和全部版本历史保留输入坐标。查询必须同时限定项目、数据集，并使用原坐标系的 bbox。PostGIS 原表写回使用原表 SRID；外部修改核对仍检查几何、属性和表结构签名。
+
+格式 14 只初始化新库，不自动升级或清理格式 13 数据。部署前保留旧库及备份，使用独立新数据库。当前格式备份、恢复和逻辑导入导出保留 CRS；派生几何和索引在导入时重建。

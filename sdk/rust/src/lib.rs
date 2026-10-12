@@ -632,10 +632,28 @@ impl Client {
         geometry_type: &str,
         coordinate_dimension: u32,
     ) -> Result<Dataset, Error> {
+        self.create_dataset_with_crs(
+            project,
+            name,
+            geometry_type,
+            coordinate_dimension,
+            "EPSG:4326",
+        )
+        .await
+    }
+    /// Store coordinates unchanged in the declared immutable dataset CRS.
+    pub async fn create_dataset_with_crs(
+        &self,
+        project: &str,
+        name: &str,
+        geometry_type: &str,
+        coordinate_dimension: u32,
+        crs: &str,
+    ) -> Result<Dataset, Error> {
         decode(
             self.execute(
                 "create_dataset",
-                json!({"project":project,"name":name,"geometry_type":geometry_type,"coordinate_dimension":coordinate_dimension}),
+                json!({"project":project,"name":name,"geometry_type":geometry_type,"coordinate_dimension":coordinate_dimension,"crs":crs}),
             )
             .await?,
         )
@@ -966,7 +984,7 @@ mod tests {
     #[test]
     fn response_conversion_preserves_opaque_properties_and_numbers() -> Result<(), Error> {
         let original = json!({"type":"Feature","id":"one","properties":{"nested":{"geojson":"ordinary text"},"detail_json":"plain","exact":18446744073709551615u64},"geometry":null});
-        let mut reply = json!({"features":[{"geojson":original.to_string()}],"revision":1,"workspace_version":null,"next_after":null});
+        let mut reply = json!({"crs":"EPSG:4326","features":[{"geojson":original.to_string()}],"revision":1,"workspace_version":null,"next_after":null});
         normalize(&mut reply)?;
         let page: FeaturePage = decode(reply)?;
         assert_eq!(page.features[0], original);

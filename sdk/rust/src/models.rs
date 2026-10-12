@@ -35,6 +35,7 @@ pub struct Dataset {
     pub postgis_table: Option<PostgisTable>,
     pub geometry_type: String,
     pub coordinate_dimension: u32,
+    pub crs: String,
     #[serde(rename = "dataset")]
     pub id: String,
     pub name: String,
@@ -64,6 +65,7 @@ pub struct DiscardResult {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FeaturePage {
+    pub crs: String,
     pub features: Vec<Value>,
     pub revision: i64,
     pub workspace_version: Option<i64>,

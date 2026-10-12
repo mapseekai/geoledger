@@ -17,6 +17,10 @@ pub(super) struct Features {
 pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     dataset(t, &r.project, &r.dataset)?;
+    let crs: String = t
+        .dataset_exists(&r.project, &r.dataset)?
+        .ok_or_else(missing)?
+        .get(4usize)?;
     Page {
         after: r.after.clone(),
         limit: r.limit,
@@ -40,14 +44,7 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
         (v, None)
     };
     let bbox = r.bbox.unwrap_or([-180., -90., 180., 90.]);
-    if bbox.iter().any(|x| !x.is_finite())
-        || bbox[0] > bbox[2]
-        || bbox[1] > bbox[3]
-        || bbox[0] < -180.
-        || bbox[2] > 180.
-        || bbox[1] < -90.
-        || bbox[3] > 90.
-    {
+    if bbox.iter().any(|x| !x.is_finite()) || bbox[0] > bbox[2] || bbox[1] > bbox[3] {
         return Err(bad());
     }
     // Remove ALL shadowed base rows before spatial filtering, including deletes and moves.
@@ -85,13 +82,14 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
     }
     if r.feature_id.is_some() {
         let mut feature = values.pop().ok_or_else(missing)?;
+        feature["crs"] = json!(crs);
         feature["revision"] = json!(revision);
         feature["workspace_version"] = json!(workspace_version);
         return Ok(feature);
     }
     let next = values.last().and_then(|x| x.get("id")).cloned();
     Ok(
-        json!({"type":"FeatureCollection","features":values,"revision":revision,"workspace_version":workspace_version,"next_after":next}),
+        json!({"type":"FeatureCollection","crs":crs,"features":values,"revision":revision,"workspace_version":workspace_version,"next_after":next}),
     )
 }
 #[derive(Deserialize)]

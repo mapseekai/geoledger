@@ -517,8 +517,8 @@ export function FeatureWorkspace({
   }, [body]);
 
   const layer = useMemo(
-    () => buildLayer(layerState.features),
-    [layerState.features],
+    () => buildLayer(layerState.features, dataset.crsDefinition ?? dataset.crs),
+    [layerState.features, dataset.crsDefinition, dataset.crs],
   );
   const filtered = useMemo(
     () => layer.items.filter((item) => matchesQuery(item, query)),
@@ -620,6 +620,7 @@ export function FeatureWorkspace({
     />
   ) : (
     <LayerSummary
+      crs={dataset.crs}
       name={dataset.name}
       layer={layer}
       source={workspaceId ? `工作区 v${version ?? "…"}` : `r${revision ?? "…"}`}
@@ -1276,7 +1277,7 @@ function Inspector({
                       <dd className="tabular-nums">{item.vertices}</dd>
                     </div>
                     <div>
-                      <dt>范围</dt>
+                      <dt>地图范围（WGS 84）</dt>
                       <dd className="tabular-nums">
                         {formatBounds(item.bounds)}
                       </dd>
@@ -1308,11 +1309,13 @@ function Inspector({
 }
 
 function LayerSummary({
+  crs,
   name,
   layer,
   source,
   close,
 }: {
+  crs: string;
   name: string;
   layer: Layer;
   source: string;
@@ -1359,11 +1362,11 @@ function LayerSummary({
             ))}
             <div>
               <dt>坐标系</dt>
-              <dd>WGS 84 (EPSG:4326)</dd>
+              <dd>{crs}</dd>
             </div>
             {layer.bounds && (
               <div>
-                <dt>范围</dt>
+                <dt>地图范围（WGS 84）</dt>
                 <dd className="tabular-nums">{formatBounds(layer.bounds)}</dd>
               </div>
             )}

@@ -79,18 +79,20 @@ class DeleteProjectRequest(_message.Message):
     def __init__(self, project: _Optional[str] = ..., confirm_name: _Optional[str] = ...) -> None: ...
 
 class DatasetRequest(_message.Message):
-    __slots__ = ("project", "name", "geometry_type", "coordinate_dimension", "postgis_table")
+    __slots__ = ("project", "name", "geometry_type", "coordinate_dimension", "postgis_table", "crs")
     PROJECT_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     GEOMETRY_TYPE_FIELD_NUMBER: _ClassVar[int]
     COORDINATE_DIMENSION_FIELD_NUMBER: _ClassVar[int]
     POSTGIS_TABLE_FIELD_NUMBER: _ClassVar[int]
+    CRS_FIELD_NUMBER: _ClassVar[int]
     project: str
     name: str
     geometry_type: str
     coordinate_dimension: int
     postgis_table: PostgisTable
-    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ..., postgis_table: _Optional[_Union[PostgisTable, _Mapping]] = ...) -> None: ...
+    crs: str
+    def __init__(self, project: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ..., postgis_table: _Optional[_Union[PostgisTable, _Mapping]] = ..., crs: _Optional[str] = ...) -> None: ...
 
 class WorkspaceRequest(_message.Message):
     __slots__ = ("project", "workspace")
@@ -291,18 +293,20 @@ class OkReply(_message.Message):
     def __init__(self, ok: bool = ...) -> None: ...
 
 class DatasetReply(_message.Message):
-    __slots__ = ("dataset", "name", "geometry_type", "coordinate_dimension", "postgis_table")
+    __slots__ = ("dataset", "name", "geometry_type", "coordinate_dimension", "postgis_table", "crs")
     DATASET_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     GEOMETRY_TYPE_FIELD_NUMBER: _ClassVar[int]
     COORDINATE_DIMENSION_FIELD_NUMBER: _ClassVar[int]
     POSTGIS_TABLE_FIELD_NUMBER: _ClassVar[int]
+    CRS_FIELD_NUMBER: _ClassVar[int]
     dataset: str
     name: str
     geometry_type: str
     coordinate_dimension: int
     postgis_table: PostgisTable
-    def __init__(self, dataset: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ..., postgis_table: _Optional[_Union[PostgisTable, _Mapping]] = ...) -> None: ...
+    crs: str
+    def __init__(self, dataset: _Optional[str] = ..., name: _Optional[str] = ..., geometry_type: _Optional[str] = ..., coordinate_dimension: _Optional[int] = ..., postgis_table: _Optional[_Union[PostgisTable, _Mapping]] = ..., crs: _Optional[str] = ...) -> None: ...
 
 class DatasetsReply(_message.Message):
     __slots__ = ("datasets",)
@@ -347,16 +351,18 @@ class DiscardReply(_message.Message):
     def __init__(self, version: _Optional[int] = ..., status: _Optional[str] = ...) -> None: ...
 
 class FeaturesReply(_message.Message):
-    __slots__ = ("features", "revision", "workspace_version", "next_after")
+    __slots__ = ("features", "revision", "workspace_version", "next_after", "crs")
     FEATURES_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_VERSION_FIELD_NUMBER: _ClassVar[int]
     NEXT_AFTER_FIELD_NUMBER: _ClassVar[int]
+    CRS_FIELD_NUMBER: _ClassVar[int]
     features: _containers.RepeatedCompositeFieldContainer[Feature]
     revision: int
     workspace_version: int
     next_after: str
-    def __init__(self, features: _Optional[_Iterable[_Union[Feature, _Mapping]]] = ..., revision: _Optional[int] = ..., workspace_version: _Optional[int] = ..., next_after: _Optional[str] = ...) -> None: ...
+    crs: str
+    def __init__(self, features: _Optional[_Iterable[_Union[Feature, _Mapping]]] = ..., revision: _Optional[int] = ..., workspace_version: _Optional[int] = ..., next_after: _Optional[str] = ..., crs: _Optional[str] = ...) -> None: ...
 
 class Change(_message.Message):
     __slots__ = ("cursor", "dataset", "feature_id", "base", "draft", "before", "after")

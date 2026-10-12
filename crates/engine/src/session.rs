@@ -456,7 +456,7 @@ impl Client {
                     for (column, dimension) in [("geom", "XY"), ("geom_z", "XYZ")] {
                         for sql in [
                             format!(
-                                "SELECT RecoverGeometryColumn('{table}','{column}',4326,'GEOMETRY','{dimension}')"
+                                "SELECT RecoverGeometryColumn('{table}','{column}',0,'GEOMETRY','{dimension}')"
                             ),
                             format!("SELECT CreateSpatialIndex('{table}','{column}')"),
                         ] {
@@ -567,12 +567,13 @@ impl SqlTransaction {
             Backend::Postgis(_) => "geom",
         }
     }
+    // Dataset CRS owns interpretation; derived indexes compare only native XY coordinates.
     pub(crate) fn geometry_values(&self, source: &str) -> String {
         match self.0.backend {
-            Backend::Postgis(_) => format!("ST_SetSRID(ST_GeomFromGeoJSON({source}),4326)"),
+            Backend::Postgis(_) => format!("ST_SetSRID(ST_GeomFromGeoJSON({source}),0)"),
             Backend::Sqlite(_) => {
                 let g = format!(
-                    "coalesce(SetSRID(GeomFromGeoJSON({source}),4326),SetSRID(GeomFromGeoJSON(gl_spatial_collection({source})),4326),gl_check_empty_geometry({source}))"
+                    "coalesce(SetSRID(GeomFromGeoJSON({source}),0),SetSRID(GeomFromGeoJSON(gl_spatial_collection({source})),0),gl_check_empty_geometry({source}))"
                 );
                 format!(
                     "CASE WHEN CoordDimension({g})='XY' THEN {g} END,CASE WHEN CoordDimension({g})='XYZ' THEN {g} END"
@@ -614,7 +615,7 @@ impl SqlTransaction {
             )
         };
         let count: i64 = self.query_one(
-            &format!("WITH prefix AS MATERIALIZED (SELECT feature_id,properties IS NOT NULL AS present,geom,geom_z{visibility_columns} FROM gl_{table} INDEXED BY sqlite_autoindex_gl_{table}_1 WHERE {scope} ORDER BY feature_id LIMIT $10) SELECT count(*) FROM (SELECT 1 FROM prefix WHERE present AND ({visible}) AND (ST_Intersects(geom,BuildMbr($6,$7,$8,$9,4326))=1 OR ST_Intersects(geom_z,BuildMbr($6,$7,$8,$9,4326))=1) LIMIT $11)"),
+            &format!("WITH prefix AS MATERIALIZED (SELECT feature_id,properties IS NOT NULL AS present,geom,geom_z{visibility_columns} FROM gl_{table} INDEXED BY sqlite_autoindex_gl_{table}_1 WHERE {scope} ORDER BY feature_id LIMIT $10) SELECT count(*) FROM (SELECT 1 FROM prefix WHERE present AND ({visible}) AND (ST_Intersects(geom,BuildMbr($6,$7,$8,$9,0))=1 OR ST_Intersects(geom_z,BuildMbr($6,$7,$8,$9,0))=1) LIMIT $11)"),
             &[&r.project, &r.dataset, &r.revision, &r.workspace, &r.after, &bbox[0], &bbox[1], &bbox[2], &bbox[3], &cap, &r.limit],
         )?.get(0usize)?;
         Ok(count < r.limit)
@@ -637,14 +638,14 @@ impl SqlTransaction {
         };
         match self.0.backend {
             Backend::Postgis(_) => {
-                format!("$7 AND ST_Intersects({a}geom,ST_MakeEnvelope($8,$9,$10,$11,4326))")
+                format!("$7 AND ST_Intersects({a}geom,ST_MakeEnvelope($8,$9,$10,$11,0))")
             }
             Backend::Sqlite(_) if !candidates => format!(
-                "$7 AND (ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,4326))=1 OR ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,4326))=1)"
+                "$7 AND (ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,0))=1 OR ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,0))=1)"
             ),
             // +0 retains scalar rowid point lookup even after a stale one-row ANALYZE estimate.
             Backend::Sqlite(_) => format!(
-                "$7 AND {a}feature_id IN (SELECT (SELECT feature_id FROM gl_{table} WHERE rowid=spatial_candidates.pkid+0) FROM (SELECT pkid FROM idx_gl_{table}_geom WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9 UNION ALL SELECT pkid FROM idx_gl_{table}_geom_z WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9) spatial_candidates) AND (ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,4326))=1 OR ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,4326))=1)"
+                "$7 AND {a}feature_id IN (SELECT (SELECT feature_id FROM gl_{table} WHERE rowid=spatial_candidates.pkid+0) FROM (SELECT pkid FROM idx_gl_{table}_geom WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9 UNION ALL SELECT pkid FROM idx_gl_{table}_geom_z WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9) spatial_candidates) AND (ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,0))=1 OR ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,0))=1)"
             ),
         }
     }
@@ -911,7 +912,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
             return Ok(Some(row.clone()));
         }
         let row = self.query_opt(
-            "SELECT geometry_type,name,coordinate_dimension,postgis_source FROM gl_datasets WHERE project=$1 AND id=$2",
+            "SELECT geometry_type,name,coordinate_dimension,postgis_source,crs FROM gl_datasets WHERE project=$1 AND id=$2",
             &[&project, &dataset],
         )?;
         if let Some(row) = &row {
@@ -1016,15 +1017,17 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         name: &str,
         geometry_type: &str,
         coordinate_dimension: i32,
+        crs: &str,
     ) -> Result<()> {
         self.execute(
-            "INSERT INTO gl_datasets(project,id,name,geometry_type,coordinate_dimension) VALUES($1,$2,$3,$4,$5)",
+            "INSERT INTO gl_datasets(project,id,name,geometry_type,coordinate_dimension,crs) VALUES($1,$2,$3,$4,$5,$6)",
             &[
                 &project,
                 &dataset,
                 &name,
                 &geometry_type,
                 &coordinate_dimension,
+                &crs,
             ],
         )
     }
@@ -1033,6 +1036,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         Ok(Row::new(vec![
             Cell::Text(metadata.family),
             Cell::Integer(metadata.dimension.into()),
+            Cell::Text(metadata.crs),
         ]))
     }
     fn postgis_table_page(
@@ -1048,14 +1052,14 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         dataset: &str,
         source: &crate::PostgisTable,
     ) -> Result<()> {
-        let metadata =
-            serde_json::to_string(&self.inspect_source(source)?).map_err(Error::stored_json)?;
+        let source_metadata = self.inspect_source(source)?;
+        let metadata = serde_json::to_string(&source_metadata).map_err(Error::stored_json)?;
         self.execute(
             "UPDATE gl_datasets SET postgis_source=$3 WHERE project=$1 AND id=$2",
             &[&project, &dataset, &metadata],
         )?;
         self.1.datasets.clear();
-        self.guard_source(source)
+        self.guard_source(source, source_metadata.srid)
     }
     fn rename_project(&mut self, project: &str, name: &str) -> Result<()> {
         self.execute(
@@ -1146,7 +1150,7 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn list_datasets(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
         self.query(
-            "SELECT id,name,geometry_type,coordinate_dimension,postgis_source FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
+            "SELECT id,name,geometry_type,coordinate_dimension,postgis_source,crs FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
             &[&project, &after, &limit],
         )
     }

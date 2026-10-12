@@ -211,6 +211,7 @@ fn input(mut value: Value) -> Result<Value> {
 fn output(value: Value) -> Value {
     match value {
         Value::Object(mut o) if o.get("type").and_then(Value::as_str) == Some("Feature") => {
+            o.remove("crs");
             o.remove("revision");
             o.remove("workspace_version");
             json!({"geojson":Value::Object(o).to_string()})
@@ -348,7 +349,7 @@ impl Service {
             "history" => json!({"commits":result}),
             "list_members" => json!({"members":result}),
             "features" if result["type"] == "Feature" => {
-                json!({"revision":result["revision"],"workspace_version":result["workspace_version"],"features":[result]})
+                json!({"crs":result["crs"],"revision":result["revision"],"workspace_version":result["workspace_version"],"features":[result]})
             }
             _ => result,
         };

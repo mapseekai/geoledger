@@ -37,6 +37,7 @@ type Dataset struct {
 	PostgisTable        *PostgisTable `json:"postgis_table,omitempty"`
 	GeometryType        string        `json:"geometry_type"`
 	CoordinateDimension uint32        `json:"coordinate_dimension"`
+	CRS                 string        `json:"crs"`
 	ID                  string        `json:"dataset"`
 	Name                string        `json:"name"`
 }
@@ -60,6 +61,7 @@ type DiscardResult struct {
 }
 
 type FeaturePage struct {
+	CRS              string            `json:"crs"`
 	Features         []json.RawMessage `json:"features"`
 	Revision         int64             `json:"revision"`
 	WorkspaceVersion *int64            `json:"workspace_version"`

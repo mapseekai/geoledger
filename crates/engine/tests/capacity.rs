@@ -52,7 +52,7 @@ fn million_features_twenty_distinct_writers() -> Result<(), Box<dyn std::error::
         let mut c = ::postgres::Client::connect(dsn.as_deref().ok_or("dsn")?, ::postgres::NoTls)?;
         let mut tx = c.transaction()?;
         tx.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,1,$2,'capacity-0','SQL fixture')",&[&p,&w])?;
-        tx.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT $1,$2,lpad(i::text,7,'0'),1,$3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)::text||',0]}',ST_SetSRID(ST_MakePoint(i%180,0),4326) FROM generate_series(1,1000000) AS s(i)",&[&p,&d,&props])?;
+        tx.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT $1,$2,lpad(i::text,7,'0'),1,$3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)::text||',0]}',ST_SetSRID(ST_MakePoint(i%180,0),0) FROM generate_series(1,1000000) AS s(i)",&[&p,&d,&props])?;
         tx.execute("UPDATE gl_projects SET head=1 WHERE id=$1", &[&p])?;
         tx.commit()?;
         c.batch_execute("ANALYZE gl_history;")?;
@@ -64,7 +64,7 @@ fn million_features_twenty_distinct_writers() -> Result<(), Box<dyn std::error::
         let mut c = native.write()?;
         let tx = c.transaction()?;
         tx.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES(?1,1,?2,'capacity-0','SQL fixture')",[&p,&w])?;
-        tx.execute("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT ?1,?2,printf('%07d',i),1,?3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)||',0]}',MakePoint(i%180,0,4326) FROM n",[&p,&d,&props])?;
+        tx.execute("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT ?1,?2,printf('%07d',i),1,?3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)||',0]}',MakePoint(i%180,0,0) FROM n",[&p,&d,&props])?;
         tx.execute("UPDATE gl_projects SET head=1 WHERE id=?1", [&p])?;
         tx.commit()?;
         c.execute_batch("ANALYZE;")?;

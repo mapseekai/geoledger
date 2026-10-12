@@ -27,7 +27,7 @@ fn seed(app: &Application) -> Result<Seed, Box<dyn std::error::Error>> {
     let dataset = call(
         "alice",
         "create_dataset",
-        json!({"geometry_type":"point","coordinate_dimension":3,"project":p,"name":"roads"}),
+        json!({"geometry_type":"point","coordinate_dimension":3,"crs":"EPSG:3857","project":p,"name":"roads"}),
     )?["dataset"]
         .as_str()
         .ok_or("dataset")?

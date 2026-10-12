@@ -429,7 +429,7 @@ fn authorization_idempotency_batch_rollback_and_draft_race() -> TestResult {
     let invalid = f.edit(
         "two",
         json!({}),
-        json!({"type":"Point","coordinates":[999,0]}),
+        json!({"type":"Point","coordinates":[999]}),
     );
     assert!(f.call(&f.alice,"save",json!({"workspace":w,"expected_workspace_version":0,"edits":[f.edit("one",json!({"a":1}),Value::Null),invalid]})).is_err());
     assert_eq!(
@@ -1470,7 +1470,7 @@ fn derived_draft_count_tracks_upserts_deletions_and_failed_batches() -> TestResu
     let bad = f.edit(
         "bad",
         json!({}),
-        json!({"type":"Point","coordinates":[999,0]}),
+        json!({"type":"Point","coordinates":[999]}),
     );
     assert!(f.call(&f.alice,"save",json!({"workspace":w,"expected_workspace_version":3,"edits":[f.edit("two",json!({}),Value::Null),bad]})).is_err());
     assert_eq!(
@@ -1495,7 +1495,7 @@ fn buffered_saves_preserve_values_and_rollback_flushed_batches() -> TestResult {
             })
             .collect();
         let mut invalid = edits.clone();
-        invalid[39]["feature"]["geometry"] = point(999., 0.);
+        invalid[39]["feature"]["geometry"] = json!({"type":"Point","coordinates":[999]});
         assert!(
             f.call(
                 &f.alice,
@@ -1539,6 +1539,72 @@ fn buffered_saves_preserve_values_and_rollback_flushed_batches() -> TestResult {
                 json!({"workspace":unchanged,"expected_workspace_version":0,"edits":edits})
             )?["changes"],
             0
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn native_crs_roundtrips_and_spatial_filters_remain_dataset_scoped() -> TestResult {
+    let mut f = Fixture::new()?;
+    for crs in [
+        "EPSG:3857",
+        "EPSG:4490",
+        "EPSG:32650",
+        "LOCAL:survey",
+        "+proj=tmerc +lat_0=0 +lon_0=117 +ellps=GRS80 +units=m",
+    ] {
+        let d = f.call(
+            &f.alice,
+            "create_dataset",
+            json!({"name":crs,"geometry_type":"point","crs":crs}),
+        )?;
+        assert_eq!(d["crs"], crs);
+        f.d = d["dataset"].as_str().unwrap().into();
+        let w = f.ws(&f.alice);
+        let g = point(500000.123456789, 3500000.987654321);
+        f.save(
+            &f.alice,
+            &w,
+            0,
+            json!({"exact":9007199254740993_u64}),
+            g.clone(),
+        )?;
+        let bbox = json!([499999, 3499999, 500001, 3500001]);
+        let draft = f.call(
+            &f.alice,
+            "features",
+            json!({"dataset":f.d,"workspace":w,"bbox":bbox}),
+        )?;
+        assert_eq!(draft["crs"], crs);
+        assert_eq!(draft["features"].as_array().unwrap().len(), 1);
+        assert_eq!(draft["features"][0]["geometry"], g);
+        f.publish(&f.alice, &w, 1)?;
+        let published = f.call(&f.alice, "features", json!({"dataset":f.d,"bbox":bbox}))?;
+        assert_eq!(published["features"], draft["features"]);
+        assert!(
+            f.call(
+                &f.alice,
+                "features",
+                json!({"dataset":f.d,"bbox":[0,0,1,1]})
+            )?["features"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let renamed = f.call(
+            &f.alice,
+            "rename_dataset",
+            json!({"dataset":f.d,"name":format!("native {crs}")}),
+        )?;
+        assert_eq!(renamed["crs"], crs);
+        assert!(
+            f.call(
+                &f.alice,
+                "rename_dataset",
+                json!({"dataset":f.d,"name":"invalid change","crs":"EPSG:4326"})
+            )
+            .is_err()
         );
     }
     Ok(())

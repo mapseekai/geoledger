@@ -365,9 +365,10 @@ export class Client {
     name: string,
     geometryType: model.GeometryType,
     coordinateDimension: 2 | 3 = 2,
+    crs = "EPSG:4326",
   ): Promise<model.Dataset> {
     return this.#call(
-      (cb) => this.#rpc.createDataset({ project, name, geometryType, coordinateDimension }, cb),
+      (cb) => this.#rpc.createDataset({ project, name, geometryType, coordinateDimension, crs }, cb),
       convert.decodeDataset,
     );
   }
@@ -379,7 +380,7 @@ export class Client {
   ): Promise<model.Dataset> {
     return this.#call(
       (cb) => this.#rpc.createDataset({
-        project, name, geometryType: "", coordinateDimension: 0, postgisTable,
+        project, name, geometryType: "", coordinateDimension: 0, postgisTable, crs: "",
       }, cb),
       convert.decodeDataset,
     );

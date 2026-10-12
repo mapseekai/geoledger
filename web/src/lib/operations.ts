@@ -1,4 +1,5 @@
 import { Client, stringifyJson } from "@geoledger/client";
+import { datasetCrs } from "./crs-server";
 import { featureCollection } from "./feature-collection";
 import { requestSchema } from "./requests";
 /** The only bridge to the business SDK. No generated transport types or forwarding. */
@@ -36,23 +37,28 @@ export async function execute(
     case "createProject":
       return client.createProject(r.name);
     case "datasets":
-      return client.datasets(r.project, r);
+      return (await client.datasets(r.project, r)).map(datasetCrs);
     case "renameProject":
       return client.renameProject(r.project, r.name);
     case "renameDataset":
-      return client.renameDataset(r.project, r.dataset, r.name);
+      return datasetCrs(
+        await client.renameDataset(r.project, r.dataset, r.name),
+      );
     case "deleteDataset":
       await client.deleteDataset(r.project, r.dataset, r.confirmName);
       return { ok: true };
     case "createDataset":
-      return client.createDataset(
-        r.project,
-        r.name,
-        r.geometryType,
-        r.coordinateDimension,
+      return datasetCrs(
+        await client.createDataset(
+          r.project,
+          r.name,
+          r.geometryType,
+          r.coordinateDimension,
+          r.crs,
+        ),
       );
     case "trackTable":
-      return client.trackTable(r.project, r.name, r.source);
+      return datasetCrs(await client.trackTable(r.project, r.name, r.source));
     case "workspaces":
       return client.workspaces(r.project, r);
     case "workspace":

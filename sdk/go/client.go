@@ -351,8 +351,13 @@ func (c *Client) CreateDataset(ctx context.Context, project, name, geometryType 
 	return c.CreateDatasetWithDimension(ctx, project, name, geometryType, 2)
 }
 func (c *Client) CreateDatasetWithDimension(ctx context.Context, project, name, geometryType string, coordinateDimension uint32) (Dataset, error) {
+	return c.CreateDatasetWithCRS(ctx, project, name, geometryType, coordinateDimension, "EPSG:4326")
+}
+
+// CreateDatasetWithCRS preserves coordinates in the declared immutable dataset CRS.
+func (c *Client) CreateDatasetWithCRS(ctx context.Context, project, name, geometryType string, coordinateDimension uint32, crs string) (Dataset, error) {
 	var r Dataset
-	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, GeometryType: geometryType, CoordinateDimension: coordinateDimension}, &r)
+	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, GeometryType: geometryType, CoordinateDimension: coordinateDimension, Crs: crs}, &r)
 	return r, e
 }
 func (c *Client) Datasets(ctx context.Context, project string, page Page) ([]Dataset, error) {

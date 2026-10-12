@@ -365,7 +365,7 @@ pub(super) fn create_dataset(
     membership(t, &r.project, s, true)?;
     text(&r.name, 256)?;
     let d = Uuid::new_v4().to_string();
-    let (family, requested_dimension) = if let Some(source) = &r.postgis_table {
+    let (family, requested_dimension, crs) = if let Some(source) = &r.postgis_table {
         if !policy.admins.contains(s) {
             return Err(Error::new(
                 403,
@@ -373,9 +373,21 @@ pub(super) fn create_dataset(
             ));
         }
         let row = t.inspect_postgis_table(source)?;
-        (row.get::<_, String>(0usize)?, row.get::<_, i32>(1usize)?)
+        (
+            row.get::<_, String>(0usize)?,
+            row.get::<_, i32>(1usize)?,
+            row.get::<_, String>(2usize)?,
+        )
     } else {
-        (r.geometry_type.clone(), r.coordinate_dimension)
+        (
+            r.geometry_type.clone(),
+            r.coordinate_dimension,
+            if r.crs.trim().is_empty() {
+                "EPSG:4326".into()
+            } else {
+                r.crs.trim().to_owned()
+            },
+        )
     };
     if !["point", "line", "polygon"].contains(&family.as_str()) {
         return Err(Error::new(
@@ -391,7 +403,8 @@ pub(super) fn create_dataset(
     if ![2, 3].contains(&dimension) {
         return Err(Error::new(400, "coordinate_dimension must be 2 or 3"));
     }
-    t.insert_dataset(&r.project, &d, &r.name, &family, dimension)?;
+    text(&crs, 16384)?;
+    t.insert_dataset(&r.project, &d, &r.name, &family, dimension, &crs)?;
     if let Some(source) = &r.postgis_table {
         let w = Uuid::new_v4().to_string();
         t.insert_workspace(&r.project, &w, s, current)?;
@@ -436,7 +449,7 @@ pub(super) fn create_dataset(
     }
     audit(t, &r.project, s, "create_dataset", json!({"dataset":d}))?;
     Ok(
-        json!({"dataset":d,"name":r.name,"geometry_type":family,"coordinate_dimension":dimension,"postgis_table":r.postgis_table}),
+        json!({"dataset":d,"name":r.name,"geometry_type":family,"coordinate_dimension":dimension,"crs":crs,"postgis_table":r.postgis_table}),
     )
 }
 pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Result<Value> {
@@ -446,7 +459,7 @@ pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Res
     Ok(json!(
         rows.iter()
             .map(|x| Ok(
-                json!({"dataset":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?,"geometry_type":x.get::<_,String>(2usize)?,"coordinate_dimension":x.get::<_,i32>(3usize)?,"postgis_table":source_table(x.get(4usize)?)?})
+                json!({"dataset":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?,"geometry_type":x.get::<_,String>(2usize)?,"coordinate_dimension":x.get::<_,i32>(3usize)?,"crs":x.get::<_,String>(5usize)?,"postgis_table":source_table(x.get(4usize)?)?})
             ))
             .collect::<Result<Vec<_>>>()?
     ))
@@ -634,6 +647,8 @@ pub(super) struct CreateDataset {
     geometry_type: String,
     #[serde(default)]
     coordinate_dimension: i32,
+    #[serde(default)]
+    crs: String,
     postgis_table: Option<PostgisTable>,
 }
 #[derive(Deserialize)]
@@ -680,7 +695,7 @@ pub(super) fn rename_dataset(t: &mut Transaction, s: &str, r: RenameDataset) -> 
         json!({"dataset":r.dataset,"name":r.name}),
     )?;
     Ok(
-        json!({"dataset":r.dataset,"name":r.name,"geometry_type":row.get::<_,String>(0usize)?,"coordinate_dimension":row.get::<_,i32>(2usize)?,"postgis_table":source_table(row.get(3usize)?)?}),
+        json!({"dataset":r.dataset,"name":r.name,"geometry_type":row.get::<_,String>(0usize)?,"coordinate_dimension":row.get::<_,i32>(2usize)?,"crs":row.get::<_,String>(4usize)?,"postgis_table":source_table(row.get(3usize)?)?}),
     )
 }
 pub(super) fn delete_dataset(

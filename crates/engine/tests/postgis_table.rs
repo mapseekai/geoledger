@@ -17,7 +17,7 @@ fn existing_table_publication_is_atomic() -> TestResult {
     admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
     let result = (|| -> TestResult {
         let (dsn, mut db) = support::connect_isolated(&dsn, &name)?;
-        db.batch_execute("CREATE EXTENSION postgis; CREATE SCHEMA business; CREATE TABLE business.points(id bigint PRIMARY KEY,label text NOT NULL CHECK(label <> 'invalid'), n numeric(20,0), geom geometry(PointZ,4326)); INSERT INTO business.points VALUES(1,'original',18446744073709551615,ST_SetSRID(ST_MakePoint(1,2,3),4326))")?;
+        db.batch_execute("CREATE EXTENSION postgis; CREATE SCHEMA business; CREATE TABLE business.points(id bigint PRIMARY KEY,label text NOT NULL CHECK(label <> 'invalid'), n numeric(20,0), geom geometry(PointZ,3857)); INSERT INTO business.points VALUES(1,'original',18446744073709551615,ST_SetSRID(ST_MakePoint(500000,3500000,3),3857))")?;
         let app = Application::new(Storage::Postgis(dsn)).with_policy(Policy {
             admins: ["alice".into()].into(),
             ..Policy::default()
@@ -47,6 +47,7 @@ fn existing_table_publication_is_atomic() -> TestResult {
         let d = created["dataset"].clone();
         assert_eq!(created["geometry_type"], "point");
         assert_eq!(created["coordinate_dimension"], 3);
+        assert_eq!(created["crs"], "EPSG:3857");
         let features = run("features", json!({"dataset":d}))?;
         assert_eq!(
             features["features"][0]["properties"]["n"],
@@ -89,7 +90,7 @@ fn existing_table_publication_is_atomic() -> TestResult {
                 "COMMENT ON TRIGGER {trigger} ON business.points IS '{binding}'"
             ))?;
         }
-        let feature = |id: &str, label: &str| json!({"type":"Feature","id":id,"properties":{"label":label,"n":18446744073709551615u64},"geometry":{"type":"Point","coordinates":[10,20,30]}});
+        let feature = |id: &str, label: &str| json!({"type":"Feature","id":id,"properties":{"label":label,"n":18446744073709551615u64},"geometry":{"type":"Point","coordinates":[500010,3500020,30]}});
         let w = run("create_workspace", json!({}))?["workspace"].clone();
         run(
             "save",
@@ -110,6 +111,19 @@ fn existing_table_publication_is_atomic() -> TestResult {
         let req = json!({"workspace":w,"expected_workspace_version":2,"request_id":uuid::Uuid::new_v4(),"message":"publish"});
         let result = run("publish", req.clone())?;
         assert_eq!(result, run("publish", req)?);
+        let native = db.query_one(
+            "SELECT ST_SRID(geom),ST_X(geom),ST_Y(geom),ST_Z(geom) FROM business.points WHERE id=1",
+            &[],
+        )?;
+        assert_eq!(native.get::<_, i32>(0), 3857);
+        assert_eq!(
+            (
+                native.get::<_, f64>(1),
+                native.get::<_, f64>(2),
+                native.get::<_, f64>(3)
+            ),
+            (500010.0, 3500020.0, 30.0)
+        );
         assert_eq!(
             db.query_one("SELECT label FROM business.points WHERE id=1", &[])?
                 .get::<_, String>(0),
@@ -253,6 +267,27 @@ fn existing_table_publication_is_atomic() -> TestResult {
                 .get::<_, i64>(0),
             2
         );
+        // SRID 0 typmods permit per-row SRIDs; enrollment must not silently mix them.
+        db.batch_execute("CREATE TABLE business.local_points(id bigint PRIMARY KEY,geom geometry(Point,0)); INSERT INTO business.local_points VALUES(1,ST_SetSRID(ST_MakePoint(500000,3500000),3857))")?;
+        let local_request = json!({"name":"local","postgis_table":{"schema":"business","table":"local_points","id_column":"id","geometry_column":"geom"}});
+        assert_eq!(
+            run("create_dataset", local_request.clone())
+                .err()
+                .ok_or("mixed SRID enrolled")?
+                .status,
+            400
+        );
+        db.batch_execute("UPDATE business.local_points SET geom=ST_SetSRID(geom,0)")?;
+        let local = run("create_dataset", local_request)?;
+        assert_eq!(local["crs"], "POSTGIS:0");
+        let local_id = local["dataset"].clone();
+        let w = run("create_workspace", json!({}))?["workspace"].clone();
+        run(
+            "save",
+            json!({"workspace":w,"expected_workspace_version":0,"edits":[{"dataset":local_id,"feature_id":"1","feature":{"type":"Feature","id":"1","properties":{},"geometry":{"type":"Point","coordinates":[500001,3500001]}}}]}),
+        )?;
+        db.batch_execute("SELECT set_config('geoledger.publication_table','business.local_points'::regclass::oid::text,false); UPDATE business.local_points SET geom=ST_SetSRID(geom,3857); RESET geoledger.publication_table")?;
+        assert_eq!(run("publish",json!({"workspace":w,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"reject SRID drift"})).err().ok_or("SRID drift overwritten")?.status,409);
         Ok(())
     })();
     admin.batch_execute(&format!("DROP DATABASE {name} WITH (FORCE)"))?;
@@ -281,7 +316,7 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
     admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
     let result = (|| -> TestResult {
         let (dsn, mut db) = support::connect_isolated(&dsn, &name)?;
-        db.batch_execute("CREATE EXTENSION postgis; CREATE SCHEMA business; CREATE TABLE business.zz_parent(id bigint PRIMARY KEY,label text,geom geometry(Point,4326)); CREATE TABLE business.aa_child(id bigint PRIMARY KEY,parent_id bigint REFERENCES business.zz_parent(id) DEFERRABLE INITIALLY DEFERRED,geom geometry(Point,4326)); CREATE TABLE business.deferred_key(id bigint PRIMARY KEY DEFERRABLE INITIALLY DEFERRED,label text,geom geometry(Point,4326))")?;
+        db.batch_execute("CREATE EXTENSION postgis; CREATE SCHEMA business; CREATE TABLE business.zz_parent(id bigint PRIMARY KEY,label text,geom geometry(Point,3857)); CREATE TABLE business.aa_child(id bigint PRIMARY KEY,parent_id bigint REFERENCES business.zz_parent(id) DEFERRABLE INITIALLY DEFERRED,geom geometry(Point,3857)); CREATE TABLE business.deferred_key(id bigint PRIMARY KEY DEFERRABLE INITIALLY DEFERRED,label text,geom geometry(Point,3857))")?;
         let app = Application::new(Storage::Postgis(dsn)).with_policy(Policy {
             admins: ["alice".into()].into(),
             ..Policy::default()
@@ -371,7 +406,7 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
         )?;
         db.batch_execute("INSERT INTO business.deferred_key(id,label) VALUES(7,'released')")?;
         // A renamed source is released; an unrelated replacement keeps its same-named trigger.
-        db.batch_execute("ALTER TABLE business.aa_child RENAME TO renamed_child; CREATE TABLE business.aa_child(id bigint PRIMARY KEY,geom geometry(Point,4326)); CREATE FUNCTION business.unrelated_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$; CREATE TRIGGER gl_versioned_write BEFORE INSERT ON business.aa_child FOR EACH STATEMENT EXECUTE FUNCTION business.unrelated_guard()")?;
+        db.batch_execute("ALTER TABLE business.aa_child RENAME TO renamed_child; CREATE TABLE business.aa_child(id bigint PRIMARY KEY,geom geometry(Point,3857)); CREATE FUNCTION business.unrelated_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$; CREATE TRIGGER gl_versioned_write BEFORE INSERT ON business.aa_child FOR EACH STATEMENT EXECUTE FUNCTION business.unrelated_guard()")?;
         run(
             "delete_dataset",
             json!({"dataset":child,"confirm_name":"aa_child"}),

@@ -106,7 +106,7 @@ fn sqlite_contract() -> Result<(), Box<dyn std::error::Error>> {
         "SELECT count(*), ST_Z(geom_z), ST_SRID(geom_z) FROM gl_history WHERE typeof(geom_z)='blob' AND geom IS NULL", [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    assert_eq!((count, z, srid), (2, 3.0, 4326));
+    assert_eq!((count, z, srid), (2, 3.0, 0));
     for table in ["gl_history", "gl_workspace_changes"] {
         for column in ["geom", "geom_z"] {
             assert_eq!(

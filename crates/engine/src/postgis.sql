@@ -1,8 +1,8 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
 CREATE FUNCTION gl_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' AND TG_TABLE_NAME<>'gl_audit_events' AND EXISTS(SELECT 1 FROM gl_purge WHERE project=OLD.project) THEN RETURN OLD; END IF; RAISE EXCEPTION 'immutable version record'; END $$;
 CREATE FUNCTION gl_json_field(value text, key text) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT value::jsonb ->> key $$;
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=13));
-INSERT INTO gl_format VALUES(true,13);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=14));
+INSERT INTO gl_format VALUES(true,14);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head bigint NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -14,6 +14,7 @@ CREATE INDEX gl_project_members_subject ON gl_project_members(subject,project);
 CREATE TABLE gl_datasets (
  project text REFERENCES gl_projects(id), id text NOT NULL, name text NOT NULL,
  geometry_type text NOT NULL CHECK(geometry_type IN ('point','line','polygon')),
+ crs text NOT NULL DEFAULT 'EPSG:4326' CHECK(length(crs)>0 AND length(crs)<=16384),
  coordinate_dimension bigint NOT NULL DEFAULT 2 CHECK(coordinate_dimension IN (2,3)),
  postgis_source text,
  PRIMARY KEY(project,id), UNIQUE(project,name));
@@ -23,7 +24,7 @@ CREATE TABLE gl_workspaces (
  PRIMARY KEY(project,id), FOREIGN KEY(project,owner) REFERENCES gl_project_members(project,subject));
 CREATE TABLE gl_workspace_changes (
  project text NOT NULL, workspace text NOT NULL, dataset text NOT NULL, feature_id text COLLATE "C" NOT NULL,
- resolved_head bigint CHECK(resolved_head IS NULL OR resolved_head >= 0), resolution_stale boolean NOT NULL DEFAULT false, properties text, geometry_json text, geom geometry CHECK(geom IS NULL OR ST_SRID(geom)=4326),
+ resolved_head bigint CHECK(resolved_head IS NULL OR resolved_head >= 0), resolution_stale boolean NOT NULL DEFAULT false, properties text, geometry_json text, geom geometry CHECK(geom IS NULL OR ST_SRID(geom)=0),
  PRIMARY KEY(project,workspace,dataset,feature_id),
  FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id),
  FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id),
@@ -36,7 +37,7 @@ CREATE TABLE gl_commits (
  PRIMARY KEY(project,revision), FOREIGN KEY(project,subject) REFERENCES gl_project_members(project,subject), FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id));
 CREATE TABLE gl_history (
  project text NOT NULL, dataset text NOT NULL, feature_id text COLLATE "C" NOT NULL, valid_from bigint NOT NULL, valid_to bigint,
- properties text, geometry_json text, geom geometry CHECK(geom IS NULL OR ST_SRID(geom)=4326),
+ properties text, geometry_json text, geom geometry CHECK(geom IS NULL OR ST_SRID(geom)=0),
  PRIMARY KEY(project,dataset,feature_id,valid_from),
  FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id),
  FOREIGN KEY(project,valid_from) REFERENCES gl_commits(project,revision),

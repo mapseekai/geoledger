@@ -158,6 +158,7 @@ pub trait RepositoryTransaction: Send {
         name: &str,
         geometry_type: &str,
         coordinate_dimension: i32,
+        crs: &str,
     ) -> Result<()>;
     /// Validate and lock a business table; returns (geometry family, dimension).
     fn inspect_postgis_table(&mut self, source: &crate::PostgisTable) -> Result<Row>;

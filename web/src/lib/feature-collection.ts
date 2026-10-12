@@ -21,18 +21,21 @@ export async function featureCollection(client: Client, input: unknown) {
   const links = [
     {
       rel: "self",
-      type: "application/geo+json",
+      type:
+        page.crs === "EPSG:4326" ? "application/geo+json" : "application/json",
       href: featureItemsUrl(snapshot),
     },
   ];
   if (page.nextAfter)
     links.push({
       rel: "next",
-      type: "application/geo+json",
+      type:
+        page.crs === "EPSG:4326" ? "application/geo+json" : "application/json",
       href: featureItemsUrl({ ...snapshot, after: page.nextAfter }),
     });
   return {
     type: "FeatureCollection" as const,
+    crs: { type: "name", properties: { name: page.crs } },
     features: page.features,
     links,
     numberReturned: page.features.length,

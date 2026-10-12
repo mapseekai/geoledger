@@ -5,7 +5,7 @@ import { parseLosslessJson } from "./conflicts";
 export type ImportedFeature = {
   id: string;
   raw: string;
-  reprojected?: boolean;
+  crs?: string;
 };
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -20,33 +20,40 @@ const geometryTypes = new Set([
   "GeometryCollection",
 ]);
 
-function projectedCrs(value: unknown, inherited = false): boolean {
-  if (value === undefined || value === null) return inherited;
-  if (object(value) && value.type === "name" && object(value.properties)) {
-    const name = String(value.properties.name).toUpperCase();
-    if (
-      /^(EPSG:3857|URN:OGC:DEF:CRS:EPSG::3857|HTTP:\/\/WWW\.OPENGIS\.NET\/DEF\/CRS\/EPSG\/0\/3857)$/.test(
-        name,
-      )
+export function normalizeCrs(value: string): string {
+  const name = value.trim();
+  const epsg =
+    /^(?:EPSG:|URN:OGC:DEF:CRS:EPSG::|HTTPS?:\/\/WWW\.OPENGIS\.NET\/DEF\/CRS\/EPSG\/0\/)(\d+)$/i.exec(
+      name,
+    );
+  if (epsg) return `EPSG:${Number(epsg[1])}`;
+  if (
+    /^(?:OGC:CRS84|URN:OGC:DEF:CRS:OGC:1\.3:CRS84|HTTPS?:\/\/WWW\.OPENGIS\.NET\/DEF\/CRS\/OGC\/1\.3\/CRS84)$/i.test(
+      name,
     )
-      return true;
-    if (
-      /^(EPSG:4326|URN:OGC:DEF:CRS:EPSG::4326|URN:OGC:DEF:CRS:OGC:1\.3:CRS84|OGC:CRS84|HTTP:\/\/WWW\.OPENGIS\.NET\/DEF\/CRS\/(EPSG\/0\/4326|OGC\/1\.3\/CRS84))$/.test(
-        name,
-      )
-    )
-      return false;
-  }
-  throw new Error(
-    "不支持文件声明的坐标系，请转换为 WGS84（EPSG:4326）或 Web Mercator（EPSG:3857）后上传。",
-  );
+  )
+    return "EPSG:4326";
+  return name;
 }
 
-function coordinates(value: unknown, projected: boolean): unknown {
+function declaredCrs(value: unknown, inherited: string): string {
+  if (value === undefined || value === null) return inherited;
+  if (
+    object(value) &&
+    value.type === "name" &&
+    object(value.properties) &&
+    typeof value.properties.name === "string"
+  ) {
+    const name = normalizeCrs(value.properties.name);
+    if (name && new TextEncoder().encode(name).length <= 16384) return name;
+  }
+  throw new Error("crs 必须声明非空坐标系名称或定义。");
+}
+
+function coordinates(value: unknown): unknown {
   if (!Array.isArray(value) || !value.length)
     throw new Error("coordinates 必须是非空坐标数组。");
-  if (Array.isArray(value[0]))
-    return value.map((v) => coordinates(v, projected));
+  if (Array.isArray(value[0])) return value.map((v) => coordinates(v));
   if (
     value.length < 2 ||
     value.length > 3 ||
@@ -57,15 +64,7 @@ function coordinates(value: unknown, projected: boolean): unknown {
     )
   )
     throw new Error("坐标必须包含两个或三个有限数值。");
-  const x = Number(String(value[0]));
-  const y = Number(String(value[1]));
-  const lon = projected ? ((x / 6378137) * 180) / Math.PI : x;
-  const lat = projected
-    ? (Math.atan(Math.sinh(y / 6378137)) * 180) / Math.PI
-    : y;
-  if (Math.abs(lon) > 180 || Math.abs(lat) > 90)
-    throw new Error("坐标超出经纬度范围；投影坐标文件需要声明正确的 crs。");
-  return projected ? [lon, lat, ...value.slice(2)] : value;
+  return value;
 }
 
 export const geometryLabels = { point: "点", line: "线", polygon: "面" };
@@ -117,6 +116,7 @@ export function importGeojson(
   createId: () => string = () => crypto.randomUUID(),
   family?: GeometryType,
   dimension?: 2 | 3,
+  expectedCrs?: string,
 ): ImportedFeature[] {
   let root: unknown;
   try {
@@ -125,7 +125,14 @@ export function importGeojson(
     throw new Error("文件不是有效的 JSON，请选择标准 GeoJSON 文件。");
   }
   if (!object(root)) throw new Error("文件必须包含 GeoJSON 对象。");
-  const rootProjected = projectedCrs(root.crs);
+  const rootCrs = declaredCrs(
+    root.crs,
+    expectedCrs ? normalizeCrs(expectedCrs) : "EPSG:4326",
+  );
+  if (expectedCrs && rootCrs !== normalizeCrs(expectedCrs))
+    throw new Error(
+      "文件坐标系与数据集不一致；请先转换坐标或创建对应坐标系的数据集。",
+    );
   const features =
     root.type === "FeatureCollection"
       ? root.features
@@ -177,32 +184,29 @@ export function importGeojson(
       return fail("标识不能为空或超过 256 字节。");
     if (ids.has(id)) return fail(`标识 ${id} 重复。`);
     ids.add(id);
-    let reprojected = false;
-    const featureProjected = projectedCrs(feature.crs, rootProjected);
+    const featureCrs = declaredCrs(feature.crs, rootCrs);
+    if (featureCrs !== rootCrs) return fail("一个数据集不能混用不同坐标系。");
     // Adapt standard GeoJSON to the current storage contract.
-    const geometry = (
-      value: unknown,
-      inherited = featureProjected,
-    ): unknown => {
+    const geometry = (value: unknown, inherited = featureCrs): unknown => {
       if (value === null) return null;
       if (!object(value) || !geometryTypes.has(String(value.type)))
         return fail("无效的几何对象。");
-      const projected = projectedCrs(value.crs, inherited);
+      const crs = declaredCrs(value.crs, inherited);
+      if (crs !== rootCrs) return fail("几何坐标系与数据集不一致。");
       if (value.type === "GeometryCollection") {
         if (!Array.isArray(value.geometries))
           return fail("geometries 必须是数组。");
         return {
           type: value.type,
-          geometries: value.geometries.map((g) => geometry(g, projected)),
+          geometries: value.geometries.map((g) => geometry(g, crs)),
         };
       }
       if (!Array.isArray(value.coordinates))
         return fail("coordinates 必须是数组。");
-      reprojected ||= projected;
       try {
         return {
           type: value.type,
-          coordinates: coordinates(value.coordinates, projected),
+          coordinates: coordinates(value.coordinates),
         };
       } catch (error) {
         return fail(error instanceof Error ? error.message : "无效坐标。");
@@ -214,7 +218,7 @@ export function importGeojson(
       properties: feature.properties ?? {},
       geometry: geometry(feature.geometry),
     })!;
-    return { id, raw: text, ...(reprojected ? { reprojected: true } : {}) };
+    return { id, raw: text, crs: rootCrs };
   });
 }
 

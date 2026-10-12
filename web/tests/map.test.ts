@@ -238,3 +238,28 @@ test("raster basemap is opt-in and only accepts HTTP(S) XYZ templates", () => {
   ])
     assert.equal(rasterBasemap({ GL_WEB_BASEMAP_URL: url }), undefined, url);
 });
+
+test("map conversion leaves raw projected coordinates and altitude unchanged", () => {
+  const raw = JSON.stringify({
+    type: "Feature",
+    id: "p",
+    properties: {},
+    geometry: {
+      type: "Point",
+      coordinates: [1113194.9079327357, 1118889.9748579594, 12],
+    },
+  });
+  const layer = buildLayer([{ id: "p", geojson: raw }], "EPSG:3857");
+  assert.equal(layer.items[0].raw, raw);
+  assert.equal(layer.counts.point, 1);
+  const g = layer.collection.features[0].geometry;
+  assert.equal(g.type, "Point");
+  if (g.type !== "Point") throw new Error("point");
+  assert.ok(Math.abs(g.coordinates[0] - 10) < 1e-8);
+  assert.ok(Math.abs(g.coordinates[1] - 10) < 1e-8);
+  assert.equal(g.coordinates[2], 12);
+  const local = buildLayer([{ id: "p", geojson: raw }], "LOCAL:survey");
+  assert.equal(local.items[0].raw, raw);
+  assert.equal(local.collection.features.length, 0);
+  assert.match(local.items[0].error!, /预览/);
+});

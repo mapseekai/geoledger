@@ -50,6 +50,7 @@ const variants = {
     name: text(256),
     geometryType: z.enum(["point", "line", "polygon"]),
     coordinateDimension: z.union([z.literal(2), z.literal(3)]).default(2),
+    crs: text(16384).default("EPSG:4326"),
   },
   trackTable: {
     ...project,

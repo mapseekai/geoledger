@@ -10,9 +10,10 @@ with open(os.environ["GL_TOKEN_FILE"]) as source:
 with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as client:
     info = client.info()
     project = client.create_project("python-" + str(uuid4()))
-    dataset = client.create_dataset(project.id, "places", "point", 3)
+    dataset = client.create_dataset(project.id, "places", "point", 3, crs="EPSG:3857")
+    assert dataset.crs == "EPSG:3857"
     draft = client.create_workspace(project.id)
-    feature = {"type": "Feature", "id": "one", "properties": {"exact": 18446744073709551615, "nested": {"geojson": "hello"}, "detail_json": "plain"}, "geometry": {"type": "Point", "coordinates": [1, 2, 3]}}
+    feature = {"type": "Feature", "id": "one", "properties": {"exact": 18446744073709551615, "nested": {"geojson": "hello"}, "detail_json": "plain"}, "geometry": {"type": "Point", "coordinates": [500000, 3500000, 3]}}
     assert draft.save(dataset.id, feature)["version"] == 1
     assert draft.save(dataset.id, feature)["version"] == 2
     assert draft.features(dataset.id)["features"][0] == feature
@@ -45,7 +46,7 @@ with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as cl
     except GeoLedgerError as e:
         assert e.code == "conflict" and e.request_id and not e.uncertain
     try:
-        client.create_dataset(project.id, "places", "point", 3)
+        client.create_dataset(project.id, "places", "point", 3, crs="EPSG:3857")
         raise AssertionError("duplicate accepted")
     except GeoLedgerError as e:
         assert e.code == "conflict"

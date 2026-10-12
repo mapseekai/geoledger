@@ -16,7 +16,7 @@ fn sqlite_empty_bbox_and_invalidation_do_not_scan_unrelated_drafts() -> Result<(
         INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('p','w','alice',0);
         INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES('p',1,'w','alice','seed');
         INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom)
-        VALUES('p','d','seed',1,'{}','{"type":"Point","coordinates":[20,20]}',SetSRID(GeomFromGeoJSON('{"type":"Point","coordinates":[20,20]}'),4326));
+        VALUES('p','d','seed',1,'{}','{"type":"Point","coordinates":[20,20]}',SetSRID(GeomFromGeoJSON('{"type":"Point","coordinates":[20,20]}'),0));
         ANALYZE gl_history;
         INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties) VALUES('p','w','d','seed','{}');
         ANALYZE gl_workspace_changes;
@@ -107,7 +107,7 @@ fn sqlite_empty_bbox_and_invalidation_do_not_scan_unrelated_drafts() -> Result<(
         query_steps < 1000,
         "empty Rtree query scanned draft rows: {query_steps}"
     );
-    t.batch_execute(r#"UPDATE gl_workspace_changes SET geom=SetSRID(GeomFromGeoJSON('{"type":"Point","coordinates":[0,0]}'),4326),geometry_json='{"type":"Point","coordinates":[0,0]}'"#)?;
+    t.batch_execute(r#"UPDATE gl_workspace_changes SET geom=SetSRID(GeomFromGeoJSON('{"type":"Point","coordinates":[0,0]}'),0),geometry_json='{"type":"Point","coordinates":[0,0]}'"#)?;
     let dense = crate::repository::FeatureQuery {
         project: "p".into(),
         dataset: "d".into(),
@@ -128,7 +128,7 @@ fn sqlite_empty_bbox_and_invalidation_do_not_scan_unrelated_drafts() -> Result<(
         dense_steps < 5000,
         "dense bbox enumerated all candidates: {dense_steps}"
     );
-    t.batch_execute(r#"UPDATE gl_workspace_changes SET geom=SetSRID(GeomFromGeoJSON('{"type":"Point","coordinates":[20,20]}'),4326),geom_z=SetSRID(GeomFromGeoJSON('{"type":"Point","coordinates":[20,20,3]}'),4326) WHERE feature_id='00002000'"#)?;
+    t.batch_execute(r#"UPDATE gl_workspace_changes SET geom=SetSRID(GeomFromGeoJSON('{"type":"Point","coordinates":[20,20]}'),0),geom_z=SetSRID(GeomFromGeoJSON('{"type":"Point","coordinates":[20,20,3]}'),0) WHERE feature_id='00002000'"#)?;
     let sparse = crate::repository::FeatureQuery {
         bbox: Some([19., 19., 21., 21.]),
         ..dense
@@ -177,14 +177,14 @@ fn sqlite_sparse_bbox_above_page_cap_uses_candidates_in_scoped_history_and_draft
         INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES('p',1,'w','alice','seed'),('p',2,'w','alice','later');
         WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<50000)
         INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom)
-        SELECT 'p','d',printf('%08d',n),1,'{}','{"type":"Point","coordinates":[20,20]}',MakePoint(CASE WHEN n>49900 THEN 0 ELSE 20 END,CASE WHEN n>49900 THEN 0 ELSE 20 END,4326) FROM ids;
+        SELECT 'p','d',printf('%08d',n),1,'{}','{"type":"Point","coordinates":[20,20]}',MakePoint(CASE WHEN n>49900 THEN 0 ELSE 20 END,CASE WHEN n>49900 THEN 0 ELSE 20 END,0) FROM ids;
         INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom)
         SELECT project,'w',dataset,feature_id,properties,geom FROM gl_history;
         INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom)
-        SELECT project,'other',feature_id,1,properties,MakePoint(0,0,4326) FROM gl_history WHERE feature_id<='00000100';
+        SELECT project,'other',feature_id,1,properties,MakePoint(0,0,0) FROM gl_history WHERE feature_id<='00000100';
         UPDATE gl_history SET valid_to=2 WHERE dataset='d' AND feature_id<='00000100';
         INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geom)
-        SELECT project,dataset,feature_id,2,properties,MakePoint(0,0,4326) FROM gl_history WHERE dataset='d' AND feature_id<='00000100';
+        SELECT project,dataset,feature_id,2,properties,MakePoint(0,0,0) FROM gl_history WHERE dataset='d' AND feature_id<='00000100';
     "#)?;
     let steps = Arc::new(AtomicUsize::new(0));
     let observed = steps.clone();

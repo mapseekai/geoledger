@@ -499,8 +499,10 @@ type DatasetRequest struct {
 	// 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
 	CoordinateDimension uint32        `protobuf:"varint,4,opt,name=coordinate_dimension,json=coordinateDimension,proto3" json:"coordinate_dimension,omitempty"`
 	PostgisTable        *PostgisTable `protobuf:"bytes,5,opt,name=postgis_table,json=postgisTable,proto3" json:"postgis_table,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Immutable source CRS (identifier or WKT/PROJ definition); default EPSG:4326.
+	Crs           string `protobuf:"bytes,6,opt,name=crs,proto3" json:"crs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DatasetRequest) Reset() {
@@ -566,6 +568,13 @@ func (x *DatasetRequest) GetPostgisTable() *PostgisTable {
 		return x.PostgisTable
 	}
 	return nil
+}
+
+func (x *DatasetRequest) GetCrs() string {
+	if x != nil {
+		return x.Crs
+	}
+	return ""
 }
 
 type WorkspaceRequest struct {
@@ -1749,8 +1758,10 @@ type DatasetReply struct {
 	// 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset.
 	CoordinateDimension uint32        `protobuf:"varint,4,opt,name=coordinate_dimension,json=coordinateDimension,proto3" json:"coordinate_dimension,omitempty"`
 	PostgisTable        *PostgisTable `protobuf:"bytes,5,opt,name=postgis_table,json=postgisTable,proto3" json:"postgis_table,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Immutable source CRS (identifier or WKT/PROJ definition); default EPSG:4326.
+	Crs           string `protobuf:"bytes,6,opt,name=crs,proto3" json:"crs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DatasetReply) Reset() {
@@ -1816,6 +1827,13 @@ func (x *DatasetReply) GetPostgisTable() *PostgisTable {
 		return x.PostgisTable
 	}
 	return nil
+}
+
+func (x *DatasetReply) GetCrs() string {
+	if x != nil {
+		return x.Crs
+	}
+	return ""
 }
 
 type DatasetsReply struct {
@@ -2093,8 +2111,10 @@ type FeaturesReply struct {
 	Revision         int64                  `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
 	WorkspaceVersion *int64                 `protobuf:"varint,3,opt,name=workspace_version,json=workspaceVersion,proto3,oneof" json:"workspace_version,omitempty"`
 	NextAfter        *string                `protobuf:"bytes,4,opt,name=next_after,json=nextAfter,proto3,oneof" json:"next_after,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Features and bbox use this native dataset CRS, always in XY order.
+	Crs           string `protobuf:"bytes,5,opt,name=crs,proto3" json:"crs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FeaturesReply) Reset() {
@@ -2151,6 +2171,13 @@ func (x *FeaturesReply) GetWorkspaceVersion() int64 {
 func (x *FeaturesReply) GetNextAfter() string {
 	if x != nil && x.NextAfter != nil {
 		return *x.NextAfter
+	}
+	return ""
+}
+
+func (x *FeaturesReply) GetCrs() string {
+	if x != nil {
+		return x.Crs
 	}
 	return ""
 }
@@ -4095,13 +4122,14 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\barchived\x18\x02 \x01(\bR\barchived\"S\n" +
 	"\x14DeleteProjectRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12!\n" +
-	"\fconfirm_name\x18\x02 \x01(\tR\vconfirmName\"\xd7\x01\n" +
+	"\fconfirm_name\x18\x02 \x01(\tR\vconfirmName\"\xe9\x01\n" +
 	"\x0eDatasetRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12#\n" +
 	"\rgeometry_type\x18\x03 \x01(\tR\fgeometryType\x121\n" +
 	"\x14coordinate_dimension\x18\x04 \x01(\rR\x13coordinateDimension\x12?\n" +
-	"\rpostgis_table\x18\x05 \x01(\v2\x1a.geoledger.v1.PostgisTableR\fpostgisTable\"J\n" +
+	"\rpostgis_table\x18\x05 \x01(\v2\x1a.geoledger.v1.PostgisTableR\fpostgisTable\x12\x10\n" +
+	"\x03crs\x18\x06 \x01(\tR\x03crs\"J\n" +
 	"\x10WorkspaceRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x1c\n" +
 	"\tworkspace\x18\x02 \x01(\tR\tworkspace\"\x86\x01\n" +
@@ -4193,13 +4221,14 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\fMembersReply\x122\n" +
 	"\amembers\x18\x01 \x03(\v2\x18.geoledger.v1.MemberInfoR\amembers\"\x19\n" +
 	"\aOkReply\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xd5\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xe7\x01\n" +
 	"\fDatasetReply\x12\x18\n" +
 	"\adataset\x18\x01 \x01(\tR\adataset\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12#\n" +
 	"\rgeometry_type\x18\x03 \x01(\tR\fgeometryType\x121\n" +
 	"\x14coordinate_dimension\x18\x04 \x01(\rR\x13coordinateDimension\x12?\n" +
-	"\rpostgis_table\x18\x05 \x01(\v2\x1a.geoledger.v1.PostgisTableR\fpostgisTable\"G\n" +
+	"\rpostgis_table\x18\x05 \x01(\v2\x1a.geoledger.v1.PostgisTableR\fpostgisTable\x12\x10\n" +
+	"\x03crs\x18\x06 \x01(\tR\x03crs\"G\n" +
 	"\rDatasetsReply\x126\n" +
 	"\bdatasets\x18\x01 \x03(\v2\x1a.geoledger.v1.DatasetReplyR\bdatasets\"\x85\x01\n" +
 	"\x0eWorkspaceReply\x12\x1c\n" +
@@ -4217,13 +4246,14 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\bwarnings\x18\x03 \x03(\tR\bwarnings\"@\n" +
 	"\fDiscardReply\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status\"\xd9\x01\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\"\xeb\x01\n" +
 	"\rFeaturesReply\x121\n" +
 	"\bfeatures\x18\x01 \x03(\v2\x15.geoledger.v1.FeatureR\bfeatures\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x03R\brevision\x120\n" +
 	"\x11workspace_version\x18\x03 \x01(\x03H\x00R\x10workspaceVersion\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"next_after\x18\x04 \x01(\tH\x01R\tnextAfter\x88\x01\x01B\x14\n" +
+	"next_after\x18\x04 \x01(\tH\x01R\tnextAfter\x88\x01\x01\x12\x10\n" +
+	"\x03crs\x18\x05 \x01(\tR\x03crsB\x14\n" +
 	"\x12_workspace_versionB\r\n" +
 	"\v_next_after\"\x8d\x02\n" +
 	"\x06Change\x12\x16\n" +

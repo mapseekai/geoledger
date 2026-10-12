@@ -29,12 +29,14 @@ test("table tracking uses the business SDK and validates the source", async () =
   const client = {
     trackTable: async (...args: unknown[]) => {
       assert.deepEqual(args, ["p", "roads", source]);
-      return { id: "d", postgisTable: source };
+      return { id: "d", postgisTable: source, crs: "LOCAL:test" };
     },
   } as unknown as Client;
   assert.deepEqual(await execute(client, request), {
     id: "d",
     postgisTable: source,
+    crs: "LOCAL:test",
+    crsDefinition: "LOCAL:test",
   });
   assert.equal(
     requestSchema.safeParse({ ...request, source: { ...source, table: "" } })

@@ -70,9 +70,14 @@ export function reply(data: unknown, status = 200) {
   });
 }
 export function geoReply(data: unknown) {
+  const crs = (data as { crs?: { properties?: { name?: string } } })?.crs
+    ?.properties?.name;
   return new Response(stringifyJson(data), {
     headers: {
-      "content-type": "application/geo+json; charset=utf-8",
+      "content-type":
+        crs === "EPSG:4326"
+          ? "application/geo+json; charset=utf-8"
+          : "application/json; charset=utf-8",
       "cache-control": "private, no-store",
       "x-content-type-options": "nosniff",
     },

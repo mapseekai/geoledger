@@ -15,7 +15,12 @@ test("GeoJSON next link preserves snapshot, bbox and limit without a geometry wr
   const client = {
     features: async (...args: unknown[]) => {
       calls.push(args);
-      return { features: [feature], revision: 9n, nextAfter: "a/b" };
+      return {
+        crs: "EPSG:3857",
+        features: [feature],
+        revision: 9n,
+        nextAfter: "a/b",
+      };
     },
   } as unknown as Client;
   const result = await featureCollection(client, {
@@ -26,6 +31,8 @@ test("GeoJSON next link preserves snapshot, bbox and limit without a geometry wr
     bbox: [1, 2, 3, 4],
   });
   assert.equal(result.type, "FeatureCollection");
+  assert.equal(result.crs.properties.name, "EPSG:3857");
+  assert.equal(result.links[0].type, "application/json");
   assert.equal(result.numberReturned, 1);
   assert.equal(result.features[0], feature);
   assert.match(stringifyJson(result), /"exact":18446744073709551615/);

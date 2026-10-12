@@ -78,7 +78,11 @@ export interface DatasetRequest {
   geometryType: string;
   /** 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset. */
   coordinateDimension: number;
-  postgisTable?: PostgisTable | undefined;
+  postgisTable?:
+    | PostgisTable
+    | undefined;
+  /** Immutable source CRS (identifier or WKT/PROJ definition); default EPSG:4326. */
+  crs: string;
 }
 
 export interface WorkspaceRequest {
@@ -206,7 +210,11 @@ export interface DatasetReply {
   geometryType: string;
   /** 2 = XY (default when omitted), 3 = XYZ; immutable for a dataset. */
   coordinateDimension: number;
-  postgisTable?: PostgisTable | undefined;
+  postgisTable?:
+    | PostgisTable
+    | undefined;
+  /** Immutable source CRS (identifier or WKT/PROJ definition); default EPSG:4326. */
+  crs: string;
 }
 
 export interface DatasetsReply {
@@ -240,7 +248,11 @@ export interface FeaturesReply {
   features: Feature[];
   revision: string;
   workspaceVersion?: string | undefined;
-  nextAfter?: string | undefined;
+  nextAfter?:
+    | string
+    | undefined;
+  /** Features and bbox use this native dataset CRS, always in XY order. */
+  crs: string;
 }
 
 export interface Change {
@@ -1217,7 +1229,7 @@ export const DeleteProjectRequest: MessageFns<DeleteProjectRequest> = {
 };
 
 function createBaseDatasetRequest(): DatasetRequest {
-  return { project: "", name: "", geometryType: "", coordinateDimension: 0, postgisTable: undefined };
+  return { project: "", name: "", geometryType: "", coordinateDimension: 0, postgisTable: undefined, crs: "" };
 }
 
 export const DatasetRequest: MessageFns<DatasetRequest> = {
@@ -1236,6 +1248,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     }
     if (message.postgisTable !== undefined) {
       PostgisTable.encode(message.postgisTable, writer.uint32(42).fork()).join();
+    }
+    if (message.crs !== "") {
+      writer.uint32(50).string(message.crs);
     }
     return writer;
   },
@@ -1293,6 +1308,14 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
             message.postgisTable = PostgisTable.decode(reader, reader.uint32());
             continue;
           }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.crs = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1324,6 +1347,7 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
         : isSet(object.postgis_table)
         ? PostgisTable.fromJSON(object.postgis_table)
         : undefined,
+      crs: isSet(object.crs) ? globalThis.String(object.crs) : "",
     };
   },
 
@@ -1344,6 +1368,9 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     if (message.postgisTable !== undefined) {
       obj.postgisTable = PostgisTable.toJSON(message.postgisTable);
     }
+    if (message.crs !== "") {
+      obj.crs = message.crs;
+    }
     return obj;
   },
 
@@ -1359,6 +1386,7 @@ export const DatasetRequest: MessageFns<DatasetRequest> = {
     message.postgisTable = (object.postgisTable !== undefined && object.postgisTable !== null)
       ? PostgisTable.fromPartial(object.postgisTable)
       : undefined;
+    message.crs = object.crs ?? "";
     return message;
   },
 };
@@ -3429,7 +3457,7 @@ export const OkReply: MessageFns<OkReply> = {
 };
 
 function createBaseDatasetReply(): DatasetReply {
-  return { dataset: "", name: "", geometryType: "", coordinateDimension: 0, postgisTable: undefined };
+  return { dataset: "", name: "", geometryType: "", coordinateDimension: 0, postgisTable: undefined, crs: "" };
 }
 
 export const DatasetReply: MessageFns<DatasetReply> = {
@@ -3448,6 +3476,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     }
     if (message.postgisTable !== undefined) {
       PostgisTable.encode(message.postgisTable, writer.uint32(42).fork()).join();
+    }
+    if (message.crs !== "") {
+      writer.uint32(50).string(message.crs);
     }
     return writer;
   },
@@ -3505,6 +3536,14 @@ export const DatasetReply: MessageFns<DatasetReply> = {
             message.postgisTable = PostgisTable.decode(reader, reader.uint32());
             continue;
           }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.crs = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3536,6 +3575,7 @@ export const DatasetReply: MessageFns<DatasetReply> = {
         : isSet(object.postgis_table)
         ? PostgisTable.fromJSON(object.postgis_table)
         : undefined,
+      crs: isSet(object.crs) ? globalThis.String(object.crs) : "",
     };
   },
 
@@ -3556,6 +3596,9 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     if (message.postgisTable !== undefined) {
       obj.postgisTable = PostgisTable.toJSON(message.postgisTable);
     }
+    if (message.crs !== "") {
+      obj.crs = message.crs;
+    }
     return obj;
   },
 
@@ -3571,6 +3614,7 @@ export const DatasetReply: MessageFns<DatasetReply> = {
     message.postgisTable = (object.postgisTable !== undefined && object.postgisTable !== null)
       ? PostgisTable.fromPartial(object.postgisTable)
       : undefined;
+    message.crs = object.crs ?? "";
     return message;
   },
 };
@@ -4025,7 +4069,7 @@ export const DiscardReply: MessageFns<DiscardReply> = {
 };
 
 function createBaseFeaturesReply(): FeaturesReply {
-  return { features: [], revision: "0", workspaceVersion: undefined, nextAfter: undefined };
+  return { features: [], revision: "0", workspaceVersion: undefined, nextAfter: undefined, crs: "" };
 }
 
 export const FeaturesReply: MessageFns<FeaturesReply> = {
@@ -4041,6 +4085,9 @@ export const FeaturesReply: MessageFns<FeaturesReply> = {
     }
     if (message.nextAfter !== undefined) {
       writer.uint32(34).string(message.nextAfter);
+    }
+    if (message.crs !== "") {
+      writer.uint32(42).string(message.crs);
     }
     return writer;
   },
@@ -4090,6 +4137,14 @@ export const FeaturesReply: MessageFns<FeaturesReply> = {
             message.nextAfter = reader.string();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.crs = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -4116,6 +4171,7 @@ export const FeaturesReply: MessageFns<FeaturesReply> = {
         : isSet(object.next_after)
         ? globalThis.String(object.next_after)
         : undefined,
+      crs: isSet(object.crs) ? globalThis.String(object.crs) : "",
     };
   },
 
@@ -4133,6 +4189,9 @@ export const FeaturesReply: MessageFns<FeaturesReply> = {
     if (message.nextAfter !== undefined) {
       obj.nextAfter = message.nextAfter;
     }
+    if (message.crs !== "") {
+      obj.crs = message.crs;
+    }
     return obj;
   },
 
@@ -4145,6 +4204,7 @@ export const FeaturesReply: MessageFns<FeaturesReply> = {
     message.revision = object.revision ?? "0";
     message.workspaceVersion = object.workspaceVersion ?? undefined;
     message.nextAfter = object.nextAfter ?? undefined;
+    message.crs = object.crs ?? "";
     return message;
   },
 };

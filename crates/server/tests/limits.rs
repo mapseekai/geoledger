@@ -304,6 +304,7 @@ async fn grpc_deadline_busy_and_unauthenticated_paths() -> TestResult {
             pb::DatasetRequest {
                 postgis_table: None,
                 coordinate_dimension: 2,
+                crs: "EPSG:4326".into(),
                 geometry_type: "point".into(),
                 project: project.clone(),
                 name: "roads".into(),
@@ -348,6 +349,7 @@ async fn grpc_deadline_busy_and_unauthenticated_paths() -> TestResult {
                 pb::DatasetRequest {
                     postgis_table: None,
                     coordinate_dimension: 2,
+                    crs: "EPSG:4326".into(),
                     geometry_type: "point".into(),
                     project: project.clone(),
                     name: "roads".into(),

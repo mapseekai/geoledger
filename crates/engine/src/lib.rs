@@ -33,7 +33,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 13;
+pub const FORMAT_VERSION: i32 = 14;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};

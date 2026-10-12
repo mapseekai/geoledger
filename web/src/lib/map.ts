@@ -1,3 +1,4 @@
+import proj4 from "proj4";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { isLosslessNumber, parse, stringify } from "lossless-json";
 
@@ -35,6 +36,7 @@ export type LayerItem = {
   parts: number;
   properties: PropertyRow[];
   error?: string;
+  mapGeometry?: Geometry;
 };
 export type Layer = {
   items: LayerItem[];
@@ -127,7 +129,12 @@ function walk(geometry: Geometry, stats: Stats) {
 }
 
 /** Parses one stored feature into list, inspector and map data. Never throws. */
-export function layerItem(id: string, raw: string, index: number): LayerItem {
+export function layerItem(
+  id: string,
+  raw: string,
+  index: number,
+  project?: (xy: number[]) => number[],
+): LayerItem {
   const properties = propertyRows(raw);
   const label = properties.find(
     (p) => LABEL_KEYS.includes(p.key) && p.kind === "string" && p.value.trim(),
@@ -164,6 +171,22 @@ export function layerItem(id: string, raw: string, index: number): LayerItem {
     draws: new Set(),
   };
   try {
+    if (project) {
+      const transform = (g: Geometry): void => {
+        if (g.type === "GeometryCollection") {
+          g.geometries.forEach(transform);
+          return;
+        }
+        const positions = (value: unknown): unknown => {
+          if (!Array.isArray(value)) throw new Error("几何坐标格式错误");
+          if (typeof value[0] === "number")
+            return [...project(value.slice(0, 2)), ...value.slice(2)];
+          return value.map(positions);
+        };
+        g.coordinates = positions(g.coordinates) as typeof g.coordinates;
+      };
+      transform(geometry);
+    }
     walk(geometry, stats);
   } catch (error) {
     return {
@@ -173,7 +196,10 @@ export function layerItem(id: string, raw: string, index: number): LayerItem {
       bounds: null,
       vertices: 0,
       parts: 0,
-      error: (error as Error).message,
+      error:
+        error instanceof Error
+          ? error.message
+          : "此坐标系无法转换为地图预览坐标。",
     };
   }
   const draws = drawKinds.filter((k) => stats.draws.has(k));
@@ -185,6 +211,7 @@ export function layerItem(id: string, raw: string, index: number): LayerItem {
     draws,
     kind:
       type === "GeometryCollection" && draws.length !== 1 ? "mixed" : draws[0],
+    mapGeometry: geometry,
     bounds: stats.bounds,
     vertices: stats.vertices,
     parts: stats.parts,
@@ -208,8 +235,24 @@ export function unionBounds(list: (Bounds | null)[]): Bounds | null {
 }
 
 /** Builds the layer model; the map copy carries geometry and a numeric id only. */
-export function buildLayer(features: { id: string; geojson: string }[]): Layer {
-  const items = features.map((f, i) => layerItem(f.id, f.geojson, i));
+export function buildLayer(
+  features: { id: string; geojson: string }[],
+  crs = "EPSG:4326",
+): Layer {
+  let project: ((xy: number[]) => number[]) | undefined;
+  if (crs !== "EPSG:4326") {
+    try {
+      const conversion = proj4(crs, "EPSG:4326");
+      project = (xy) => conversion.forward(xy);
+    } catch {
+      project = () => {
+        throw new Error(
+          "无法转换此坐标系用于地图预览；原始数据仍可查看和编辑。",
+        );
+      };
+    }
+  }
+  const items = features.map((f, i) => layerItem(f.id, f.geojson, i, project));
   const counts = {
     point: 0,
     line: 0,
@@ -246,7 +289,7 @@ export function mapCollection(items: LayerItem[]): FeatureCollection {
         type: "Feature",
         id: i.index,
         properties: {},
-        geometry: (JSON.parse(i.raw) as Feature).geometry,
+        geometry: i.mapGeometry ?? (JSON.parse(i.raw) as Feature).geometry,
       })),
   };
 }

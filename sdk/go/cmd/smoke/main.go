@@ -46,15 +46,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	dataset, err := client.CreateDatasetWithDimension(ctx, project.ID, "places", "point", 3)
+	dataset, err := client.CreateDatasetWithCRS(ctx, project.ID, "places", "point", 3, "EPSG:3857")
 	if err != nil {
 		return err
+	}
+	if dataset.CRS != "EPSG:3857" {
+		return fmt.Errorf("dataset CRS not preserved: %s", dataset.CRS)
 	}
 	draft, err := client.CreateWorkspace(ctx, project.ID)
 	if err != nil {
 		return err
 	}
-	feature := gl.Feature{Type: "Feature", ID: "one", Properties: map[string]any{"exact": uint64(18446744073709551615), "nested": map[string]any{"geojson": "hello"}, "detail_json": "plain"}, Geometry: map[string]any{"type": "Point", "coordinates": []int{1, 2, 3}}}
+	feature := gl.Feature{Type: "Feature", ID: "one", Properties: map[string]any{"exact": uint64(18446744073709551615), "nested": map[string]any{"geojson": "hello"}, "detail_json": "plain"}, Geometry: map[string]any{"type": "Point", "coordinates": []int{500000, 3500000, 3}}}
 	if _, err = draft.Save(ctx, dataset.ID, feature); err != nil {
 		return err
 	}
@@ -118,7 +121,7 @@ func run() error {
 	if !errors.As(err, &own) || own.Code != "conflict" || own.Uncertain {
 		return fmt.Errorf("wrong error: %v", err)
 	}
-	_, err = client.CreateDatasetWithDimension(ctx, project.ID, "places", "point", 3)
+	_, err = client.CreateDatasetWithCRS(ctx, project.ID, "places", "point", 3, "EPSG:3857")
 	if !errors.As(err, &own) || own.Code != "conflict" {
 		return fmt.Errorf("wrong duplicate error: %v", err)
 	}

@@ -11,7 +11,8 @@ const client = new Client(
 (async () => {
   try {
     const project = await client.createProject("ts-" + randomUUID());
-    const dataset = await client.createDataset(project.id, "places", "point", 3);
+    const dataset = await client.createDataset(project.id, "places", "point", 3, "EPSG:3857");
+    assert.equal(dataset.crs, "EPSG:3857");
     const draft = await client.createWorkspace(project.id);
     const feature = {
       type: "Feature",
@@ -21,7 +22,7 @@ const client = new Client(
         nested: { geojson: "hello" },
         detail_json: "plain",
       },
-      geometry: { type: "Point", coordinates: [1, 2, 3] },
+      geometry: { type: "Point", coordinates: [500000, 3500000, 3] },
     };
     assert.equal((await draft.save(dataset.id, feature)).version, 1n);
     assert.equal((await draft.save(dataset.id, feature)).version, 2n);
@@ -68,7 +69,7 @@ const client = new Client(
         e instanceof GeoLedgerError && e.code === "conflict" && !e.uncertain,
     );
     await assert.rejects(
-      client.createDataset(project.id, "places", "point", 3),
+      client.createDataset(project.id, "places", "point", 3, "EPSG:3857"),
       (e) => e.code === "conflict",
     );
     const updated = { ...feature, properties: { exact: 9007199254740993n }, geometry: { type: "Point", coordinates: [4, 5, 6] } };

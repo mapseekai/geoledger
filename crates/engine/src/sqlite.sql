@@ -1,6 +1,6 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=13));
-INSERT INTO gl_format VALUES(true,13);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=14));
+INSERT INTO gl_format VALUES(true,14);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -12,6 +12,7 @@ CREATE INDEX gl_project_members_subject ON gl_project_members(subject,project);
 CREATE TABLE gl_datasets (
  project text REFERENCES gl_projects(id), id text NOT NULL, name text NOT NULL,
  geometry_type text NOT NULL CHECK(geometry_type IN ('point','line','polygon')),
+ crs text NOT NULL DEFAULT 'EPSG:4326' CHECK(length(crs)>0 AND length(crs)<=16384),
  coordinate_dimension integer NOT NULL DEFAULT 2 CHECK(coordinate_dimension IN (2,3)),
  postgis_source text,
  PRIMARY KEY(project,id), UNIQUE(project,name));

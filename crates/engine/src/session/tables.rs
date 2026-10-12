@@ -11,6 +11,8 @@ pub(super) struct Source {
     signature: String,
     pub family: String,
     pub dimension: i32,
+    pub srid: i32,
+    pub crs: String,
     columns: Vec<String>,
 }
 fn quote(value: &str) -> String {
@@ -131,18 +133,35 @@ impl SqlTransaction {
             }
         };
         let dimension: i32 = geometry.get(2usize)?;
-        if geometry.get::<_, i64>(1usize)? != 4326 || ![2, 3].contains(&dimension) {
+        if ![2, 3].contains(&dimension) {
             return Err(Error::new(
                 400,
-                "geometry column must use SRID 4326 and XY or XYZ coordinates",
+                "geometry column must use XY or XYZ coordinates",
             ));
         }
+        let srid = geometry.get::<_, i64>(1usize)? as i32;
+        let definition = self.query_opt("SELECT auth_name,auth_srid::bigint,srtext FROM spatial_ref_sys WHERE srid=$1::bigint::integer", &[&srid])?;
+        let crs = if let Some(row) = definition {
+            let authority: Option<String> = row.get(0usize)?;
+            let code: Option<i64> = row.get(1usize)?;
+            match (authority.as_deref(), code) {
+                (Some("EPSG"), Some(code)) => format!("EPSG:{code}"),
+                _ => row
+                    .get::<_, Option<String>>(2usize)?
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| format!("POSTGIS:{srid}")),
+            }
+        } else {
+            format!("POSTGIS:{srid}")
+        };
         Ok(Source {
             table: source.clone(),
             oid,
-            signature: serde_json::to_string(&signature).map_err(Error::stored_json)?,
+            signature: serde_json::to_string(&(&signature, &crs)).map_err(Error::stored_json)?,
             family: family.into(),
             dimension,
+            srid,
+            crs,
             columns: properties,
         })
     }
@@ -187,10 +206,10 @@ impl SqlTransaction {
             serde_json::to_string(&definition).map_err(Error::stored_json)?,
         ))
     }
-    pub(super) fn guard_source(&mut self, source: &PostgisTable) -> Result<()> {
+    pub(super) fn guard_source(&mut self, source: &PostgisTable, srid: i32) -> Result<()> {
         let table = relation(source);
-        if self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE btrim({id}::text)='' OR octet_length({id}::text)>256)",id=quote(&source.id_column)), &[])?.get::<_,bool>(0usize)? {
-            return Err(Error::new(400,"business identifiers must be nonempty and at most 256 bytes"));
+        if self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE btrim({id}::text)='' OR octet_length({id}::text)>256 OR ST_SRID({geom})<>{srid})",id=quote(&source.id_column),geom=quote(&source.geometry_column)), &[])?.get::<_,bool>(0usize)? {
+            return Err(Error::new(400,"business identifiers must be nonempty and at most 256 bytes; geometries must match the column SRID"));
         }
         let key = source.id_column.replace('\'', "''");
         self.batch_execute(&format!("CREATE TRIGGER gl_versioned_write BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON {table} FOR EACH STATEMENT EXECUTE FUNCTION public.gl_source_guard(); CREATE TRIGGER gl_versioned_track AFTER INSERT OR UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION public.gl_source_track('{key}'); CREATE TRIGGER gl_versioned_truncate AFTER TRUNCATE ON {table} FOR EACH STATEMENT EXECUTE FUNCTION public.gl_source_track(); ALTER TABLE {table} ENABLE ALWAYS TRIGGER gl_versioned_track; ALTER TABLE {table} ENABLE ALWAYS TRIGGER gl_versioned_truncate"))?;
@@ -254,16 +273,17 @@ impl SqlTransaction {
         let table = relation(&source.table);
         let id = quote(&source.table.id_column);
         let geom = quote(&source.table.geometry_column);
+        let srid = source.srid;
         let mismatch = if full {
             let expected = if published {
-                "SELECT feature_id,properties,geom FROM gl_history WHERE project=$1 AND dataset=$2 AND valid_to IS NULL AND properties IS NOT NULL AND feature_id NOT IN (SELECT feature_id FROM gl_merge_stage WHERE dataset=$2) UNION ALL SELECT feature_id,gl_json_field(after_value,'properties'),ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field(after_value,'geometry')),4326) FROM gl_merge_stage WHERE dataset=$2 AND after_value IS NOT NULL"
+                "SELECT feature_id,properties,geom FROM gl_history WHERE project=$1 AND dataset=$2 AND valid_to IS NULL AND properties IS NOT NULL AND feature_id NOT IN (SELECT feature_id FROM gl_merge_stage WHERE dataset=$2) UNION ALL SELECT feature_id,gl_json_field(after_value,'properties'),ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field(after_value,'geometry')),0) FROM gl_merge_stage WHERE dataset=$2 AND after_value IS NOT NULL"
             } else {
                 "SELECT feature_id,properties,geom FROM gl_history WHERE project=$1 AND dataset=$2 AND valid_to IS NULL AND properties IS NOT NULL"
             };
-            self.query_one(&format!("WITH expected AS ({expected}) SELECT EXISTS(SELECT 1 FROM {table} t FULL JOIN expected h ON t.{id}::text=h.feature_id WHERE t.{id} IS NULL OR h.feature_id IS NULL OR (to_jsonb(t)-$3::text-$4::text) IS DISTINCT FROM h.properties::jsonb OR ST_AsEWKB(t.{geom}) IS DISTINCT FROM ST_AsEWKB(h.geom))"), &[&project,&dataset,&source.table.id_column,&source.table.geometry_column])?.get::<_,bool>(0usize)?
+            self.query_one(&format!("WITH expected AS ({expected}) SELECT EXISTS(SELECT 1 FROM {table} t FULL JOIN expected h ON t.{id}::text=h.feature_id WHERE t.{id} IS NULL OR h.feature_id IS NULL OR (to_jsonb(t)-$3::text-$4::text) IS DISTINCT FROM h.properties::jsonb OR ST_SRID(t.{geom})<>{srid} OR ST_AsEWKB(ST_SetSRID(t.{geom},0)) IS DISTINCT FROM ST_AsEWKB(h.geom))"), &[&project,&dataset,&source.table.id_column,&source.table.geometry_column])?.get::<_,bool>(0usize)?
         } else {
             // LIMIT keeps the candidate set driving native primary-key lookups, even before ANALYZE.
-            self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM gl_source_changes k LEFT JOIN LATERAL (SELECT t.{id}::text AS feature_id,(to_jsonb(t)-$3::text-$4::text) AS properties,t.{geom} AS geom FROM {table} t WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($3::text,k.feature_id))).{id} LIMIT 1) t ON true LEFT JOIN LATERAL (SELECT properties,geom FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=k.feature_id AND valid_to IS NULL LIMIT 1) h ON true LEFT JOIN gl_merge_stage s ON s.dataset=$2 AND s.feature_id=k.feature_id AND $7::boolean WHERE k.schema_name=$5 AND k.table_name=$6 AND (t.properties IS DISTINCT FROM (CASE WHEN s.feature_id IS NOT NULL THEN gl_json_field(s.after_value,'properties') ELSE h.properties END)::jsonb OR ST_AsEWKB(t.geom) IS DISTINCT FROM ST_AsEWKB(CASE WHEN s.feature_id IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field(s.after_value,'geometry')),4326) ELSE h.geom END) OR (t.feature_id IS NOT NULL AND (btrim(t.feature_id)='' OR octet_length(t.feature_id)>256))))"), &[&project,&dataset,&source.table.id_column,&source.table.geometry_column,&source.table.schema,&source.table.table,&published])?.get::<_,bool>(0usize)?
+            self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM gl_source_changes k LEFT JOIN LATERAL (SELECT t.{id}::text AS feature_id,(to_jsonb(t)-$3::text-$4::text) AS properties,t.{geom} AS geom FROM {table} t WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($3::text,k.feature_id))).{id} LIMIT 1) t ON true LEFT JOIN LATERAL (SELECT properties,geom FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=k.feature_id AND valid_to IS NULL LIMIT 1) h ON true LEFT JOIN gl_merge_stage s ON s.dataset=$2 AND s.feature_id=k.feature_id AND $7::boolean WHERE k.schema_name=$5 AND k.table_name=$6 AND (t.properties IS DISTINCT FROM (CASE WHEN s.feature_id IS NOT NULL THEN gl_json_field(s.after_value,'properties') ELSE h.properties END)::jsonb OR ST_SRID(t.geom)<>{srid} OR ST_AsEWKB(ST_SetSRID(t.geom,0)) IS DISTINCT FROM ST_AsEWKB(CASE WHEN s.feature_id IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field(s.after_value,'geometry')),0) ELSE h.geom END) OR (t.feature_id IS NOT NULL AND (btrim(t.feature_id)='' OR octet_length(t.feature_id)>256))))"), &[&project,&dataset,&source.table.id_column,&source.table.geometry_column,&source.table.schema,&source.table.table,&published])?.get::<_,bool>(0usize)?
         };
         if mismatch {
             return Err(drift());
@@ -344,11 +364,12 @@ impl SqlTransaction {
                         columns.extend(names.clone());
                         let mut values = vec![
                             format!("r.{id}"),
-                            "ST_SetSRID(ST_GeomFromGeoJSON($3::text),4326)".into(),
+                            format!("ST_SetSRID(ST_GeomFromGeoJSON($3::text),{})", source.srid),
                         ];
                         values.extend(names.iter().map(|c| format!("r.{c}")));
                         let mut assignments = vec![format!(
-                            "{geom}=ST_SetSRID(ST_GeomFromGeoJSON($3::text),4326)"
+                            "{geom}=ST_SetSRID(ST_GeomFromGeoJSON($3::text),{})",
+                            source.srid
                         )];
                         assignments.extend(names.iter().map(|c| format!("{c}=r.{c}")));
                         // The source lock makes update-then-insert atomic, including deferred primary keys.
@@ -403,8 +424,10 @@ impl SqlTransaction {
                 let names = source.columns.iter().map(|c| quote(c)).collect::<Vec<_>>();
                 let mut columns = vec![id.clone(), geom.clone()];
                 columns.extend(names.clone());
-                let geometry =
-                    "ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field(s.after_value,'geometry')),4326)";
+                let geometry = format!(
+                    "ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field(s.after_value,'geometry')),{})",
+                    source.srid
+                );
                 let mut values = vec![format!("r.{id}"), geometry.to_owned()];
                 values.extend(names.iter().map(|c| format!("r.{c}")));
                 let mut assignments = vec![format!("{geom}={geometry}")];

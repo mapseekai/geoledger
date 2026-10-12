@@ -222,7 +222,7 @@ SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布�
 | 期限耗尽 | 504 |
 | 存储不可用 | 503 |
 
-Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 不设独立于请求/响应预算的字节上限、最多 256 个属性；EPSG:4326，XY/XYZ。
+Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 不设独立于请求/响应预算的字节上限、最多 256 个属性；坐标系按数据集声明，XY/XYZ。
 标识采用有效文本字符，属性键和值使用 U+0000 以外的 JSON 文本；服务统一校验输入并返回业务错误。容量配置见 [生产运行](production.md)。
 
 ## 当前版本契约
@@ -231,7 +231,7 @@ Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / ar
 
 当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-当前存储格式为 13，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+当前存储格式为 14，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
 
 `Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 返回当前服务的实际编码请求预算，默认 67,108,864 字节。单要素仍受所在请求和响应的总预算约束。
 
@@ -243,7 +243,7 @@ Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / ar
 
 创建数据集必须传 `geometry_type`（SDK TypeScript 使用 `geometryType`）：`point`、`line` 或 `polygon`。列表与创建结果返回该字段。新增 `RenameProject`、`RenameDataset`、`DeleteDataset` RPC，以及同名 snake_case HTTP 操作。重命名请求包含 `project`、`name`，数据集操作还包含 `dataset`。删除数据集包含 `project`、`dataset`、`confirm_name`，确认名称必须完全匹配。项目重命名和项目／数据集删除限 owner 或平台管理员；数据集重命名限可写成员。
 
-Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓扑问题，并在同一保存事务的审计事件中记录。此类几何按原坐标保存，不自动修复；坐标结构、维度、闭环、有限数值、经纬度范围及数据集几何类型仍严格校验。工作区累计要素数不再限制为 1000，单次 Save 仍限制 1–100 个修改。
+Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓扑问题，并在同一保存事务的审计事件中记录。此类几何按原坐标保存，不自动修复；坐标结构、维度、闭环、有限数值及数据集几何类型仍严格校验。工作区累计要素数不再限制为 1000，单次 Save 仍限制 1–100 个修改。
 
 `WorkspaceSummary`（`workspace_summary`）和 `CommitSummary`（`commit_summary`）返回 `total` 与按数据集分组的 `datasets`（id、name、added、deleted、modified）；工作区返回 `version`，历史版本返回 `revision`。统计沿用 Diff/Commit 的存在性分类和访问权限，在同一读取事务内完成，不读取或传输几何与属性正文。工作区仅所有者可读；历史统计对项目成员开放。数据集删除后统计跟随保留的记录变化，名称使用当前名称。四种 SDK 提供对应业务方法。
 
@@ -282,3 +282,12 @@ SDK 对应 `tokens`、`issue_token`、`reissue_token`、`revoke_token`；Go 使�
 冲突分析按 project、workspace、base_revision、workspace_version、head 保存派生键索引。相同状态下翻页复用精确 total，并按复合游标读取本页详情；保存、解决冲突、rebase 或 HEAD 变化后重新计算。索引构建和查询在项目锁保护下执行，每次调用仍检查成员权限及工作区归属，派生缓存不授予额外访问权限。
 
 数据库语句期限耗尽返回 deadline_exceeded/504；明确的外部数据库取消返回 cancelled，gRPC 使用 CANCELLED。提交附近断连或超时不能据此断定写入未发生，继续使用原发布请求确认结果。
+
+
+### 数据集坐标系
+
+创建数据集接受 `crs`：EPSG 标识（例如 `EPSG:3857`、`EPSG:4490`、`EPSG:32650`）、自定义名称或 WKT/PROJ 定义，最多 16384 UTF-8 字节；省略时默认 `EPSG:4326`。坐标系和坐标维度创建后固定，一个数据集使用一个 CRS。创建、列表、重命名及要素查询响应返回 `crs`。纳管 PostGIS 表自动读取几何列 SRID，发布回原表时保留其 SRID。
+
+所有读写、历史、冲突与 bbox 查询均使用原坐标，坐标顺序始终为 XY（可附 Z），不会自动转换；bbox 为 `[minX,minY,maxX,maxY]`，必须使用该数据集坐标系。不限制 EPSG 白名单或经纬度范围，但仍检查有限数值、结构、维度与几何类型。不同 CRS 的数据需先转换或分别创建数据集，不能直接混写。Web 要素接口对 EPSG:4326 使用 `application/geo+json`，其余 CRS 使用 `application/json` 并附带 CRS 声明。带非 WGS84 坐标的 JSON 是 GeoLedger 原坐标交换格式，不应当作 RFC 7946 经纬度 GeoJSON 交给不了解 CRS 的客户端。
+
+SDK：Rust `create_dataset_with_crs`、Go `CreateDatasetWithCRS`、Python `create_dataset(..., crs=...)`、TypeScript `createDataset(project,name,geometryType,dimension,crs)`。CLI 的 `create_dataset` JSON 参数沿用协议字段 `crs`。

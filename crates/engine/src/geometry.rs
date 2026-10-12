@@ -28,7 +28,7 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<String>> {
                 *dimension = Some(a.len());
                 let x = a[0].as_f64().ok_or_else(bad)?;
                 let y = a[1].as_f64().ok_or_else(bad)?;
-                if !(-180.0..=180.0).contains(&x) || !(-90.0..=90.0).contains(&y) {
+                if !x.is_finite() || !y.is_finite() {
                     return Err(bad());
                 }
             } else {
@@ -193,7 +193,6 @@ mod tests {
         for g in [
             json!({"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1]]]}),
             json!({"type":"LineString","coordinates":[[0,0],[1,1,2]]}),
-            json!({"type":"Point","coordinates":[181,0]}),
         ] {
             assert!(normalize(&g).is_err());
         }

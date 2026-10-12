@@ -44,7 +44,11 @@ export function CreateDatasetDialog({
     dataset?: Dataset;
     workspace?: Workspace;
     rows?: ImportedFeature[];
-    shape?: { geometryType: GeometryType; coordinateDimension: 2 | 3 };
+    shape?: {
+      geometryType: GeometryType;
+      coordinateDimension: 2 | 3;
+      crs: string;
+    };
     offset: number;
     pending?: boolean;
   }>({ offset: 0 });
@@ -76,6 +80,7 @@ export function CreateDatasetDialog({
             let shape = {
               geometryType: family,
               coordinateDimension: dimension,
+              crs: String(form.get("crs") || "EPSG:4326").trim(),
             };
             if (mode === "file" && !current.rows) {
               const file = form.get("file") as File;
@@ -98,7 +103,10 @@ export function CreateDatasetDialog({
                   worker.terminate();
                   reject(new Error("GeoJSON 解析失败，请重试。"));
                 };
-                worker.postMessage({ file });
+                worker.postMessage({
+                  file,
+                  crs: String(form.get("crs") || "").trim() || undefined,
+                });
               });
               if (!result.shape)
                 throw new Error(
@@ -220,6 +228,21 @@ export function CreateDatasetDialog({
                     </SelectGroup>
                   </SelectContent>
                 </Select>
+              </Field>
+            )}
+            {mode !== "postgis" && (
+              <Field>
+                <FieldLabel htmlFor="dataset-crs">坐标系</FieldLabel>
+                <Input
+                  id="dataset-crs"
+                  name="crs"
+                  maxLength={16384}
+                  placeholder="EPSG:4326、EPSG:4490 或 WKT / PROJ 定义"
+                />
+                <FieldDescription>
+                  保留原始坐标。留空时读取文件声明，无声明则使用
+                  EPSG:4326；创建后不可更改。
+                </FieldDescription>
               </Field>
             )}
             {mode === "postgis" ? (

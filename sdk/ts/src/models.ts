@@ -136,6 +136,7 @@ export interface Dataset {
   postgisTable?: PostgisTable;
   geometryType: GeometryType;
   coordinateDimension: 2 | 3;
+  crs: string;
   id: string;
   name: string;
 }
@@ -159,6 +160,7 @@ export interface DiscardResult {
 }
 
 export interface FeaturePage {
+  crs: string;
   features: Feature[];
   revision: bigint;
   workspaceVersion?: bigint;
