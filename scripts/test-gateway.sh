@@ -31,7 +31,7 @@ sed -e "s#/etc/geoledger/tls/#$work/#g" \
     -e "s#server geoledger:7881#server 127.0.0.1:$http_port#" \
     -e "s#server geoledger:7882#server 127.0.0.1:$grpc_port#" \
     -e "s#server geoledger:3000#server 127.0.0.1:9#" \
-    -e "s#listen 443 ssl;#listen $tls_port ssl;#" \
+    -e "s#listen 443 ssl http2;#listen $tls_port ssl http2;#" \
     -e "/listen \[::\]/d" \
     -e "s#listen 80;#listen $plain_port;#" \
     -e "s#server_name api.geoledger.example;#server_name 127.0.0.1;#" \
@@ -40,7 +40,7 @@ sed -e "s#/etc/geoledger/tls/#$work/#g" \
     deploy/gateway/nginx.conf > "$work/nginx.conf"
 sed -i "1i pid $work/nginx.pid;\nerror_log $work/error.log;" "$work/nginx.conf"
 sed -i "s#^http {#http {\n    client_body_temp_path $work/body;\n    proxy_temp_path $work/proxy;\n    fastcgi_temp_path $work/fcgi;\n    uwsgi_temp_path $work/uwsgi;\n    scgi_temp_path $work/scgi;#" "$work/nginx.conf"
-"$nginx_bin" -t -c "$work/nginx.conf" -p "$work" 2>&1 | grep -q "test is successful"
+"$nginx_bin" -t -c "$work/nginx.conf" -p "$work"
 "$nginx_bin" -c "$work/nginx.conf" -p "$work"
 for _ in $(seq 100); do [[ -f "$work/data/admin-credentials.json" ]] && break; sleep 0.1; done
 for _ in $(seq 100); do curl -fsS --cacert "$work/ca.crt" "https://127.0.0.1:$tls_port/ready" >/dev/null 2>&1 && break; sleep 0.1; done
