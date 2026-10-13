@@ -111,17 +111,21 @@ fn shift_geometry(feature: &mut Value) -> Result<(), Failure> {
         Ok(())
     })?;
     let mut delta = [0.0; 2];
-    for (axis, bound) in [180.0, 90.0].into_iter().enumerate() {
-        if minimum[axis] < -bound || maximum[axis] > bound || !minimum[axis].is_finite() {
-            return Err("geometry requires nonempty longitude/latitude coordinates".into());
+    for axis in 0..2 {
+        if !minimum[axis].is_finite() {
+            return Err("nonempty finite native XY coordinates required".into());
         }
-        delta[axis] = if maximum[axis] <= bound - 1e-7 {
-            1e-7
-        } else if minimum[axis] >= -bound + 1e-7 {
-            -1e-7
-        } else {
-            return Err("geometry spans both coordinate bounds; cannot translate".into());
-        };
+        // One representable offset per axis preserves ring closure and Z in any CRS.
+        let scale = minimum[axis].abs().max(maximum[axis].abs());
+        let step = (scale * f64::EPSILON * 4.0).max(1e-7);
+        delta[axis] = if maximum[axis] > 0.0 { -step } else { step };
+        for edge in [minimum[axis], maximum[axis]] {
+            if !(edge + delta[axis]).is_finite() || edge + delta[axis] == edge {
+                return Err(
+                    "geometry cannot be translated with finite distinct coordinates".into(),
+                );
+            }
+        }
     }
     positions(coords, &mut |values| {
         for axis in 0..2 {
@@ -435,12 +439,26 @@ mod tests {
         assert_eq!(ring[0][0], json!(180.0 - 1e-7));
         assert_eq!(ring[0][1], json!(90.0 - 1e-7));
         assert_eq!(feature["geometry"]["type"], "Polygon");
-        let mut invalid = json!({"geometry":{"coordinates":[181,0]}});
+        let mut invalid = json!({"geometry":{"coordinates":[]}});
         assert!(shift_geometry(&mut invalid).is_err());
         let parsed: Manifest = serde_json::from_value(
             json!({"project":"p","dataset":"d","count":1,"seed_ids":["1"]}),
         )?;
         assert!(parsed.update_geometry);
+        Ok(())
+    }
+    #[test]
+    fn geometry_translation_accepts_projected_and_large_coordinates() -> Result<(), Failure> {
+        for (x, y) in [(500000.0, 3500000.0), (181.0, -91.0), (1e15, -1e15)] {
+            let mut feature = json!({"geometry":{"type":"Point","coordinates":[x,y,7]}});
+            shift_geometry(&mut feature)?;
+            let coordinates = &feature["geometry"]["coordinates"];
+            assert_ne!(coordinates[0], json!(x));
+            assert_ne!(coordinates[1], json!(y));
+            assert!(coordinates[0].as_f64().unwrap().is_finite());
+            assert!(coordinates[1].as_f64().unwrap().is_finite());
+            assert_eq!(coordinates[2], 7);
+        }
         Ok(())
     }
     #[test]

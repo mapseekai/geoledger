@@ -6,6 +6,8 @@ and, for PostGIS, its own container and business table. Never use production dat
 """
 import argparse
 import json
+import math
+import re
 import os
 from pathlib import Path
 import platform
@@ -19,6 +21,83 @@ import urllib.request
 import uuid
 
 from benchmark import fingerprint, monitor, native_leaks, ports, stop
+
+
+# SQL fixture initialization targets the current service storage contract only.
+STORAGE_FORMAT = 14
+INTERNAL_SRID = 0
+
+
+def check_storage_format(version):
+    if version != STORAGE_FORMAT:
+        raise ValueError(f"fixture seeding requires storage format {STORAGE_FORMAT}; server created {version}; rebuild the current server")
+
+
+def fixture_crs(metadata, requested=None):
+    declared = metadata.get("crs")
+    for value in (declared, requested):
+        if value is not None and (not isinstance(value, str) or not value.strip() or len(value.encode()) > 16384 or "\0" in value):
+            raise ValueError("fixture CRS must be a nonempty CRS identifier or definition")
+    if declared is not None and requested is not None and declared.strip() != requested.strip():
+        raise ValueError("--crs differs from fixture metadata CRS; verify the source coordinates")
+    value = requested if requested is not None else declared
+    if value is None:
+        raise ValueError("fixture CRS is missing; regenerate metadata with an explicit source CRS or pass --crs; coordinates are not reprojected")
+    return value.strip()
+
+
+def postgis_srid(crs):
+    match = re.fullmatch(r"(?:EPSG|POSTGIS):([0-9]{1,9})", crs)
+    if not match:
+        raise ValueError("PostGIS fixture CRS must identify a registered EPSG:<srid> or POSTGIS:<srid>")
+    return int(match[1])
+
+
+def geometry_positions(value):
+    """Read finite XY/XYZ positions without modifying source coordinates."""
+    if not isinstance(value, list):
+        raise ValueError("coordinates must be arrays")
+    if value and isinstance(value[0], (int, float)):
+        if len(value) not in (2, 3) or any(isinstance(n, bool) or not isinstance(n, (int, float)) or not math.isfinite(n) for n in value):
+            raise ValueError("finite XY or XYZ coordinates required")
+        yield value
+    else:
+        for item in value:
+            yield from geometry_positions(item)
+
+
+def shift_geometry(geometry):
+    """Translate finite native XY uniformly; retain Z, type, and ring closure."""
+    positions = list(geometry_positions(geometry["coordinates"]))
+    if not positions:
+        raise ValueError("nonempty geometry required for translation")
+    deltas = []
+    for axis in range(2):
+        low = min(p[axis] for p in positions)
+        high = max(p[axis] for p in positions)
+        step = max(1e-7, max(abs(low), abs(high)) * sys.float_info.epsilon * 4)
+        delta = -step if high > 0 else step
+        if any(not math.isfinite(v + delta) or v + delta == v for v in (low, high)):
+            raise ValueError("geometry cannot be translated with finite distinct coordinates")
+        deltas.append(delta)
+    for position in positions:
+        for axis, delta in enumerate(deltas):
+            position[axis] += delta
+
+
+def postgis_seed_sql(project, dataset, revision, source_srid):
+    # Business coordinates retain their declared SRID. Shared history uses SRID 0
+    # and the dataset CRS supplies coordinate meaning; neither path reprojects.
+    return f"""BEGIN;
+SELECT set_config('geoledger.publication_table','business.source'::regclass::oid::text,true);
+CREATE TEMP TABLE fixture_payload(payload text);
+COPY fixture_payload FROM '/tmp/fixture.jsonl' WITH(FORMAT csv,DELIMITER E'\\x01',QUOTE E'\\x02');
+INSERT INTO business.source SELECT payload::jsonb->>'id',payload::jsonb->'properties'->'attributes',ST_SetSRID(ST_GeomFromGeoJSON(payload::jsonb->'geometry'),{source_srid}) FROM fixture_payload;
+INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT '{project}','{dataset}',payload::jsonb->>'id',{int(revision)},(payload::jsonb->'properties')::text,(payload::jsonb->'geometry')::text,ST_SetSRID(ST_GeomFromGeoJSON(payload::jsonb->'geometry'),{INTERNAL_SRID}) FROM fixture_payload;
+DO $$ BEGIN IF to_regclass('public.gl_source_changes') IS NOT NULL THEN EXECUTE 'DELETE FROM gl_source_changes'; END IF; END $$;
+ANALYZE business.source; ANALYZE gl_history; COMMIT;
+SELECT count(*) FROM business.source;
+"""
 
 
 def compact(value):
@@ -42,12 +121,20 @@ def collection(geometry):
     return compact({"type": "GeometryCollection", "geometries": parts})
 
 
-def rows(path):
+def rows(path, dimension=None):
     with path.open() as source:
         for index, line in enumerate(source, 1):
             value = json.loads(line)
             if value.get("type") != "Feature" or value.get("id") != f"{index:012}" or not isinstance(value.get("properties", {}).get("attributes"), dict):
                 raise ValueError(f"invalid fixture row {index}")
+            if dimension is not None:
+                seen = False
+                for position in geometry_positions(value["geometry"]["coordinates"]):
+                    seen = True
+                    if len(position) != dimension:
+                        raise ValueError(f"fixture row {index} coordinate dimension differs: expected {dimension}, got {len(position)}")
+                if not seen:
+                    raise ValueError(f"fixture row {index} requires a nonempty geometry")
             yield value
 
 
@@ -57,10 +144,16 @@ def sqlite_seed(path, fixture, project, dataset, revision, dimension, extension)
         db.load_extension(extension)
         db.enable_load_extension(False)
         db.execute("PRAGMA foreign_keys=ON")
+        if dimension not in (2, 3):
+            raise ValueError("fixture dimension must be 2 or 3")
+        check_storage_format(db.execute("SELECT version FROM gl_format").fetchone()[0])
         column = "geom_z" if dimension == 3 else "geom"
-        sql = f"INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,{column}) VALUES(?,?,?,?,?,?,coalesce(SetSRID(GeomFromGeoJSON(?),4326),SetSRID(GeomFromGeoJSON(?),4326)))"
+        contract = db.execute("SELECT coord_dimension,srid FROM geometry_columns WHERE f_table_name='gl_history' AND f_geometry_column=?", (column,)).fetchone()
+        if contract != (dimension, INTERNAL_SRID):
+            raise ValueError(f"gl_history.{column} geometry contract differs: expected dimension/SRID {(dimension, INTERNAL_SRID)}, got {contract}")
+        sql = f"INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,{column}) VALUES(?,?,?,?,?,?,coalesce(SetSRID(GeomFromGeoJSON(?),{INTERNAL_SRID}),SetSRID(GeomFromGeoJSON(?),{INTERNAL_SRID})))"
         count = 0
-        for feature in rows(fixture):
+        for feature in rows(fixture, dimension):
             count += 1
             if count == 1:
                 continue  # The API published the first row to establish a real baseline revision.
@@ -113,14 +206,7 @@ def verify_source_crud(call, psql, project, dataset, first, batch_sizes=(1, 100,
         for feature in features:
             feature["properties"]["attributes"]["incremental_source_verification"] = prefix
 
-            def translate(coordinates):
-                if coordinates and isinstance(coordinates[0], (int, float)):
-                    for axis, bound in enumerate([180.0, 90.0]):
-                        coordinates[axis] += -1e-7 if coordinates[axis] > bound - 1e-7 else 1e-7
-                else:
-                    for item in coordinates:
-                        translate(item)
-            translate(feature["geometry"]["coordinates"])
+            shift_geometry(feature["geometry"])
         publish(features)
         verify(features)
         publish([None] * size)
@@ -202,6 +288,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["server", "client", "fixture", "metadata", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--crs", help="source CRS; required when fixture metadata has no crs")
     parser.add_argument("--backend", choices=["sqlite", "postgis"], default="sqlite")
     parser.add_argument("--postgis-image", default="postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6")
     parser.add_argument("--rounds", type=int, default=10)
@@ -218,11 +305,14 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     metadata = json.loads(args.metadata.read_text())
+    crs = fixture_crs(metadata, args.crs)
+    metadata["crs"] = crs
+    source_srid = postgis_srid(crs) if args.backend == "postgis" else None
     dimension = metadata["dimension"]
     family = metadata["geometry_type"]
     if dimension not in [2, 3] or family not in ["point", "line", "polygon"] or metadata["features"] < 1:
         raise ValueError("invalid fixture metadata")
-    first = next(rows(args.fixture))
+    first = next(rows(args.fixture, dimension))
     kind = first["geometry"]["type"]
     if kind not in ["Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon"]:
         raise ValueError("typed point/line/polygon fixture required")
@@ -238,9 +328,9 @@ def main():
     server = stats = None
     docker_started = False
     log = stats_log = None
-    result = {"success": False, "backend": args.backend}
+    result = {"success": False, "backend": args.backend, "phase": "startup", "crs": crs, "internal_srid": INTERNAL_SRID, "source_srid": source_srid}
     command = [str(args.server.resolve()), "--storage", args.backend, "--data-dir", str(output / "data"), "--http", f"127.0.0.1:{http}", "--grpc", f"127.0.0.1:{grpc}", "--admin-subjects", "admin", "--request-timeout-secs", "600", "--db-statement-timeout-secs", "600"]
-    (output / "environment.json").write_text(json.dumps({"backend": args.backend, "platform": platform.platform(), "server_command": command, "server_sha256": fingerprint(args.server), "client_sha256": fingerprint(args.client), "fixture": str(args.fixture.resolve()), "fixture_sha256": fingerprint(args.fixture), "metadata": metadata, "rounds": args.rounds, "load_seconds": args.load_seconds, "load_workers": args.load_workers, "postgis_image": args.postgis_image if args.backend == "postgis" else None, "timeout_seconds": args.timeout, "fixture_method": "untimed SQL in fresh disposable storage; measured client RPC only"}, indent=2))
+    (output / "environment.json").write_text(json.dumps({"backend": args.backend, "platform": platform.platform(), "server_command": command, "server_sha256": fingerprint(args.server), "client_sha256": fingerprint(args.client), "fixture": str(args.fixture.resolve()), "fixture_sha256": fingerprint(args.fixture), "metadata": metadata, "rounds": args.rounds, "load_seconds": args.load_seconds, "load_workers": args.load_workers, "postgis_image": args.postgis_image if args.backend == "postgis" else None, "timeout_seconds": args.timeout, "expected_storage_format": STORAGE_FORMAT, "internal_srid": INTERNAL_SRID, "source_srid": source_srid, "fixture_method": "untimed SQL in fresh disposable storage; measured client RPC only"}, indent=2))
 
     def psql(sql):
         completed = subprocess.run(["docker", "exec", "-i", container, "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "geoledger_test"], input=sql, capture_output=True, text=True)
@@ -294,8 +384,12 @@ def main():
                 raise RuntimeError(f"{action}: HTTP {error.code}: {error.read().decode()}") from error
         project = str(uuid.UUID(call("create_project", {"name": "incremental benchmark"})["project"]))
         started = time.monotonic()
+        result["phase"] = "fixture"
         if args.backend == "sqlite":
-            dataset = str(uuid.UUID(call("create_dataset", {"project": project, "name": "background", "geometry_type": family, "coordinate_dimension": dimension})["dataset"]))
+            created = call("create_dataset", {"project": project, "name": "background", "geometry_type": family, "coordinate_dimension": dimension, "crs": crs})
+            if created.get("crs") != crs:
+                raise ValueError(f"dataset CRS differs: expected {crs}, got {created.get('crs')}")
+            dataset = str(uuid.UUID(created["dataset"]))
             workspace = call("create_workspace", {"project": project})["workspace"]
             saved = call("save", {"project": project, "workspace": workspace, "expected_workspace_version": 0, "edits": [{"dataset": dataset, "feature_id": first["id"], "feature": first}]})
             revision = call("publish", {"project": project, "workspace": workspace, "expected_workspace_version": saved["version"], "request_id": str(uuid.uuid4()), "message": "fixture baseline"})["revision"]
@@ -303,21 +397,19 @@ def main():
             count = sqlite_seed(output / "data/geoledger.sqlite3", args.fixture, project, dataset, revision, dimension, extension)
             server = start_server()
         else:
-            psql(f"CREATE SCHEMA business; CREATE TABLE business.source(id text PRIMARY KEY, attributes jsonb, geom geometry({kind}{'Z' if dimension == 3 else ''},4326));")
-            dataset = str(uuid.UUID(call("create_dataset", {"project": project, "name": "background", "postgis_table": {"schema": "business", "table": "source", "id_column": "id", "geometry_column": "geom"}})["dataset"]))
+            check_storage_format(int(psql("SELECT version FROM gl_format")))
+            psql(f"CREATE SCHEMA business; CREATE TABLE business.source(id text PRIMARY KEY, attributes jsonb, geom geometry({kind}{'Z' if dimension == 3 else ''},{source_srid}));")
+            created = call("create_dataset", {"project": project, "name": "background", "postgis_table": {"schema": "business", "table": "source", "id_column": "id", "geometry_column": "geom"}})
+            if (created.get("geometry_type"), created.get("coordinate_dimension"), created.get("crs")) != (family, dimension, crs):
+                raise ValueError("bound source geometry type, dimension or CRS differs from fixture metadata")
+            dataset = str(uuid.UUID(created["dataset"]))
             revision = call("create_workspace", {"project": project})["base_revision"]
+            # Validate dimensions before COPY; native parsers may promote XY to XYZ.
+            for _ in rows(args.fixture, dimension):
+                pass
             # Server-owned schema stays intact; bypass only this disposable fixture's write guard.
             subprocess.run(["docker", "cp", str(args.fixture.resolve()), container + ":/tmp/fixture.jsonl"], check=True, capture_output=True)
-            sql = f"""BEGIN;
-SELECT set_config('geoledger.publication_table','business.source'::regclass::oid::text,true);
-CREATE TEMP TABLE fixture_payload(payload text);
-COPY fixture_payload FROM '/tmp/fixture.jsonl' WITH(FORMAT csv,DELIMITER E'\\x01',QUOTE E'\\x02');
-INSERT INTO business.source SELECT payload::jsonb->>'id',payload::jsonb->'properties'->'attributes',ST_SetSRID(ST_GeomFromGeoJSON(payload::jsonb->'geometry'),4326) FROM fixture_payload;
-INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT '{project}','{dataset}',payload::jsonb->>'id',{int(revision)},(payload::jsonb->'properties')::text,(payload::jsonb->'geometry')::text,ST_SetSRID(ST_GeomFromGeoJSON(payload::jsonb->'geometry'),4326) FROM fixture_payload;
-DO $$ BEGIN IF to_regclass('public.gl_source_changes') IS NOT NULL THEN EXECUTE 'DELETE FROM gl_source_changes'; END IF; END $$;
-ANALYZE business.source; ANALYZE gl_history; COMMIT;
-SELECT count(*) FROM business.source;
-"""
+            sql = postgis_seed_sql(project, dataset, revision, source_srid)
             count = int(psql(sql).splitlines()[-1])
         if count != metadata["features"]:
             raise ValueError(f"fixture count differs: {count} != {metadata['features']}")
@@ -325,8 +417,9 @@ SELECT count(*) FROM business.source;
         manifest_path = output / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2))
         result.update(fixture_seconds=time.monotonic() - started, fixture_features=count, baseline_revision=revision)
-        print(json.dumps({"phase": "fixture_ready", **result}), flush=True)
+        print(json.dumps({**result, "phase": "fixture_ready"}), flush=True)
         env.update(GL_ENDPOINT=f"http://127.0.0.1:{grpc}", GL_TOKEN_FILE=str(token_path), GL_BENCH_DISPOSABLE="1", GL_BENCH_ROUNDS=str(args.rounds))
+        result["phase"] = "incremental"
         result["client"] = monitor([str(args.client.resolve()), str(manifest_path), str(output / "incremental.json")], env, server, output, "incremental", args.timeout, args.rss_limit_mib)
         if args.load_seconds and result["client"]["exit_code"] == 0:
             load_env = dict(env, GL_BASE_URL=base)
@@ -351,6 +444,10 @@ SELECT count(*) FROM business.source;
         if args.backend == "sqlite":
             stop(server)
             with sqlite3.connect(f"file:{output / 'data/geoledger.sqlite3'}?mode=ro", uri=True) as db:
+                db.enable_load_extension(True)
+                db.load_extension(extension)
+                db.enable_load_extension(False)
+                result["history_srids"] = [row[0] for row in db.execute("SELECT DISTINCT ST_SRID(coalesce(geom,geom_z)) FROM gl_history WHERE project=? AND dataset=? AND properties IS NOT NULL", (project, dataset))]
                 live = db.execute("SELECT count(*) FROM gl_history WHERE project=? AND dataset=? AND valid_to IS NULL AND properties IS NOT NULL", (project, dataset)).fetchone()[0]
             result["history_live"] = live
         else:
@@ -358,7 +455,16 @@ SELECT count(*) FROM business.source;
                 result.update(verify_source_crud(call, psql, project, dataset, first))
             counts = psql(f"SELECT count(*) FROM business.source; SELECT count(*) FROM gl_history WHERE project='{project}' AND dataset='{dataset}' AND valid_to IS NULL AND properties IS NOT NULL;").splitlines()
             result["source_live"], result["history_live"] = map(int, counts)
+            result["source_srids"] = [int(value) for value in psql("SELECT DISTINCT ST_SRID(geom) FROM business.source").splitlines()]
+            result["history_srids"] = [int(value) for value in psql(f"SELECT DISTINCT ST_SRID(geom) FROM gl_history WHERE project='{project}' AND dataset='{dataset}' AND properties IS NOT NULL").splitlines()]
+            if result["source_srids"] != [source_srid]:
+                raise AssertionError("business source SRID differs from fixture CRS")
+        if result["history_srids"] != [INTERNAL_SRID]:
+            raise AssertionError("history SRID differs from the internal geometry contract")
+        result["crs_verified"] = True
         check_results(result, count)
+        if result["success"]:
+            result["phase"] = "complete"
     except BaseException as error:
         result["error"] = str(error)
         (output / "failure.log").write_text(traceback.format_exc())

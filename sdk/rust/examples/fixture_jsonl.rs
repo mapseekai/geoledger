@@ -22,7 +22,16 @@ fn geometry_numbers(value: &mut Value) {
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    let source = args.get(1).ok_or("usage: fixture_jsonl SOURCE OUTPUT")?;
+    if args.len() != 4 {
+        return Err(
+            "usage: fixture_jsonl SOURCE OUTPUT CRS (coordinates are not reprojected)".into(),
+        );
+    }
+    let crs = args[3].trim();
+    if crs.is_empty() || crs.len() > 16384 || crs.contains('\0') {
+        return Err("a nonempty source CRS identifier or definition is required".into());
+    }
+    let source = &args[1];
     let output = args.get(2).ok_or("output required")?;
     let mut output = BufWriter::new(File::options().write(true).create_new(true).open(output)?);
     let mut count = 0u64;
@@ -49,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     println!(
         "{}",
-        json!({"features":count,"geometry_type":family,"dimension":dimension,"sha256":digest})
+        json!({"features":count,"geometry_type":family,"dimension":dimension,"crs":crs,"sha256":digest})
     );
     Ok(())
 }

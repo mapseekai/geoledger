@@ -11,7 +11,7 @@ cargo build --locked --release -p geoledger-server -p geoledger-client \
   --bin geoledger-server --example incremental --example fixture_jsonl
 mkdir -p artifacts/performance/fixtures
 target/release/examples/fixture_jsonl /absolute/path/building.geojson \
-  artifacts/performance/fixtures/building.jsonl \
+  artifacts/performance/fixtures/building.jsonl EPSG:4326 \
   > artifacts/performance/fixtures/building.meta.json
 python3 scripts/benchmark_incremental.py \
   --server target/release/geoledger-server \
@@ -20,6 +20,14 @@ python3 scripts/benchmark_incremental.py \
   --metadata artifacts/performance/fixtures/building.meta.json \
   --output artifacts/performance/incremental-sqlite --rounds 10
 ```
+
+### 夹具坐标系与内部几何列
+
+`fixture_jsonl SOURCE OUTPUT CRS` 将显式指定的源坐标系写入夹具元数据，例如 `EPSG:4326`、`EPSG:3857` 或自定义 CRS 定义。参数应与源文件的实际坐标系一致；生成器保留原始坐标。已有 JSONL 夹具可通过 `benchmark_incremental.py --crs EPSG:4326` 补充经过核对的 CRS。监督器在启动前校验 CRS 元数据及显式参数的一致性。
+
+当前格式 14 将数据集 CRS 保存在 `gl_datasets.crs`，SQLite 和 PostGIS 的共享内部几何列使用 SRID 0。SQLite 的 XY/XYZ 分别写入 `geom`/`geom_z`；PostGIS 业务表按照 `EPSG:<编号>` 或 `POSTGIS:<编号>` 声明的 SRID 创建，历史表仍使用内部 SRID 0。两条写入路径均保留坐标数值。初始化先校验当前存储格式，SQLite 还校验几何列的维度及 SRID；运行结束后核对历史表与业务表的实际 SRID。`environment.json` 和 `result.json` 记录 CRS、内部/业务 SRID 及执行阶段。
+
+增量客户端与原表校验器在数据集原生坐标空间中执行可表示的 XY 平移，保留几何类型、环闭合和 Z 值。经纬度与投影坐标使用同一增量验证流程。功能诊断可使用 debug 构建；性能对照使用本次代码构建的 release 二进制，并核对服务版本及报告中的构建摘要。
 
 SQLite 设置可信的 `GL_SPATIALITE_EXTENSION`；加 `--backend postgis` 测量已有业务表的同步发布。夹具将原属性保存在 `attributes` 对象中，业务表使用 `id` 主键、`attributes jsonb` 和有明确类型的 `geom` 列；业务现场额外的索引、约束与触发器可用独立环境进一步测量。监督器通过 API 建立初始版本，在自己创建的一次性数据库中用 SQL 填充背景夹具，然后运行纯 RPC 客户端。准备夹具的耗时单独记录。PostGIS 测量结束后另做一个未计时增删改循环，每一步直接读取原表核对完整属性和几何，再核对原表与版本表的存活要素数量。对比修复前后时，用 `--server` 指定各自的 release 二进制，保持同一份夹具、客户端及轮数，顺序运行负载。
 
@@ -100,7 +108,7 @@ Python 环境需安装 Playwright。客户端通过创建数据集对话框选�
 
 使用 release 构建，记录硬件、版本、文件规模、构建摘要、运行参数及错误。测量期间按顺序运行负载，结果用于这台机器上的工作负载比较。生产容量评估还需在目标硬件、网络、数据分布与长时间持续负载下测量。
 
-## 当前格式增量编辑实测（2026-10-11）
+## 格式 13 增量编辑实测（2026-10-11）
 
 在 Apple Silicon 10 核、16 GiB 内存上，以格式 13 的 release 服务、本机 SQLite/SpatiaLite 和 Docker PostgreSQL 17 / PostGIS 3.6 测试。背景为 483,268 条真实 XYZ 线要素，夹具约 999 MiB。每组 20 轮，500 条拆成 5 次保存 RPC 后发布；背景准备时间单独记录。此机器同时运行其他开发服务，数据代表本机本次运行。
 
