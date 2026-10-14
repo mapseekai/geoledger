@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-mod credentials;
-pub use credentials::{ManagedToken, TokenReceipt};
+pub mod authentication;
+pub use authentication::{ApiKey, AuthenticatedIdentity, User};
 mod workspace;
 use workspace::*;
 mod feature;
@@ -33,7 +33,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 14;
+pub const FORMAT_VERSION: i32 = 16;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
@@ -77,10 +77,6 @@ pub struct Application {
 /// Platform-level authorization that is not tied to project membership.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Policy {
-    /// Subjects that may administer any project (members, archive, delete)
-    /// and create projects regardless of the creation policy or quota.
-    /// Administrators gain no data access until they add themselves as members.
-    pub admins: BTreeSet<String>,
     /// Only administrators may create projects.
     pub admin_only_project_creation: bool,
     /// Maximum projects (not deleted) a non-administrator may own.
@@ -202,8 +198,10 @@ impl Application {
     pub fn check_schema(&self) -> Result<()> {
         self.storage.health(self.timeout)
     }
+    /// Fixture-only entry point; excluded from default production builds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn execute(&self, subject: &str, operation: &str, input: Value) -> Result<Value> {
-        self.execute_encoded(subject, operation, input)
+        self.execute_encoded(subject, operation, input, None, None)
             .map(|(value, _)| value)
     }
     fn execute_encoded(
@@ -211,6 +209,8 @@ impl Application {
         subject: &str,
         operation: &str,
         input: Value,
+        identity: Option<&AuthenticatedIdentity>,
+        verified_password: Option<&authentication::UserRecord>,
     ) -> Result<(Value, Vec<u8>)> {
         let deadline = std::time::Instant::now()
             .checked_add(self.timeout)
@@ -220,8 +220,7 @@ impl Application {
         let command: Command = decode(json!({"operation":operation,"input":input}))?;
         let read_only = matches!(
             operation,
-            "list_tokens"
-                | "list_projects"
+            "list_projects"
                 | "get_project"
                 | "list_datasets"
                 | "list_workspaces"
@@ -244,13 +243,23 @@ impl Application {
             ));
         }
         let mut t = self.storage.begin(read_only, remaining)?;
+        let trusted_user = identity
+            .map(|identity| authentication::business_identity(&mut t, identity, verified_password))
+            .transpose()?;
+        let subject = trusted_user
+            .as_ref()
+            .map_or(subject, |user| user.id.as_str());
+        if identity.is_some()
+            && let Command::SetMember(member) = &command
+        {
+            id(&member.subject)?;
+            if !t.auth_membership_target(&member.subject)? {
+                return Err(missing());
+            }
+        }
         t.set_response_limit(self.response_limit);
         t.set_response_reservation(self.response_reservation.clone());
         let result = match command {
-            Command::IssueToken(r) => credentials::issue(&mut t, subject, policy, r),
-            Command::ReissueToken(r) => credentials::reissue(&mut t, subject, policy, r),
-            Command::RevokeToken(r) => credentials::revoke(&mut t, subject, policy, r),
-            Command::ListTokens(r) => credentials::list(&mut t, subject, policy, r),
             Command::CreateProject(r) => create_project(&mut t, subject, policy, r),
             Command::ListProjects(r) => list_projects(&mut t, subject, r),
             Command::GetProject(r) => get_project(&mut t, subject, policy, r),
@@ -353,10 +362,6 @@ mod tests {
 #[derive(Deserialize)]
 #[serde(tag = "operation", content = "input", rename_all = "snake_case")]
 enum Command {
-    IssueToken(credentials::Issue),
-    ReissueToken(credentials::Reissue),
-    RevokeToken(credentials::TokenRef),
-    ListTokens(Page),
     CreateProject(Name),
     ListProjects(Page),
     GetProject(Project),

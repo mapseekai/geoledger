@@ -1,6 +1,6 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=14));
-INSERT INTO gl_format VALUES(true,14);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=16));
+INSERT INTO gl_format VALUES(true,16);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -68,22 +68,31 @@ OLD.valid_to IS NULL AND NEW.valid_to IS NOT NULL AND OLD.project=NEW.project AN
 BEGIN SELECT RAISE(ABORT,'immutable history'); END;
 CREATE TRIGGER gl_history_delete BEFORE DELETE ON gl_history WHEN NOT EXISTS (SELECT 1 FROM gl_purge WHERE project=OLD.project) BEGIN SELECT RAISE(ABORT,'immutable history'); END;
 
--- Global identity resources are excluded from project logical exports.
-CREATE TABLE gl_managed_tokens (
- id text PRIMARY KEY, digest text NOT NULL UNIQUE,
- subject text NOT NULL, label text NOT NULL, created_by text NOT NULL,
- created_at text NOT NULL, expires_at text NOT NULL, revoked_at text,
- CHECK(expires_at>created_at));
-CREATE TABLE gl_token_receipts (
- actor text NOT NULL, request_id text NOT NULL, payload text NOT NULL,
- token_id text NOT NULL REFERENCES gl_managed_tokens(id), PRIMARY KEY(actor,request_id));
-CREATE TABLE gl_token_audit (
- id text PRIMARY KEY, actor text NOT NULL, action text NOT NULL,
- token_id text NOT NULL REFERENCES gl_managed_tokens(id), detail text NOT NULL);
-CREATE TRIGGER gl_token_audit_update BEFORE UPDATE ON gl_token_audit BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
-CREATE TRIGGER gl_token_audit_delete BEFORE DELETE ON gl_token_audit BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
-CREATE TRIGGER gl_token_receipts_update BEFORE UPDATE ON gl_token_receipts BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
-CREATE TRIGGER gl_token_receipts_delete BEFORE DELETE ON gl_token_receipts BEGIN SELECT RAISE(ABORT,'immutable credential record'); END;
+-- Identity records are preserved when users are soft deleted.
+CREATE TABLE gl_users (
+ id text PRIMARY KEY, username text NOT NULL UNIQUE, display_name text NOT NULL,
+ status text NOT NULL CHECK(status IN ('active','disabled','deleted')),
+ is_admin boolean NOT NULL, must_change_password boolean NOT NULL,
+ created_at text NOT NULL, credential_version bigint NOT NULL DEFAULT 0);
+CREATE TABLE gl_passwords (user_id text PRIMARY KEY REFERENCES gl_users(id), password_hash text NOT NULL);
+CREATE TABLE gl_api_keys (
+ id text PRIMARY KEY, user_id text NOT NULL REFERENCES gl_users(id), digest text NOT NULL UNIQUE,
+ name text NOT NULL, key_prefix text NOT NULL, created_at text NOT NULL, expires_at text,
+ revoked_at text, last_used_at text, CHECK(expires_at IS NULL OR expires_at>created_at));
+CREATE INDEX gl_api_keys_user ON gl_api_keys(user_id,id);
+CREATE TABLE gl_sessions (
+ id text PRIMARY KEY, user_id text NOT NULL REFERENCES gl_users(id), digest text NOT NULL UNIQUE,
+ source_key_id text REFERENCES gl_api_keys(id) ON DELETE CASCADE,
+ credential_version bigint NOT NULL, created_at text NOT NULL, last_seen_at text NOT NULL,
+ expires_at text NOT NULL);
+CREATE INDEX gl_sessions_user ON gl_sessions(user_id);
+CREATE INDEX gl_sessions_expiry ON gl_sessions(expires_at);
+CREATE INDEX gl_sessions_source_key ON gl_sessions(source_key_id);
+CREATE TABLE gl_auth_audit (
+ id text PRIMARY KEY, actor text NOT NULL REFERENCES gl_users(id), action text NOT NULL,
+ resource text NOT NULL, created_at text NOT NULL);
+CREATE TRIGGER gl_auth_audit_update BEFORE UPDATE ON gl_auth_audit BEGIN SELECT RAISE(ABORT,'immutable auth audit'); END;
+CREATE TRIGGER gl_auth_audit_delete BEFORE DELETE ON gl_auth_audit BEGIN SELECT RAISE(ABORT,'immutable auth audit'); END;
 
 -- Derived transactional state. These tables are rebuilt during logical import.
 CREATE TABLE gl_workspace_sizes (
@@ -104,3 +113,5 @@ CREATE TRIGGER gl_workspace_size_insert AFTER INSERT ON gl_workspace_changes BEG
  UPDATE gl_workspace_sizes SET changes=changes+1 WHERE project=NEW.project AND workspace=NEW.workspace; END;
 CREATE TRIGGER gl_workspace_size_delete AFTER DELETE ON gl_workspace_changes BEGIN
  UPDATE gl_workspace_sizes SET changes=changes-1 WHERE project=OLD.project AND workspace=OLD.workspace; END;
+
+CREATE INDEX gl_users_status_id ON gl_users(status,id);

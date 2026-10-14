@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright, expect
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--url", required=True)
-p.add_argument("--token-file", required=True)
+p.add_argument("--api-key-file", required=True)
 p.add_argument("--chromium", required=True)
 p.add_argument("--geojson", required=True)
 p.add_argument("--expected-features", required=True, type=int)
@@ -57,9 +57,10 @@ with sync_playwright() as playwright:
             raise RuntimeError(str(result))
         return json.loads(result["body"])
     try:
-        token = json.loads(Path(a.token_file).read_text())[0]["token"]
+        token = Path(a.api_key_file).read_text().strip()
         page.goto(a.url + "/login")
-        page.get_by_label("访问令牌", exact=True).fill(token)
+        page.get_by_role("button", name="API Key", exact=True).click()
+        page.get_by_label("API Key", exact=True).fill(token)
         page.get_by_role("button", name="进入控制台").click()
         page.wait_for_url("**/projects")
         project = call({"action": "createProject", "name": "file-benchmark-" + uuid.uuid4().hex[:8]})["id"]

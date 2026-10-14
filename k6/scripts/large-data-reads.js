@@ -5,7 +5,7 @@ import { check, fail } from 'k6';
 import exec from 'k6/execution';
 const fixture = JSON.parse(open(__ENV.GL_BENCH_REPORT || fail('GL_BENCH_REPORT required')));
 const base = __ENV.GL_BASE_URL || fail('GL_BASE_URL required');
-const token = __ENV.GL_TOKEN || fail('GL_TOKEN required');
+const token = __ENV.GL_API_KEY || fail('GL_API_KEY required');
 export const options = {
   scenarios: {
     reads: {

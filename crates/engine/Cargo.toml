@@ -11,6 +11,7 @@ geoledger-spatialite = { path = "../spatialite" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
+argon2 = "0.5"
 chrono.workspace = true
 getrandom = "0.4"
 bytes = "1"
@@ -26,10 +27,13 @@ geo = "0.33"
 geojson = { version = "1.0", features = ["geo-types"] }
 
 [features]
+# Explicit fixture support, never enabled by production dependencies.
+test-support = []
 # Exposes `fuzzing` entry points for the cargo-fuzz targets in fuzz/.
 fuzzing = []
 
 [dev-dependencies]
+geoledger-engine = { path = "../engine", features = ["test-support"] }
 tempfile.workspace = true
 postgres = "0.19"
 

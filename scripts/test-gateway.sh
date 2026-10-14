@@ -6,7 +6,8 @@ cd "$(dirname "$0")/.."
 server_bin=${GL_SERVER_BIN:-target/debug/geoledger-server}
 cli_bin=${GL_CLI_BIN:-target/debug/gl}
 nginx_bin=${NGINX:-$(command -v nginx || echo /usr/sbin/nginx)}
-work=$(mktemp -d)
+mkdir -p target
+work=$(mktemp -d "$PWD/target/auth-refactor-gateway.XXXXXX")
 cleanup() {
   [[ -f "$work/nginx.pid" ]] && kill "$(cat "$work/nginx.pid")" 2>/dev/null || true
   [[ -n "${server_pid:-}" ]] && kill "$server_pid" 2>/dev/null || true
@@ -42,13 +43,13 @@ sed -i "1i pid $work/nginx.pid;\nerror_log $work/error.log;" "$work/nginx.conf"
 sed -i "s#^http {#http {\n    client_body_temp_path $work/body;\n    proxy_temp_path $work/proxy;\n    fastcgi_temp_path $work/fcgi;\n    uwsgi_temp_path $work/uwsgi;\n    scgi_temp_path $work/scgi;#" "$work/nginx.conf"
 "$nginx_bin" -t -c "$work/nginx.conf" -p "$work"
 "$nginx_bin" -c "$work/nginx.conf" -p "$work"
-for _ in $(seq 100); do [[ -f "$work/data/admin-credentials.json" ]] && break; sleep 0.1; done
 for _ in $(seq 100); do curl -fsS --cacert "$work/ca.crt" "https://127.0.0.1:$tls_port/ready" >/dev/null 2>&1 && break; sleep 0.1; done
 headers=$(curl -fsS -D - -o /dev/null --cacert "$work/ca.crt" "https://127.0.0.1:$tls_port/ready")
 grep -qi '^strict-transport-security:' <<<"$headers"
 grep -qi '^x-request-id:' <<<"$headers"
 test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$plain_port/ready")" = 301
+python3 scripts/auth_test_support.py --base "http://127.0.0.1:$http_port" --data-dir "$work/data" --output "$work/api-key"
 info=$("$cli_bin" --endpoint "https://localhost:$tls_port" --ca-file "$work/ca.crt" \
-  --token-file "$work/data/admin-credentials.json" info)
+  --api-key-file "$work/api-key" info)
 grep -q '"backend": "sqlite"' <<<"$info"
 echo "gateway TLS verified: HTTP API, HSTS, request IDs, HTTP->HTTPS redirect and gRPC"

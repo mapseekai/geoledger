@@ -2,11 +2,10 @@ const { Client, GeoLedgerError, parseJson } = require("../dist");
 const assert = require("node:assert/strict");
 const { randomUUID } = require("node:crypto");
 const fs = require("node:fs");
-const token = JSON.parse(fs.readFileSync(process.env.GL_TOKEN_FILE, "utf8"))[0]
-  .token;
+const apiKey = fs.readFileSync(process.env.GL_API_KEY_FILE, "utf8").trim();
 const client = new Client(
   process.env.GL_ENDPOINT || "http://127.0.0.1:7882",
-  token,
+  apiKey,
 );
 (async () => {
   try {
@@ -83,13 +82,13 @@ const client = new Client(
     assert.deepEqual((await client.features(project.id, dataset.id)).features, []);
     assert.deepEqual((await client.features(project.id, dataset.id, { revision: receipt.revision })).features[0], feature);
     assert.equal(parseJson("9007199254740993.0"), 9007199254740993n);
-    await client.setMember(project.id, "sdk-viewer", "viewer");
+    await client.setMember(project.id, process.env.GL_TEST_MEMBER_ID, "viewer");
     assert.ok(
       (await client.members(project.id)).some(
-        (m) => m.subject === "sdk-viewer",
+        (m) => m.subject === process.env.GL_TEST_MEMBER_ID,
       ),
     );
-    await client.removeMember(project.id, "sdk-viewer");
+    await client.removeMember(project.id, process.env.GL_TEST_MEMBER_ID);
     assert.equal(
       (await client.archiveProject(project.id, true)).state,
       "archived",

@@ -3,9 +3,9 @@
 The repository root is the Cargo workspace. This is a service-only product:
 geoledger-server owns storage, gl is a remote gRPC client, and Go/Rust/Node.js/Python
 SDKs share proto/geoledger/v1/geoledger.proto. Browser management lives in the separate
-web/ Next.js app: browser HTTP -> Node.js BFF -> TS business SDK -> gRPC.
-Never import the Node SDK into client components. Keep credentials in encrypted
-HttpOnly sessions; preserve exact feature JSON and immutable publication retries.
+web/ Next.js app: browser HTTP -> Node.js BFF -> private HTTP session transport -> engine.
+Never import the Node SDK into client components. Keep only opaque database-backed Session IDs in encrypted
+HttpOnly cookies; public SDKs accept API Keys only. Preserve exact feature JSON and immutable publication retries.
 
 Core stays independent of databases and transports. Every transport calls engine
 Application. Application depends on StorageBackend/RepositoryTransaction semantic

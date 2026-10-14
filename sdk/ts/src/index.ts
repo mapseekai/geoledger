@@ -155,12 +155,12 @@ export class Client {
   #closed = false;
   /**
    * Plaintext `http://` is accepted only for loopback hosts unless `options.allowInsecure`
-   * (or `GL_ALLOW_INSECURE_TRANSPORT=true`) is set: the bearer token would otherwise cross
+   * (or `GL_ALLOW_INSECURE_TRANSPORT=true`) is set: the API Key would otherwise cross
    * the network unencrypted.
    */
   constructor(
     endpoint: string,
-    token: string,
+    apiKey: string,
     timeoutMs = 30_000,
     options: ClientOptions = {},
   ) {
@@ -181,12 +181,11 @@ export class Client {
     )
       throw invalid("endpoint must be http(s)://host:port");
     if (
-      !token ||
-      !/^[\x20-\x7e]+$/.test(token) ||
+      !/^glk_[0-9a-f]{64}$/.test(apiKey) ||
       !Number.isFinite(timeoutMs) ||
       timeoutMs <= 0
     )
-      throw invalid("ASCII token and finite positive timeout required");
+      throw invalid("API Key and finite positive timeout required");
     if (
       url.protocol === "http:" &&
       !isLoopbackHost(url.hostname) &&
@@ -202,7 +201,7 @@ export class Client {
       options.deadline = Date.now() + timeoutMs;
       return new InterceptingCall(nextCall(options), {
         start(metadata, listener, next) {
-          metadata.set("authorization", `Bearer ${token}`);
+          metadata.set("authorization", `Bearer ${apiKey}`);
           next(metadata, listener);
         },
       });
@@ -255,25 +254,6 @@ export class Client {
         reject(e instanceof GeoLedgerError ? e : invalid("invalid request"));
       }
     });
-  }
-  tokens(p: model.Page = {}): Promise<model.ManagedToken[]> {
-    return this.#call<wire.TokensReply, model.ManagedToken[]>((cb) => this.#rpc.listTokens(page(p), cb), (r) => r.tokens);
-  }
-  /** Preserve requestId on retries; plaintext is returned only on initial success. */
-  issueToken(request: model.IssueTokenRequest): Promise<model.IssuedToken> {
-    return this.#call<wire.IssuedTokenReply, model.IssuedToken>((cb) => this.#rpc.issueToken(request, cb), (r) => {
-      if (!r.credential) throw new Error("Missing credential metadata");
-      return { ...r, credential: r.credential };
-    });
-  }
-  reissueToken(request: model.ReissueTokenRequest): Promise<model.IssuedToken> {
-    return this.#call<wire.IssuedTokenReply, model.IssuedToken>((cb) => this.#rpc.reissueToken(request, cb), (r) => {
-      if (!r.credential) throw new Error("Missing credential metadata");
-      return { ...r, credential: r.credential };
-    });
-  }
-  async revokeToken(tokenId: string): Promise<void> {
-    await this.#call((cb) => this.#rpc.revokeToken({ tokenId }, cb), () => undefined);
   }
   info(): Promise<model.ServerInfo> {
     return this.#call((cb) => this.#rpc.info({}, cb), convert.decodeServerInfo);
@@ -676,11 +656,11 @@ export function isLoopbackHost(host: string): boolean {
 }
 export function connect(
   endpoint: string,
-  token: string,
+  apiKey: string,
   timeoutMs = 30_000,
   options: ClientOptions = {},
 ): Client {
-  return new Client(endpoint, token, timeoutMs, options);
+  return new Client(endpoint, apiKey, timeoutMs, options);
 }
 
 export class Workspace {
@@ -865,5 +845,3 @@ export class Workspace {
     });
   }
 }
-
-export type { ManagedToken, IssuedToken, IssueTokenRequest, ReissueTokenRequest } from "./models";

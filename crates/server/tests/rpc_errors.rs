@@ -1,6 +1,7 @@
 //! Exercise error contracts over real HTTP/2 with a bounded metadata budget.
+mod common;
 use geoledger_rpc::v1 as pb;
-use geoledger_server::{Application, Authentication, Authenticator, Service, Storage, Tokens};
+use geoledger_server::{Application, Service, Storage};
 use prost::Message;
 use serde_json::json;
 use tonic::{Request, transport::Endpoint};
@@ -12,22 +13,30 @@ fn authenticated<T>(body: T) -> Result<Request<T>, Box<dyn std::error::Error + S
     // Public, test-only credential for this ephemeral in-process server.
     request.metadata_mut().insert(
         "authorization",
-        "Bearer test-only-credential-not-for-deployment-123456789".parse()?,
+        "Bearer glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse()?,
     );
     Ok(request)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn large_conflicts_fit_trailers_and_keep_paginated_details() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let app = Application::new(Storage::Sqlite(dir.path().join("errors.sqlite3")));
     app.migrate()?;
-    let project = app.execute("review", "create_project", json!({"name":"errors"}))?["project"]
+    common::seed(
+        &dir.path().join("errors.sqlite3"),
+        &[("review", common::KEY, false)],
+    )?;
+    let project = app.execute(
+        &common::user_id("review"),
+        "create_project",
+        json!({"name":"errors"}),
+    )?["project"]
         .as_str()
         .ok_or("project")?
         .to_owned();
     let dataset = app.execute(
-        "review",
+        &common::user_id("review"),
         "create_dataset",
         json!({"geometry_type":"point","project":project,"name":"features"}),
     )?["dataset"]
@@ -36,30 +45,26 @@ async fn large_conflicts_fit_trailers_and_keep_paginated_details() -> TestResult
         .to_owned();
     let mut workspaces = Vec::new();
     for value in ["a", "b"] {
-        let workspace =
-            app.execute("review", "create_workspace", json!({"project":project}))?["workspace"]
-                .as_str()
-                .ok_or("workspace")?
-                .to_owned();
+        let workspace = app.execute(
+            &common::user_id("review"),
+            "create_workspace",
+            json!({"project":project}),
+        )?["workspace"]
+            .as_str()
+            .ok_or("workspace")?
+            .to_owned();
         let edits: Vec<_> = (0..20)
             .map(|i| {
                 let id = format!("feature-{i:02}");
                 json!({"dataset":dataset,"feature_id":id,"feature":{"type":"Feature","id":id,"geometry":null,"properties":{"content":value.repeat(7000)}}})
             })
             .collect();
-        app.execute("review", "save", json!({"project":project,"workspace":workspace,"expected_workspace_version":0,"edits":edits}))?;
+        app.execute(&common::user_id("review"), "save", json!({"project":project,"workspace":workspace,"expected_workspace_version":0,"edits":edits}))?;
         workspaces.push(workspace);
     }
-    app.execute("review", "publish", json!({"project":project,"workspace":workspaces[0],"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"first"}))?;
+    app.execute(&common::user_id("review"), "publish", json!({"project":project,"workspace":workspaces[0],"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"first"}))?;
 
-    let tokens = Tokens::from_json(
-        format!(
-            r#"[{{"subject":"review","token_sha256":"{}"}}]"#,
-            geoledger_server::sha256_hex("test-only-credential-not-for-deployment-123456789")
-        )
-        .as_bytes(),
-    )?;
-    let service = Service::new(app, Authentication::new(Authenticator::Tokens(tokens)));
+    let service = Service::new(app);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}", listener.local_addr()?);
     let mut servers = tokio::task::JoinSet::new();

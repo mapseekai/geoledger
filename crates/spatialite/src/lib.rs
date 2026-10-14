@@ -2,10 +2,7 @@
 //! No database content or remote request controls the library path.
 use parking_lot::{RwLock, RwLockReadGuard};
 use rusqlite::{Connection as SqliteConnection, LoadExtensionGuard, Result};
-use std::{
-    ops::{Deref, DerefMut},
-    path::Path,
-};
+use std::{ops::Deref, path::Path};
 
 // SpatiaLite 5.1 calls libxml2's process-global xmlCleanupParser from its
 // per-connection destructor. That routine cannot overlap another native call.
@@ -21,6 +18,17 @@ static LIFECYCLE: RwLock<()> = RwLock::new(());
 /// Do not retain an access guard while opening/dropping another loaded connection.
 /// The operator-installed extension is trusted; code embedding other libxml2 users
 /// must coordinate their lifecycle too. GeoLedger exposes no arbitrary native SQL.
+///
+/// Native ownership remains inside this wrapper; a mutable access guard must
+/// never allow a safe caller to replace the loaded connection.
+///
+/// ```compile_fail,E0599
+/// use geoledger_spatialite::Connection;
+/// fn move_native_out(connection: &mut Connection) -> rusqlite::Result<rusqlite::Connection> {
+///     let replacement = rusqlite::Connection::open_in_memory()?;
+///     Ok(std::mem::replace(&mut *connection.write()?, replacement))
+/// }
+/// ```
 pub struct Connection {
     inner: Option<SqliteConnection>,
 }
@@ -35,21 +43,6 @@ impl Deref for Access<'_> {
         self.connection
     }
 }
-pub struct AccessMut<'a> {
-    connection: &'a mut SqliteConnection,
-    _native: RwLockReadGuard<'static, ()>,
-}
-impl Deref for AccessMut<'_> {
-    type Target = SqliteConnection;
-    fn deref(&self) -> &Self::Target {
-        self.connection
-    }
-}
-impl DerefMut for AccessMut<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.connection
-    }
-}
 impl Connection {
     /// Hold through statement/row/transaction destruction. Independent accesses
     /// share the read lock, so this does not serialize query execution.
@@ -57,13 +50,6 @@ impl Connection {
         let native = LIFECYCLE.read_recursive();
         Ok(Access {
             connection: self.inner.as_ref().ok_or(rusqlite::Error::InvalidQuery)?,
-            _native: native,
-        })
-    }
-    pub fn write(&mut self) -> Result<AccessMut<'_>> {
-        let native = LIFECYCLE.read_recursive();
-        Ok(AccessMut {
-            connection: self.inner.as_mut().ok_or(rusqlite::Error::InvalidQuery)?,
             _native: native,
         })
     }

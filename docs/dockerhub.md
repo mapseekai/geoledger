@@ -10,7 +10,7 @@ docker run -d --name geoledger --restart unless-stopped --stop-timeout 60 \
   -v geoledger-data:/data mapseekai/geoledger:0.3.0-alpha.2
 ```
 
-浏览器访问 `http://localhost:3000`。首次启动的管理员凭证位于持久化卷的 `/data/admin-credentials.json`。对外部署时配置实际 HTTPS origin 和 TLS 网关，详见 [生产运行](production.md)。
+浏览器访问 `http://localhost:3000`。首次启动的随机管理员密码位于服务日志提示的 `/data/initial-admin-<id>.json`，首次登录要求修改密码。对外部署时配置实际 HTTPS origin 和 TLS 网关，详见 [生产运行](production.md)。
 
 本地构建使用 `docker build -t geoledger:local .`。发布流程将完整构建阶段导出为 OCI，扫描 Rust、Node 与编译工具依赖，再从已验证的构建产物组装统一运行镜像。运行镜像通过双架构扫描后按原摘要上传，保存 SBOM、构建来源和镜像清单。
 

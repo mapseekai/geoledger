@@ -1,3 +1,4 @@
+mod common;
 use geoledger_client::{Client, FeatureQuery, Page};
 use serde_json::{Value, json};
 use std::{
@@ -19,6 +20,7 @@ impl Drop for Server {
     }
 }
 fn start(dir: &std::path::Path) -> Result<Server, Box<dyn std::error::Error + Send + Sync>> {
+    common::database(&dir.join("geoledger.sqlite3"))?;
     let h = TcpListener::bind("127.0.0.1:0")?;
     let g = TcpListener::bind("127.0.0.1:0")?;
     let http = h.local_addr()?;
@@ -35,8 +37,6 @@ fn start(dir: &std::path::Path) -> Result<Server, Box<dyn std::error::Error + Se
         ])
         .env_remove("GL_STORAGE")
         .env_remove("GL_DATABASE_URL")
-        .env_remove("GL_TOKEN_FILE")
-        .env_remove("GL_JWKS_FILE")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
@@ -81,20 +81,16 @@ fn http(
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn default_service_rpc_http_twenty_writers_restart_and_authentication() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let mut server = start(dir.path())?;
-    let token_path = dir.path().join("admin-credentials.json");
-    for _ in 0..100 {
-        if token_path.exists() && dir.path().join("tokens.json").exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(30)).await;
-    }
-    let tokens: Value = serde_json::from_slice(&std::fs::read(token_path)?)?;
-    let token = tokens[0]["token"].as_str().ok_or("token")?.to_owned();
+    let token = common::KEY.to_owned();
     let client = connect(&server, &token).await?;
     assert_eq!(client.info().await?.backend, "sqlite");
-    let bad = connect(&server, "invalid").await?;
+    let bad = connect(
+        &server,
+        "glk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+    .await?;
     assert_eq!(
         bad.projects(Page::default())
             .await
@@ -193,17 +189,9 @@ async fn default_service_rpc_http_twenty_writers_restart_and_authentication() ->
 async fn large_streams_and_http_preserve_atomic_saves_without_four_mib_cap() -> TestResult {
     use geoledger_rpc::v1 as pb;
     use prost::Message;
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let server = start(dir.path())?;
-    let token_path = dir.path().join("admin-credentials.json");
-    for _ in 0..100 {
-        if token_path.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(30)).await;
-    }
-    let tokens: Value = serde_json::from_slice(&std::fs::read(token_path)?)?;
-    let token = tokens[0]["token"].as_str().ok_or("token")?;
+    let token = common::KEY;
     let client = connect(&server, token).await?;
     assert_eq!(client.info().await?.max_request_bytes, 64 * 1024 * 1024);
     let project = client.create_project("large streaming").await?.id;

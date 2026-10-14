@@ -1,4 +1,6 @@
 "use client";
+import { PasswordInput } from "./password-input";
+import { validatePasswordForm } from "@/lib/password";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,7 +11,6 @@ import {
   EyeOff,
   GitMerge,
   History,
-  KeyRound,
   LockKeyhole,
   ShieldCheck,
 } from "lucide-react";
@@ -31,20 +32,32 @@ const highlights = [
   },
 ];
 export function Login({ expired }: { expired: boolean }) {
+  const [mode, setMode] = useState<"password" | "key">("password");
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(expired ? "登录已过期，请重新登录。" : "");
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!validatePasswordForm(event.currentTarget)) return;
     setBusy(true);
     setError("");
     const form = event.currentTarget;
     try {
-      await send("/api/session", "POST", {
-        token: String(new FormData(form).get("token") ?? "").trim(),
-      });
+      const fields = new FormData(form);
+      const result = await send<{ user: { must_change_password: boolean } }>(
+        "/api/session",
+        "POST",
+        mode === "key"
+          ? { api_key: String(fields.get("api_key") ?? "").trim() }
+          : {
+              username: String(fields.get("username") ?? ""),
+              password: String(fields.get("password") ?? ""),
+            },
+      );
       form.reset();
-      window.location.replace("/projects");
+      window.location.replace(
+        result.user.must_change_password ? "/password" : "/projects",
+      );
     } catch (error) {
       setError(error instanceof Error ? error.message : "登录失败");
       setBusy(false);
@@ -84,26 +97,55 @@ export function Login({ expired }: { expired: boolean }) {
               <LockKeyhole />
             </span>
             <h2>登录控制台</h2>
-            <div className="field">
-              <Label htmlFor="token">访问令牌</Label>
-              <div className="password-field">
-                <KeyRound className="field-icon" aria-hidden="true" />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                setMode(mode === "password" ? "key" : "password");
+                setShow(false);
+              }}
+            >
+              {mode === "password"
+                ? "使用 API Key 登录"
+                : "使用用户名和密码登录"}
+            </Button>
+            {mode === "password" && (
+              <div className="field">
+                <Label htmlFor="username">用户名</Label>
                 <Input
-                  id="token"
-                  name="token"
-                  type={show ? "text" : "password"}
-                  autoComplete="off"
-                  maxLength={2000}
+                  id="username"
+                  name="username"
+                  autoComplete="username"
                   required
-                  placeholder="输入访问令牌"
+                  maxLength={128}
                   disabled={busy}
                 />
-                <Tip label={show ? "隐藏令牌" : "显示令牌"}>
+              </div>
+            )}
+            <div className="field">
+              <Label htmlFor="credential">
+                {mode === "password" ? "密码" : "API Key"}
+              </Label>
+              <div className="password-field">
+                <PasswordInput
+                  key={mode}
+                  id="credential"
+                  name={mode === "password" ? "password" : "api_key"}
+                  type={show ? "text" : "password"}
+                  autoComplete={
+                    mode === "password" ? "current-password" : "off"
+                  }
+                  required
+                  placeholder={mode === "password" ? "输入密码" : "glk_…"}
+                  disabled={busy}
+                />
+                <Tip label={show ? "隐藏凭证" : "显示凭证"}>
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={show ? "隐藏令牌" : "显示令牌"}
+                    aria-label={show ? "隐藏凭证" : "显示凭证"}
                     onClick={() => setShow(!show)}
                   >
                     {show ? <EyeOff /> : <Eye />}
@@ -111,6 +153,7 @@ export function Login({ expired }: { expired: boolean }) {
                 </Tip>
               </div>
             </div>
+            {mode === "password" && <small>密码：UTF-8 1–1024 字节</small>}
             <ErrorBox message={error} />
             <Button className="login-submit" disabled={busy} type="submit">
               {busy ? "正在连接…" : "进入控制台"}

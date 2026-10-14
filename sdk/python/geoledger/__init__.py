@@ -10,27 +10,12 @@ from uuid import uuid4
 import ipaddress
 import json
 import os
+import re
 import grpc as _grpc
 from ._internal.v1 import geoledger_pb2 as _pb
 from ._internal.v1.geoledger_pb2_grpc import GeoLedgerStub as _Stub
 
-__all__ = ["ManagedToken", "IssuedToken", "Client", "Workspace", "Project", "Member", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
-
-@dataclass(frozen=True)
-class ManagedToken:
-    id: str
-    subject: str
-    label: str
-    created_by: str
-    created_at: str
-    expires_at: str
-    revoked_at: str | None = None
-
-@dataclass(frozen=True)
-class IssuedToken:
-    credential: ManagedToken
-    replayed: bool = False
-    token: str | None = field(default=None, repr=False)
+__all__ = ["Client", "Workspace", "Project", "Member", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
 
 @dataclass(frozen=True)
 class Project:
@@ -127,7 +112,7 @@ def _error(error):
         pass  # Malformed optional metadata must not hide the original failure.
     return GeoLedgerError(codes.get(error.code(), "unavailable"), error.details() or "request failed", uncertain=uncertain)
 
-_REQUESTS = {"ListTokens":"PageRequest", "IssueToken":"IssueTokenRequest", "ReissueToken":"ReissueTokenRequest", "RevokeToken":"TokenRefRequest", "RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDatasetRequest", "DeleteDataset": "DeleteDatasetRequest", "Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
+_REQUESTS = {"RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDatasetRequest", "DeleteDataset": "DeleteDatasetRequest", "Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
              "SetMember": "MemberRequest", "CreateDataset": "DatasetRequest", "ListDatasets": "ProjectPageRequest",
              "CreateWorkspace": "ProjectRequest", "ListWorkspaces": "ProjectPageRequest", "GetWorkspace": "WorkspaceRequest",
              "Save": "SaveRequest", "Discard": "VersionRequest", "Features": "FeaturesRequest", "Diff": "DiffRequest",
@@ -148,16 +133,16 @@ def _is_loopback(host: str) -> bool:
 
 class Client:
     """Plaintext ``http://`` is accepted only for loopback hosts unless ``allow_insecure=True``
-    (or ``GL_ALLOW_INSECURE_TRANSPORT=true``): the bearer token would cross the network unencrypted."""
-    def __init__(self, endpoint: str, token: str, timeout: float = 30, *, allow_insecure: bool = False):
+    (or ``GL_ALLOW_INSECURE_TRANSPORT=true``): the API Key would cross the network unencrypted."""
+    def __init__(self, endpoint: str, api_key: str, timeout: float = 30, *, allow_insecure: bool = False):
         try:
             url = urlparse(endpoint)
             if url.scheme not in ("http", "https") or not url.hostname or url.path not in ("", "/") or url.query or url.fragment or url.username is not None or url.password is not None or not url.port:
                 raise ValueError()
         except ValueError:
             raise _invalid("endpoint must be http(s)://host:port") from None
-        if not token or not token.isascii() or any(ord(c) < 32 or ord(c) >= 127 for c in token) or not isfinite(timeout) or timeout <= 0:
-            raise _invalid("ASCII token and finite positive timeout required")
+        if not re.fullmatch(r"glk_[0-9a-f]{64}", api_key) or not isfinite(timeout) or timeout <= 0:
+            raise _invalid("API Key and finite positive timeout required")
         opted_in = allow_insecure or os.environ.get("GL_ALLOW_INSECURE_TRANSPORT", "") in ("1", "true", "yes")
         if url.scheme == "http" and not _is_loopback(url.hostname or "") and not opted_in:
             raise _invalid("refusing to send credentials over plaintext http to a non-loopback host; use https or allow_insecure=True")
@@ -166,7 +151,7 @@ class Client:
         self._channel = (_grpc.secure_channel(url.netloc, _grpc.ssl_channel_credentials(), options)
                          if url.scheme == "https" else _grpc.insecure_channel(url.netloc, options))
         self._stub = _Stub(self._channel)
-        self._token, self._timeout, self._closed = token, timeout, False
+        self._api_key, self._timeout, self._closed = api_key, timeout, False
 
     def close(self):
         self._closed = True
@@ -203,28 +188,13 @@ class Client:
         except (TypeError, ValueError, KeyError) as e:
             raise _invalid(str(e)) from None
         try:
-            reply = getattr(self._stub, operation)(request, timeout=self._timeout, metadata=(("authorization", "Bearer " + self._token),))
+            reply = getattr(self._stub, operation)(request, timeout=self._timeout, metadata=(("authorization", "Bearer " + self._api_key),))
         except _grpc.RpcError as e:
             raise _error(e) from None
         try:
             return _decode(reply)
         except (ValueError, TypeError) as e:
             raise GeoLedgerError("invalid_response", "invalid data received from server", uncertain=True) from None
-
-    def tokens(self, *, after: str = "", limit: int = 100) -> list[ManagedToken]:
-        return [ManagedToken(**r) for r in self._call("ListTokens", after=after, limit=limit)["tokens"]]
-
-    def issue_token(self, request_id: str, subject: str, label: str, expires_at: str) -> IssuedToken:
-        """Preserve request_id on retries; plaintext is returned only once."""
-        r = self._call("IssueToken", request_id=request_id, subject=subject, label=label, expires_at=expires_at)
-        return IssuedToken(ManagedToken(**r["credential"]), r.get("replayed", False), r.get("token"))
-
-    def reissue_token(self, request_id: str, token_id: str, label: str, expires_at: str) -> IssuedToken:
-        r = self._call("ReissueToken", request_id=request_id, token_id=token_id, label=label, expires_at=expires_at)
-        return IssuedToken(ManagedToken(**r["credential"]), r.get("replayed", False), r.get("token"))
-
-    def revoke_token(self, token_id: str) -> None:
-        self._call("RevokeToken", token_id=token_id)
 
     def info(self) -> dict[str, Any]:
         return self._call("Info")

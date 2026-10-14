@@ -98,7 +98,7 @@ pub(super) fn manage(
     t: &mut Transaction,
     p: &str,
     s: &str,
-    policy: &Policy,
+    _policy: &Policy,
     write: bool,
 ) -> Result<(String, String)> {
     id(p)?;
@@ -108,7 +108,10 @@ pub(super) fn manage(
             return Ok((role, row.get(1usize)?));
         }
     }
-    if !policy.admins.contains(s) {
+    if !t
+        .auth_user(s)?
+        .is_some_and(|u| u.user.is_admin && u.user.status == "active")
+    {
         return Err(missing());
     }
     let row = t.live_project(p, false)?.ok_or_else(missing)?;
@@ -122,12 +125,15 @@ pub(super) fn manage(
     Ok((role, row.get(2usize)?))
 }
 /// Read access to project metadata: any active member or an administrator.
-fn visible(t: &mut Transaction, p: &str, s: &str, policy: &Policy) -> Result<String> {
+fn visible(t: &mut Transaction, p: &str, s: &str, _policy: &Policy) -> Result<String> {
     id(p)?;
     if let Some(row) = t.member_role(p, s)? {
         return row.get(0usize);
     }
-    if policy.admins.contains(s) && t.live_project(p, false)?.is_some() {
+    if t.auth_user(s)?
+        .is_some_and(|u| u.user.is_admin && u.user.status == "active")
+        && t.live_project(p, false)?.is_some()
+    {
         return Ok("admin".into());
     }
     Err(missing())
@@ -179,7 +185,9 @@ pub(super) fn create_project(
     r: Name,
 ) -> Result<Value> {
     text(&r.name, 256)?;
-    let admin = policy.admins.contains(s);
+    let admin = t
+        .auth_user(s)?
+        .is_some_and(|u| u.user.is_admin && u.user.status == "active");
     if policy.admin_only_project_creation && !admin {
         return Err(Error::new(
             403,
@@ -358,7 +366,7 @@ pub(super) fn set_member(
 pub(super) fn create_dataset(
     t: &mut Transaction,
     s: &str,
-    policy: &Policy,
+    _policy: &Policy,
     r: CreateDataset,
 ) -> Result<Value> {
     let current = head(t, &r.project, true)?;
@@ -366,7 +374,10 @@ pub(super) fn create_dataset(
     text(&r.name, 256)?;
     let d = Uuid::new_v4().to_string();
     let (family, requested_dimension, crs) = if let Some(source) = &r.postgis_table {
-        if !policy.admins.contains(s) {
+        if !t
+            .auth_user(s)?
+            .is_some_and(|u| u.user.is_admin && u.user.status == "active")
+        {
             return Err(Error::new(
                 403,
                 "tracking a business table requires a platform administrator",

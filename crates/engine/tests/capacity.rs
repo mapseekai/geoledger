@@ -60,9 +60,9 @@ fn million_features_twenty_distinct_writers() -> Result<(), Box<dyn std::error::
         let c = rusqlite::Connection::open(&path)?;
         let extension =
             std::env::var_os("GL_SPATIALITE_EXTENSION").unwrap_or_else(|| "mod_spatialite".into());
-        let mut native = geoledger_spatialite::load(c, std::path::Path::new(&extension))?;
-        let mut c = native.write()?;
-        let tx = c.transaction()?;
+        let native = geoledger_spatialite::load(c, std::path::Path::new(&extension))?;
+        let c = native.read()?;
+        let tx = c.unchecked_transaction()?;
         tx.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES(?1,1,?2,'capacity-0','SQL fixture')",[&p,&w])?;
         tx.execute("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT ?1,?2,printf('%07d',i),1,?3,'{\"type\":\"Point\",\"coordinates\":['||(i%180)||',0]}',MakePoint(i%180,0,0) FROM n",[&p,&d,&props])?;
         tx.execute("UPDATE gl_projects SET head=1 WHERE id=?1", [&p])?;

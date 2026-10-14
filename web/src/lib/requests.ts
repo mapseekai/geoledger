@@ -24,20 +24,6 @@ const edit = z.strictObject({
 });
 const variants = {
   info: {},
-  tokens: page,
-  issueToken: {
-    requestId: z.uuid(),
-    subject: text(128),
-    label: z.string().max(256),
-    expiresAt: z.iso.datetime({ offset: true }),
-  },
-  reissueToken: {
-    requestId: z.uuid(),
-    tokenId: z.uuid(),
-    label: z.string().max(256),
-    expiresAt: z.iso.datetime({ offset: true }),
-  },
-  revokeToken: { tokenId: z.uuid() },
   projects: page,
   project,
   createProject: { name: text(256) },
@@ -98,11 +84,16 @@ const variants = {
   audit: { ...project, after: revision.optional(), limit: page.limit },
   setMember: {
     ...project,
+    currentPassword: text(1024),
     subject: text(128),
     role: z.enum(["owner", "editor", "viewer"]),
   },
   members: { ...project, ...page },
-  removeMember: { ...project, subject: text(128) },
+  removeMember: {
+    ...project,
+    subject: text(128),
+    currentPassword: text(1024),
+  },
   archiveProject: { ...project, archived: z.boolean() },
   deleteProject: { ...project, confirmName: text(256) },
 };
@@ -120,13 +111,6 @@ export const requestSchema = z.discriminatedUnion("action", [
     ...variants.deleteDataset,
   }),
 
-  z.strictObject({ action: z.literal("tokens"), ...variants.tokens }),
-  z.strictObject({ action: z.literal("issueToken"), ...variants.issueToken }),
-  z.strictObject({
-    action: z.literal("reissueToken"),
-    ...variants.reissueToken,
-  }),
-  z.strictObject({ action: z.literal("revokeToken"), ...variants.revokeToken }),
   z.strictObject({ action: z.literal("info"), ...variants.info }),
   z.strictObject({ action: z.literal("projects"), ...variants.projects }),
   z.strictObject({ action: z.literal("project"), ...variants.project }),

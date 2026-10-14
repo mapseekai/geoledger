@@ -174,7 +174,7 @@ fn normalize(value: &mut Value) -> Result<(), Error> {
 
 /// Connection options. Plaintext `http://` is accepted only for loopback hosts unless
 /// `allow_insecure` is set (or `GL_ALLOW_INSECURE_TRANSPORT=true`), because the bearer
-/// token would otherwise cross the network unencrypted.
+/// api_key would otherwise cross the network unencrypted.
 #[derive(Clone, Debug)]
 pub struct ConnectOptions {
     pub timeout: Duration,
@@ -205,17 +205,17 @@ fn insecure_opt_in() -> bool {
 }
 
 impl Client {
-    pub async fn connect(endpoint: impl Into<String>, token: &str) -> Result<Self, Error> {
-        Self::connect_with(endpoint, token, ConnectOptions::default()).await
+    pub async fn connect(endpoint: impl Into<String>, api_key: &str) -> Result<Self, Error> {
+        Self::connect_with(endpoint, api_key, ConnectOptions::default()).await
     }
     pub async fn connect_with_timeout(
         endpoint: impl Into<String>,
-        token: &str,
+        api_key: &str,
         timeout: Duration,
     ) -> Result<Self, Error> {
         Self::connect_with(
             endpoint,
-            token,
+            api_key,
             ConnectOptions {
                 timeout,
                 ..ConnectOptions::default()
@@ -225,7 +225,7 @@ impl Client {
     }
     pub async fn connect_with(
         endpoint: impl Into<String>,
-        token: &str,
+        api_key: &str,
         options: ConnectOptions,
     ) -> Result<Self, Error> {
         let timeout = options.timeout;
@@ -242,8 +242,14 @@ impl Client {
         {
             return Err(Error::invalid("endpoint must be http(s)://host:port"));
         }
-        if token.is_empty() || timeout.is_zero() {
-            return Err(Error::invalid("token and positive timeout required"));
+        if api_key.len() != 68
+            || !api_key.starts_with("glk_")
+            || !api_key[4..]
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || timeout.is_zero()
+        {
+            return Err(Error::invalid("API Key and positive timeout required"));
         }
         if e.uri().scheme_str() == Some("http")
             && !e.uri().host().is_some_and(is_loopback_host)
@@ -256,18 +262,20 @@ impl Client {
         }
         e = e.connect_timeout(Duration::from_secs(10)).timeout(timeout);
         if e.uri().scheme_str() == Some("https") {
-            let mut tls = tonic::transport::ClientTlsConfig::new().with_native_roots();
-            if let Some(pem) = options.ca_pem {
-                tls = tls.ca_certificate(tonic::transport::Certificate::from_pem(pem));
-            }
+            let tls = tonic::transport::ClientTlsConfig::new();
+            let tls = if let Some(pem) = options.ca_pem {
+                tls.ca_certificate(tonic::transport::Certificate::from_pem(pem))
+            } else {
+                tls.with_native_roots()
+            };
             e = e
                 .tls_config(tls)
                 .map_err(|_| Error::invalid("TLS configuration failed"))?
         }
         let auth = Authentication {
-            value: format!("Bearer {token}")
+            value: format!("Bearer {api_key}")
                 .parse()
-                .map_err(|_| Error::invalid("invalid token"))?,
+                .map_err(|_| Error::invalid("invalid api_key"))?,
             timeout,
         };
         let channel = e.connect().await.map_err(|_| Error {
@@ -308,26 +316,6 @@ impl Client {
     async fn invoke(&self, operation: &str, value: Value) -> Result<Value, Error> {
         let mut rpc = self.rpc.clone();
         Ok(match operation {
-            "list_tokens" => serde_json::to_value(
-                rpc.list_tokens(serde_json::from_value::<pb::PageRequest>(value)?)
-                    .await?
-                    .into_inner(),
-            )?,
-            "issue_token" => serde_json::to_value(
-                rpc.issue_token(serde_json::from_value::<pb::IssueTokenRequest>(value)?)
-                    .await?
-                    .into_inner(),
-            )?,
-            "revoke_token" => serde_json::to_value(
-                rpc.revoke_token(serde_json::from_value::<pb::TokenRefRequest>(value)?)
-                    .await?
-                    .into_inner(),
-            )?,
-            "reissue_token" => serde_json::to_value(
-                rpc.reissue_token(serde_json::from_value::<pb::ReissueTokenRequest>(value)?)
-                    .await?
-                    .into_inner(),
-            )?,
             "info" => serde_json::to_value(rpc.info(pb::Empty {}).await?.into_inner())?,
             "create_project" => serde_json::to_value(
                 rpc.create_project(serde_json::from_value::<pb::NameRequest>(value)?)
@@ -485,37 +473,6 @@ impl Client {
 }
 
 impl Client {
-    /// List managed credential metadata (platform administrators only).
-    pub async fn tokens(&self, page: Page) -> Result<Vec<ManagedToken>, Error> {
-        let r = self
-            .execute("list_tokens", serde_json::to_value(page)?)
-            .await?;
-        Ok(serde_json::from_value(r["tokens"].clone())?)
-    }
-    /// Preserve request_id on retries. Only initial success returns plaintext.
-    pub async fn issue_token(
-        &self,
-        request_id: &str,
-        subject: &str,
-        label: &str,
-        expires_at: &str,
-    ) -> Result<IssuedToken, Error> {
-        Ok(serde_json::from_value(self.execute("issue_token", json!({"request_id":request_id,"subject":subject,"label":label,"expires_at":expires_at})).await?)?)
-    }
-    pub async fn reissue_token(
-        &self,
-        request_id: &str,
-        token_id: &str,
-        label: &str,
-        expires_at: &str,
-    ) -> Result<IssuedToken, Error> {
-        Ok(serde_json::from_value(self.execute("reissue_token", json!({"request_id":request_id,"token_id":token_id,"label":label,"expires_at":expires_at})).await?)?)
-    }
-    pub async fn revoke_token(&self, token_id: &str) -> Result<(), Error> {
-        self.execute("revoke_token", json!({"token_id":token_id}))
-            .await?;
-        Ok(())
-    }
     pub async fn info(&self) -> Result<ServerInfo, Error> {
         decode(self.execute("info", json!({})).await?)
     }

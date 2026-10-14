@@ -102,7 +102,6 @@ function restoreProtoKeys(value: unknown, marker: string): unknown {
 
 export interface ServerInfo {
   platformAdmin: boolean;
-  managedTokens: boolean;
   version: string;
   backend: string;
   formatVersion: number;
@@ -280,11 +279,3 @@ export type ChangeSummary = {
   version?: bigint;
   revision?: bigint;
 };
-
-export interface ManagedToken {
-  id: string; subject: string; label: string; createdBy: string;
-  createdAt: string; expiresAt: string; revokedAt?: string;
-}
-export interface IssuedToken { credential: ManagedToken; token?: string; replayed: boolean; }
-export interface IssueTokenRequest { requestId: string; subject: string; label: string; expiresAt: string; }
-export interface ReissueTokenRequest { requestId: string; tokenId: string; label: string; expiresAt: string; }

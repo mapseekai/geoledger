@@ -34,10 +34,10 @@ async fn main() -> Result<(), Failure> {
         .nth(1)
         .ok_or("usage: large_data FILE [REPORT]")?;
     let report_path = std::env::args().nth(2).ok_or("report path required")?;
-    let token: Value = serde_json::from_reader(File::open(std::env::var("GL_TOKEN_FILE")?)?)?;
+    let api_key = std::fs::read_to_string(std::env::var("GL_API_KEY_FILE")?)?;
     let client = Client::connect_with_timeout(
         std::env::var("GL_ENDPOINT")?,
-        token[0]["token"].as_str().ok_or("token")?,
+        api_key.trim(),
         Duration::from_secs(600),
     )
     .await?;

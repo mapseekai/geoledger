@@ -163,6 +163,7 @@ impl Service {
     async fn admitted<T>(&self, call: &mut Call, request: &Request<T>) -> Result<ExecutionPermit> {
         if let Some(admission) = request.extensions().get::<Admission>() {
             call.subject = admission.call.subject.clone();
+            call.identity = admission.call.identity.clone();
             call.peer = admission.call.peer;
             call.request_id = admission.call.request_id.clone();
             call.started = admission.call.started;
@@ -342,7 +343,6 @@ impl Service {
         let value = input(value)?;
         let mut result = self.execute(call, value, timeout, permit).await?;
         result = match call.operation.as_str() {
-            "list_tokens" => json!({"tokens":result}),
             "list_projects" => json!({"projects":result}),
             "list_datasets" => json!({"datasets":result}),
             "list_workspaces" => json!({"workspaces":result}),
@@ -502,40 +502,12 @@ impl pb::geo_ledger_server::GeoLedger for Service {
                 version: env!("CARGO_PKG_VERSION").into(),
                 backend: self.app.backend().into(),
                 format_version: geoledger_engine::FORMAT_VERSION as u32,
-                platform_admin: call
-                    .subject
-                    .as_ref()
-                    .is_some_and(|v| self.app.policy().admins.contains(v)),
-                managed_tokens: self.authentication.managed_tokens(),
+                platform_admin: call.identity.as_ref().is_some_and(|v| v.user.is_admin),
                 max_request_bytes: self.limits.max_request_bytes as u32,
                 max_feature_bytes: 0, // No independent per-feature byte limit.
             }),
             &call.request_id,
         ))
-    }
-    async fn list_tokens(
-        &self,
-        request: Request<pb::PageRequest>,
-    ) -> std::result::Result<Response<pb::TokensReply>, Status> {
-        self.call(request, "list_tokens").await
-    }
-    async fn issue_token(
-        &self,
-        request: Request<pb::IssueTokenRequest>,
-    ) -> std::result::Result<Response<pb::IssuedTokenReply>, Status> {
-        self.call(request, "issue_token").await
-    }
-    async fn revoke_token(
-        &self,
-        request: Request<pb::TokenRefRequest>,
-    ) -> std::result::Result<Response<pb::OkReply>, Status> {
-        self.call(request, "revoke_token").await
-    }
-    async fn reissue_token(
-        &self,
-        request: Request<pb::ReissueTokenRequest>,
-    ) -> std::result::Result<Response<pb::IssuedTokenReply>, Status> {
-        self.call(request, "reissue_token").await
     }
     async fn create_project(
         &self,

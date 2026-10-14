@@ -79,7 +79,7 @@ WORKDIR /app
 USER 10001:10001
 VOLUME /data
 ENV GL_DATA_DIR=/data GL_HTTP_LISTEN=0.0.0.0:7881 GL_GRPC_LISTEN=0.0.0.0:7882 \
-    GL_SPATIALITE_EXTENSION=/usr/lib/mod_spatialite.so.8 GL_WEB_ENDPOINT=http://127.0.0.1:7882 \
+    GL_SPATIALITE_EXTENSION=/usr/lib/mod_spatialite.so.8 GL_WEB_ENDPOINT=http://127.0.0.1:7881 \
     NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
 EXPOSE 3000 7881 7882
 HEALTHCHECK --interval=15s --timeout=8s --start-period=30s --retries=3 CMD ["/nodejs/bin/node", "/app/container.cjs", "probe"]

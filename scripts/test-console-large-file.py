@@ -5,9 +5,9 @@ from collections import Counter
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--url',default='http://localhost:13001');p.add_argument('--token-file',required=True);p.add_argument('--chromium',required=True);p.add_argument('--geojson',required=True);p.add_argument('--report',default='/tmp/geoledger-large-file-report.json');p.add_argument('--timeout',type=int,default=900)
+p.add_argument('--url',default='http://localhost:13001');p.add_argument('--api-key-file',required=True);p.add_argument('--chromium',required=True);p.add_argument('--geojson',required=True);p.add_argument('--report',default='/tmp/geoledger-large-file-report.json');p.add_argument('--timeout',type=int,default=900)
 p.add_argument('--resume-report',action='store_true',help='Recheck published queries from the existing report without importing again')
-a=p.parse_args();token=json.loads(Path(a.token_file).read_text())[0]['token'];report={'file':a.geojson,'bytes':Path(a.geojson).stat().st_size,'save_requests':[],'query_requests':[],'page_errors':[]}
+a=p.parse_args();token=Path(a.api_key_file).read_text().strip();report={'file':a.geojson,'bytes':Path(a.geojson).stat().st_size,'save_requests':[],'query_requests':[],'page_errors':[]}
 def canonical(value):
  if isinstance(value,float) and value.is_integer():return int(value)
  if isinstance(value,list):return [canonical(v) for v in value]
@@ -45,7 +45,8 @@ with sync_playwright() as playwright:
     except Exception:pass
    checkpoint()
  page.on('requestfinished',lambda request: response(request.response()) if request.response() else None)
- page.goto(a.url+'/login');page.get_by_label('访问令牌',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
+ page.goto(a.url+'/login');page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+ page.get_by_label('API Key',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
  def call(body):
   r=page.evaluate('''async body=>{const t=performance.now();const r=await fetch('/api/console',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.text(),ms:performance.now()-t}}''',body)
   if r['status']!=200:raise RuntimeError(json.dumps(r,ensure_ascii=False))

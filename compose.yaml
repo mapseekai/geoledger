@@ -10,6 +10,9 @@ services:
     environment:
       GL_WEB_ORIGIN: ${GL_WEB_ORIGIN:-http://localhost:3000}
       GL_WEB_SESSION_SECRET: ${GL_WEB_SESSION_SECRET:?set GL_WEB_SESSION_SECRET}
+      GL_ADMIN_USERNAME: ${GL_ADMIN_USERNAME:-admin}
+      # Unset values are omitted so the server generates its private bootstrap password.
+      GL_ADMIN_PASSWORD:
       GL_WEB_BASEMAP_URL: ${GL_WEB_BASEMAP_URL:-}
       GL_WEB_BASEMAP_ATTRIBUTION: ${GL_WEB_BASEMAP_ATTRIBUTION:-}
       GL_SHUTDOWN_DRAIN_SECS: "5"

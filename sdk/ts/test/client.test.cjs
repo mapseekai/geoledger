@@ -6,13 +6,13 @@ const { Client, Workspace, GeoLedgerError, parseJson } = require("../dist");
 test("plaintext to remote hosts requires explicit opt-in", () => {
   const { Client, isLoopbackHost } = require("../dist/index.js");
   assert.throws(
-    () => new Client("http://geoledger.example:7882", "token"),
+    () => new Client("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     (e) => e.code === "invalid_argument",
   );
-  new Client("http://geoledger.example:7882", "token", 1000, {
+  new Client("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1000, {
     allowInsecure: true,
   }).close();
-  new Client("http://127.0.0.1:7882", "token").close();
+  new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").close();
   assert.ok(
     isLoopbackHost("[::1]") &&
       isLoopbackHost("localhost") &&
@@ -21,7 +21,7 @@ test("plaintext to remote hosts requires explicit opt-in", () => {
 });
 
 test("public client keeps generated transport private", () => {
-  const client = new Client("http://127.0.0.1:7882", "test-only-token");
+  const client = new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   try {
     assert.equal("rpc" in client, false);
     assert.equal("GeoLedgerClient" in require("../dist"), false);
@@ -67,7 +67,7 @@ test("integral decimal and exponent spellings must not silently lose digits", ()
 });
 
 test("missing feature rejects locally and explicit deletion is supported", async () => {
-  const client = new Client("http://127.0.0.1:7882", "test-only-token");
+  const client = new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   try {
     await assert.rejects(
       client.save("project", "draft", 0n, [
@@ -266,7 +266,7 @@ test("large saves and feature reads use chunked RPCs and reject truncated respon
   let truncate = false;
   server.addService(wire.GeoLedgerService, {
     saveStream(call, cb) {
-      assert.equal(call.metadata.get("authorization")[0], "Bearer test-token");
+      assert.equal(call.metadata.get("authorization")[0], "Bearer glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
       const chunks = [];
       let total;
       call.on("data", (chunk) => {
@@ -304,7 +304,7 @@ test("large saves and feature reads use chunked RPCs and reject truncated respon
       (error, port) => (error ? reject(error) : resolve(port)),
     ),
   );
-  const client = new Client(`http://127.0.0.1:${port}`, "test-token");
+  const client = new Client(`http://127.0.0.1:${port}`, "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   try {
     assert.equal(
       (

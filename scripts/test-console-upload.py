@@ -8,18 +8,18 @@ from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--url', default='http://127.0.0.1:3000')
-parser.add_argument('--token-file', required=True)
+parser.add_argument('--api-key-file', required=True)
 parser.add_argument('--chromium')
 parser.add_argument('--feature-bytes',type=int,default=128*1024)
 parser.add_argument('--screenshots', default='artifacts')
 args = parser.parse_args()
-token = json.loads(Path(args.token_file).read_text())[0]['token']
+token = Path(args.api_key_file).read_text().strip()
 shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
 origin = args.url.rstrip('/')
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True, executable_path=args.chromium,
-                                args=['--no-sandbox', '--disable-dev-shm-usage'])
+                                chromium_sandbox=True, args=['--disable-dev-shm-usage'])
     context = browser.new_context(viewport={'width':1440,'height':960})
     page = context.new_page()
     errors = []
@@ -31,10 +31,11 @@ with sync_playwright() as p:
     page.goto(origin+'/projects')
     page.wait_for_url('**/login')
     page.screenshot(path=str(shots/'next-login.png'), full_page=True)
-    page.get_by_label('访问令牌',exact=True).fill('invalid-test-token')
+    page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_label('API Key',exact=True).fill('invalid-test-token')
     page.get_by_role('button',name='进入控制台').click()
     expect(page.get_by_role('alert')).to_be_visible()
-    page.get_by_label('访问令牌',exact=True).fill(token)
+    page.get_by_label('API Key',exact=True).fill(token)
     page.get_by_role('button',name='进入控制台').click()
     page.wait_for_url('**/projects')
     cookies=context.cookies()

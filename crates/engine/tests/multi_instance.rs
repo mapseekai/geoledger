@@ -259,16 +259,16 @@ fn postgis_instances_sharing_a_database() -> TestResult {
     if actual != "geoledger_test" {
         return Err("requires isolated geoledger_test database".into());
     }
-    admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
+    support::reset_database(&mut admin)?;
     let result = (|| -> TestResult {
         let (target, mut db) = support::connect_isolated(&dsn, &name)?;
-        db.batch_execute("CREATE EXTENSION postgis")?;
+        db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis")?;
         drop(db);
         let instances: Vec<_> = (0..3)
             .map(|_| Application::new(Storage::Postgis(target.clone())))
             .collect();
         scenario(&instances)
     })();
-    admin.batch_execute(&format!("DROP DATABASE {name} WITH (FORCE)"))?;
+    support::reset_database(&mut admin)?;
     result
 }

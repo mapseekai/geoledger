@@ -42,26 +42,6 @@ class GeoLedgerStub(object):
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.Empty.SerializeToString,
                 response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.InfoReply.FromString,
                 _registered_method=True)
-        self.ListTokens = channel.unary_unary(
-                '/geoledger.v1.GeoLedger/ListTokens',
-                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.PageRequest.SerializeToString,
-                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.TokensReply.FromString,
-                _registered_method=True)
-        self.IssueToken = channel.unary_unary(
-                '/geoledger.v1.GeoLedger/IssueToken',
-                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.IssueTokenRequest.SerializeToString,
-                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.IssuedTokenReply.FromString,
-                _registered_method=True)
-        self.RevokeToken = channel.unary_unary(
-                '/geoledger.v1.GeoLedger/RevokeToken',
-                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.TokenRefRequest.SerializeToString,
-                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
-                _registered_method=True)
-        self.ReissueToken = channel.unary_unary(
-                '/geoledger.v1.GeoLedger/ReissueToken',
-                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.ReissueTokenRequest.SerializeToString,
-                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.IssuedTokenReply.FromString,
-                _registered_method=True)
         self.CreateProject = channel.unary_unary(
                 '/geoledger.v1.GeoLedger/CreateProject',
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.NameRequest.SerializeToString,
@@ -231,30 +211,6 @@ class GeoLedgerServicer(object):
     """
 
     def Info(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ListTokens(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def IssueToken(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def RevokeToken(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ReissueToken(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -462,26 +418,6 @@ def add_GeoLedgerServicer_to_server(servicer, server):
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.Empty.FromString,
                     response_serializer=geoledger_dot_v1_dot_geoledger__pb2.InfoReply.SerializeToString,
             ),
-            'ListTokens': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListTokens,
-                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.PageRequest.FromString,
-                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.TokensReply.SerializeToString,
-            ),
-            'IssueToken': grpc.unary_unary_rpc_method_handler(
-                    servicer.IssueToken,
-                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.IssueTokenRequest.FromString,
-                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.IssuedTokenReply.SerializeToString,
-            ),
-            'RevokeToken': grpc.unary_unary_rpc_method_handler(
-                    servicer.RevokeToken,
-                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.TokenRefRequest.FromString,
-                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.OkReply.SerializeToString,
-            ),
-            'ReissueToken': grpc.unary_unary_rpc_method_handler(
-                    servicer.ReissueToken,
-                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.ReissueTokenRequest.FromString,
-                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.IssuedTokenReply.SerializeToString,
-            ),
             'CreateProject': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateProject,
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.NameRequest.FromString,
@@ -673,114 +609,6 @@ class GeoLedger(object):
             '/geoledger.v1.GeoLedger/Info',
             geoledger_dot_v1_dot_geoledger__pb2.Empty.SerializeToString,
             geoledger_dot_v1_dot_geoledger__pb2.InfoReply.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ListTokens(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/geoledger.v1.GeoLedger/ListTokens',
-            geoledger_dot_v1_dot_geoledger__pb2.PageRequest.SerializeToString,
-            geoledger_dot_v1_dot_geoledger__pb2.TokensReply.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def IssueToken(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/geoledger.v1.GeoLedger/IssueToken',
-            geoledger_dot_v1_dot_geoledger__pb2.IssueTokenRequest.SerializeToString,
-            geoledger_dot_v1_dot_geoledger__pb2.IssuedTokenReply.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def RevokeToken(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/geoledger.v1.GeoLedger/RevokeToken',
-            geoledger_dot_v1_dot_geoledger__pb2.TokenRefRequest.SerializeToString,
-            geoledger_dot_v1_dot_geoledger__pb2.OkReply.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ReissueToken(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/geoledger.v1.GeoLedger/ReissueToken',
-            geoledger_dot_v1_dot_geoledger__pb2.ReissueTokenRequest.SerializeToString,
-            geoledger_dot_v1_dot_geoledger__pb2.IssuedTokenReply.FromString,
             options,
             channel_credentials,
             insecure,

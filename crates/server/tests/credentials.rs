@@ -1,152 +1,341 @@
-//! Real gRPC and HTTP credential lifecycle; fixtures contain no deployable credentials.
-use geoledger_client::{Client, Page};
-use geoledger_server::{
-    Application, Authentication, Authenticator, Policy, Service, Storage, Tokens,
-};
-use serde_json::json;
-use uuid::Uuid;
+//! Real HTTP session lifecycle and gRPC API key admission share database state.
+mod common;
+use axum::{body::Body, extract::ConnectInfo, http::Request};
+use geoledger_server::{Application, Service, Storage};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use tower::ServiceExt;
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
-const ROOT: &str = "test-only-root-token-credentials-integration";
+const INITIAL: &str = "initial-test-password-123";
+const PASSWORD: &str = "changed-test-password-456";
+async fn call(
+    router: &axum::Router,
+    op: &str,
+    session: Option<&str>,
+    input: Value,
+) -> Result<(u16, Value), Box<dyn std::error::Error + Send + Sync>> {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(format!("/auth/v1/{op}"))
+        .extension(ConnectInfo(geoledger_server::tls::PeerAddr(
+            "127.0.0.1:12345".parse()?,
+        )))
+        .header("content-type", "application/json");
+    if let Some(session) = session {
+        request = request.header("x-geoledger-session", session);
+    }
+    let response = router
+        .clone()
+        .oneshot(request.body(Body::from(input.to_string()))?)
+        .await?;
+    let status = response.status().as_u16();
+    let body = response.into_body().collect().await?.to_bytes();
+    Ok((status, serde_json::from_slice(&body)?))
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn managed_credentials_authenticate_and_revoke_across_transports() -> TestResult {
-    let dir = tempfile::tempdir()?;
-    let app = Application::new(Storage::Sqlite(dir.path().join("db"))).with_policy(Policy {
-        admins: ["root".into()].into(),
-        ..Default::default()
-    });
+async fn passwords_sessions_keys_and_transport_invalidation() -> TestResult {
+    let dir = common::tempdir()?;
+    let app = Application::new(Storage::Sqlite(dir.path().join("auth.db")));
     app.migrate()?;
-    let tokens = Tokens::from_json(
-        json!([{"subject":"root","token_sha256":geoledger_server::sha256_hex(ROOT)}])
-            .to_string()
-            .as_bytes(),
-    )?;
-    let authentication = std::sync::Arc::new(Authentication::new(Authenticator::Tokens(tokens)));
-    let service = Service::with_authentication(app, authentication.clone());
-    let grpc = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let http = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let endpoint = format!("http://{}", grpc.local_addr()?);
-    let http_url = format!("http://{}/api/v1", http.local_addr()?);
+    assert!(app.bootstrap_admin("Admin", INITIAL)?);
+    let service = Service::new(app.clone());
     let router = geoledger_server::router(service.clone());
-    let h = tokio::spawn(async move { axum::serve(http, router).await });
-    let g = tokio::spawn(async move {
+    let (wrong, _) = call(
+        &router,
+        "login_password",
+        None,
+        json!({"username":"absent","password":"wrong"}),
+    )
+    .await?;
+    assert_eq!(wrong, 401);
+    let (_, login) = call(
+        &router,
+        "login_password",
+        None,
+        json!({"username":"ADMIN","password":INITIAL}),
+    )
+    .await?;
+    assert_eq!(login["user"]["must_change_password"], true);
+    let temporary = login["session"].as_str().ok_or("session")?;
+    let (blocked, _) = call(
+        &router,
+        "create_api_key",
+        Some(temporary),
+        json!({"name":"blocked","current_password":INITIAL}),
+    )
+    .await?;
+    assert_eq!(blocked, 403);
+    let (status, changed) = call(
+        &router,
+        "change_password",
+        Some(temporary),
+        json!({"current_password":INITIAL,"new_password":PASSWORD}),
+    )
+    .await?;
+    assert_eq!(status, 200);
+    let session = changed["session"].as_str().ok_or("session")?;
+    assert_ne!(session, temporary);
+    assert!(app.authenticate_session(temporary).is_err());
+    let (status, key) = call(
+        &router,
+        "create_api_key",
+        Some(session),
+        json!({"name":"automation","current_password":PASSWORD}),
+    )
+    .await?;
+    assert_eq!(status, 200);
+    let api_key = key["api_key"].as_str().ok_or("key")?;
+    assert!(api_key.starts_with("glk_"));
+    assert_eq!(api_key.len(), 68);
+    let (status, list) = call(&router, "list_api_keys", Some(session), json!({})).await?;
+    assert_eq!(status, 200);
+    assert!(!list.to_string().contains(api_key));
+    let (_, key_login) = call(&router, "login_api_key", None, json!({"api_key":api_key})).await?;
+    let key_session = key_login["session"].as_str().ok_or("session")?;
+    let (denied, _) = call(
+        &router,
+        "create_api_key",
+        Some(key_session),
+        json!({"name":"escalate"}),
+    )
+    .await?;
+    assert_eq!(denied, 403);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let task = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(geoledger_server::grpc(service))
-            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(grpc))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
             .await
     });
-    let root = Client::connect(&endpoint, ROOT).await?;
-    assert!(root.info().await?.platform_admin);
-    let id = Uuid::new_v4().to_string();
-    let issued = root
-        .issue_token(&id, "alice", "work", "2099-01-01T00:00:00Z")
-        .await?;
-    let secret = issued.token.ok_or("missing plaintext")?;
-    assert!(
-        root.issue_token(&id, "alice", "work", "2099-01-01T00:00:00Z")
-            .await?
-            .token
-            .is_none()
-    );
-    let alice = Client::connect(&endpoint, &secret).await?;
-    assert!(!alice.info().await?.platform_admin);
-    assert!(alice.tokens(Page::default()).await.is_err());
-    let project = root.create_project("private").await?;
-    assert!(alice.project(&project.id).await.is_err());
-    root.set_member(&project.id, "alice", "viewer").await?;
-    assert_eq!(alice.project(&project.id).await?.role, "viewer");
-    assert!(alice.create_workspace(&project.id).await.is_err());
-    let http_client = reqwest::Client::new();
-    let response = http_client
-        .post(format!("{http_url}/revoke_token"))
-        .bearer_auth(ROOT)
-        .body(json!({"token_id":issued.credential.id}).to_string())
-        .send()
-        .await?;
-    assert!(response.status().is_success());
+    let client = geoledger_client::Client::connect(endpoint, api_key).await?;
+    assert!(client.info().await?.platform_admin);
+    client.create_project("authenticated project").await?;
+    let (status, _) = call(
+        &router,
+        "revoke_api_key",
+        Some(session),
+        json!({"key_id":key["credential"]["id"],"current_password":PASSWORD}),
+    )
+    .await?;
+    assert_eq!(status, 200);
     assert_eq!(
-        alice.info().await.err().ok_or("revocation ignored")?.code,
+        client.info().await.err().ok_or("revoked accepted")?.code,
         "unauthenticated"
     );
-    assert_eq!(
-        http_client
-            .post(format!("{http_url}/info"))
-            .bearer_auth(&secret)
-            .body("{}")
-            .send()
-            .await?
-            .status(),
-        401
-    );
-    let next = root
-        .issue_token(
-            &Uuid::new_v4().to_string(),
-            "alice",
-            "second",
-            "2099-01-01T00:00:00Z",
-        )
-        .await?;
-    let replacement = root
-        .reissue_token(
-            &Uuid::new_v4().to_string(),
-            &next.credential.id,
-            "replacement",
-            "2099-01-01T00:00:00Z",
-        )
-        .await?;
-    assert!(
-        Client::connect(&endpoint, &next.token.ok_or("next")?)
-            .await?
-            .info()
-            .await
-            .is_err()
-    );
-    assert!(
-        Client::connect(&endpoint, &replacement.token.ok_or("replacement")?)
-            .await?
-            .info()
-            .await
-            .is_ok()
-    );
-    // File credentials must never reactivate a revoked managed credential.
-    authentication.replace(Authenticator::Tokens(Tokens::from_json(
-        json!([{"subject":"root","token_sha256":geoledger_server::sha256_hex(&secret)}])
-            .to_string()
-            .as_bytes(),
-    )?));
-    assert_eq!(
-        alice.info().await.err().ok_or("file fallback bypass")?.code,
-        "unauthenticated"
-    );
-    // JWT mode advertises the feature as unavailable and rejects managed credentials.
-    authentication.replace(Authenticator::Jwt(Box::new(
-        geoledger_server::JwtAuthenticator::from_jwks(
-            include_bytes!("fixtures/jwks.json"),
-            "https://issuer.example",
-            "geoledger",
-        )?,
-    )));
-    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
-    header.kid = Some("test-only".into());
-    let jwt = jsonwebtoken::encode(
-        &header,
-        &json!({"iss":"https://issuer.example","aud":"geoledger","sub":"root","exp":4102444800_i64}),
-        &jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("fixtures/jwt-test-only.pem"))?,
+    let (status, _) = call(&router, "me", Some(key_session), json!({})).await?;
+    assert_eq!(status, 401);
+    let (status, _) = call(&router, "logout", Some(session), json!({})).await?;
+    assert_eq!(status, 200);
+    let (status, _) = call(&router, "me", Some(session), json!({})).await?;
+    assert_eq!(status, 401);
+    task.abort();
+    Ok(())
+}
+#[tokio::test]
+async fn login_rate_limit_and_duplicate_headers() -> TestResult {
+    let dir = common::tempdir()?;
+    let app = Application::new(Storage::Sqlite(dir.path().join("auth.db")));
+    app.migrate()?;
+    let router = geoledger_server::router(Service::new(app));
+    let mut accepted = 0;
+    for index in 0..200 {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/auth/v1/login_api_key")
+            .extension(ConnectInfo(geoledger_server::tls::PeerAddr(
+                "127.0.0.1:12345".parse()?,
+            )))
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", format!("192.0.2.{index}"))
+            .body(Body::from(r#"{"api_key":"invalid"}"#))?;
+        let status = router.clone().oneshot(request).await?.status();
+        if status == 429 {
+            break;
+        }
+        assert_eq!(status, 401);
+        accepted += 1;
+    }
+    // Allow timer refill without making the test depend on exact CPU scheduling.
+    assert!((100..200).contains(&accepted));
+    let (status, _) = call(&router, "login_api_key", None, json!({"api_key":"invalid"})).await?;
+    assert_eq!(status, 429);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/info")
+        .header("authorization", format!("Bearer {}", common::KEY))
+        .header("authorization", format!("Bearer {}", common::KEY))
+        .body(Body::from("{}"))?;
+    assert_eq!(router.oneshot(request).await?.status(), 401);
+    Ok(())
+}
+
+#[tokio::test]
+async fn password_limits_normalize_names_and_isolate_accounts_at_one_peer() -> TestResult {
+    let dir = common::tempdir()?;
+    let path = dir.path().join("password-peer.db");
+    let app = Application::new(Storage::Sqlite(path.clone()));
+    app.migrate()?;
+    app.bootstrap_admin("admin", INITIAL)?;
+    for index in 0..20 {
+        common::seed(
+            &path,
+            &[(
+                &format!("person-{index}"),
+                &format!("glk_{index:064x}"),
+                false,
+            )],
+        )?;
+    }
+    // Reuse a real Argon2 hash for public test passwords; every login still verifies it.
+    let db = rusqlite::Connection::open(&path)?;
+    db.execute(
+        "UPDATE gl_passwords SET password_hash=(SELECT password_hash FROM gl_passwords WHERE user_id=(SELECT id FROM gl_users WHERE username='admin'))",
+        [],
     )?;
-    let jwt_client = Client::connect(&endpoint, &jwt).await?;
-    assert!(!jwt_client.info().await?.managed_tokens);
-    assert!(
-        jwt_client
-            .issue_token(
-                &Uuid::new_v4().to_string(),
-                "alice",
-                "jwt-disabled",
-                "2099-01-01T00:00:00Z"
+    drop(db);
+    let router = geoledger_server::router(Service::new(app));
+    // Existing and nonexistent accounts follow the same normalization and failure budget.
+    for name in ["admin", "absent"] {
+        let variants = [
+            name.to_owned(),
+            name.to_ascii_uppercase(),
+            format!(" \t{name}\n"),
+        ];
+        let mut failures = 0;
+        for index in 0..20 {
+            let (status, result) = call(
+                &router,
+                "login_password",
+                None,
+                json!({"username": variants[index % 3], "password":"wrong"}),
             )
-            .await
-            .is_err()
+            .await?;
+            if status == 429 {
+                break;
+            }
+            assert_eq!(status, 401);
+            assert_eq!(result["error"]["message"], "authentication failed");
+            failures += 1;
+        }
+        assert!((10..20).contains(&failures));
+        for variant in &variants {
+            assert_eq!(
+                call(
+                    &router,
+                    "login_password",
+                    None,
+                    json!({"username":variant,"password":INITIAL})
+                )
+                .await?
+                .0,
+                429
+            );
+        }
+    }
+    for index in 0..20 {
+        assert_eq!(
+            call(
+                &router,
+                "login_password",
+                None,
+                json!({"username":format!("person-{index}"),"password":INITIAL})
+            )
+            .await?
+            .0,
+            200
+        );
+        // Keys neither share a username bucket nor consume the password budget.
+        assert_eq!(
+            call(
+                &router,
+                "login_api_key",
+                None,
+                json!({"api_key":format!("glk_{index:064x}")})
+            )
+            .await?
+            .0,
+            200
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sensitive_limits_isolate_users_sharing_one_console_peer() -> TestResult {
+    let dir = common::tempdir()?;
+    let path = dir.path().join("shared-peer.db");
+    let app = Application::new(Storage::Sqlite(path.clone()));
+    app.migrate()?;
+    let second_key = format!("glk_{}", "b".repeat(64));
+    common::seed(
+        &path,
+        &[
+            ("first", common::KEY, false),
+            ("second", &second_key, false),
+        ],
+    )?;
+    let router = geoledger_server::router(Service::new(app));
+    let (_, first) = call(
+        &router,
+        "login_api_key",
+        None,
+        json!({"api_key":common::KEY}),
+    )
+    .await?;
+    let (_, second) = call(
+        &router,
+        "login_api_key",
+        None,
+        json!({"api_key":second_key}),
+    )
+    .await?;
+    let first = first["session"].as_str().ok_or("first session")?;
+    let second = second["session"].as_str().ok_or("second session")?;
+    for _ in 0..10 {
+        let (status, _) = call(
+            &router,
+            "create_api_key",
+            Some(first),
+            json!({"name":"denied","current_password":"wrong"}),
+        )
+        .await?;
+        assert_eq!(status, 403);
+    }
+    assert_eq!(
+        call(
+            &router,
+            "create_api_key",
+            Some(first),
+            json!({"name":"denied","current_password":"wrong"})
+        )
+        .await?
+        .0,
+        429
     );
-    assert!(alice.info().await.is_err());
-    h.abort();
-    g.abort();
+    assert_eq!(
+        call(
+            &router,
+            "create_api_key",
+            Some(second),
+            json!({"name":"denied","current_password":"wrong"})
+        )
+        .await?
+        .0,
+        403
+    );
+    assert_eq!(call(&router, "me", Some(first), json!({})).await?.0, 200);
+    // Account reauthentication attempts do not consume the shared peer's anonymous login budget.
+    assert_eq!(
+        call(
+            &router,
+            "login_api_key",
+            None,
+            json!({"api_key":common::KEY})
+        )
+        .await?
+        .0,
+        200
+    );
     Ok(())
 }

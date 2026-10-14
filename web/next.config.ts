@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import path from "node:path";
 const config: NextConfig = {
   output: "standalone",
+  distDir: process.env.GL_WEB_DIST_DIR ?? ".next",
   outputFileTracingRoot: path.join(import.meta.dirname, ".."),
   serverExternalPackages: ["@geoledger/client", "@grpc/grpc-js"],
   poweredByHeader: false,

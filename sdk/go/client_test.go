@@ -219,10 +219,10 @@ func TestFirstAccessFailureAndRetryConflictReleaseIntent(t *testing.T) {
 
 func TestPlaintextRemoteRequiresOptIn(t *testing.T) {
 	t.Setenv("GL_ALLOW_INSECURE_TRANSPORT", "")
-	if _, err := Dial("http://geoledger.example:7882", "token"); err == nil || err.(*Error).Code != "invalid_argument" {
+	if _, err := Dial("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err == nil || err.(*Error).Code != "invalid_argument" {
 		t.Fatalf("expected refusal, got %v", err)
 	}
-	c, err := DialWithOptions("http://geoledger.example:7882", "token", DialOptions{Timeout: time.Second, AllowInsecure: true})
+	c, err := DialWithOptions("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", DialOptions{Timeout: time.Second, AllowInsecure: true})
 	if err != nil {
 		t.Fatal(err)
 	}

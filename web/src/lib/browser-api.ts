@@ -1,3 +1,4 @@
+import { uncertainStatus } from "./http-status";
 import { stringify } from "lossless-json";
 import { parseLosslessJson } from "./conflicts";
 import { featureItemsUrl } from "./feature-links";
@@ -31,25 +32,34 @@ export async function send<T>(
       body: payload === undefined ? undefined : JSON.stringify(payload),
       signal: AbortSignal.timeout(45_000),
     });
-    const raw = await response.text();
-    const data =
-      featureResponse && response.ok
-        ? (parseLosslessJson(raw) as Record<string, unknown>)
-        : JSON.parse(raw);
     if (!response.ok) {
       if (
         response.status === 401 &&
-        (path === "/api/console" || path.startsWith("/api/projects/"))
+        (path === "/api/console" ||
+          path === "/api/auth" ||
+          path.startsWith("/api/projects/"))
       ) {
         window.location.replace("/login?expired=1");
       }
+      let detail: Record<string, unknown> = {};
+      try {
+        const value = JSON.parse(await response.text());
+        if (value?.error && typeof value.error === "object")
+          detail = value.error;
+      } catch {
+        // Gateway bodies may be empty, non-JSON or interrupted; the HTTP status is still known.
+      }
       throw new ApiError(
-        data.error?.message ?? "请求失败",
+        typeof detail.message === "string" ? detail.message : "请求失败",
         response.status,
-        data.error?.uncertain ?? response.status >= 500,
-        data.error?.requestId,
+        detail.uncertain === true || uncertainStatus(response.status),
+        typeof detail.requestId === "string" ? detail.requestId : undefined,
       );
     }
+    const raw = await response.text();
+    const data = featureResponse
+      ? (parseLosslessJson(raw) as Record<string, unknown>)
+      : JSON.parse(raw);
     if (featureResponse) {
       if (data.type !== "FeatureCollection" || !Array.isArray(data.features))
         throw new Error("Invalid FeatureCollection");
@@ -100,7 +110,6 @@ export type Workspace = {
 };
 export type Info = {
   platformAdmin: boolean;
-  managedTokens: boolean;
   version: string;
   backend: string;
   formatVersion: number;

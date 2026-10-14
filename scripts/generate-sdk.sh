@@ -12,7 +12,8 @@ assert json.load(open('sdk/ts/node_modules/ts-proto/package.json'))['version'] =
 CHECK
 # Generated network bindings are implementation details, never package-root exports.
 "$python" -m grpc_tools.protoc -I proto --go_out=sdk/go --go_opt=module=github.com/mapseekai/geoledger/sdk/go --go-grpc_out=sdk/go --go-grpc_opt=module=github.com/mapseekai/geoledger/sdk/go proto/geoledger/v1/geoledger.proto
-sdk_generated_dir=$(mktemp -d)
+mkdir -p target
+sdk_generated_dir=$(mktemp -d "$PWD/target/auth-refactor-generated.XXXXXX")
 trap 'rm -rf "$sdk_generated_dir"' EXIT
 "$python" -m grpc_tools.protoc -I proto --python_out="$sdk_generated_dir" --pyi_out="$sdk_generated_dir" --grpc_python_out="$sdk_generated_dir" proto/geoledger/v1/geoledger.proto
 python3 - "$sdk_generated_dir" <<'PY'

@@ -4,13 +4,14 @@ import argparse,json,uuid,re
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--url',required=True);p.add_argument('--token-file',required=True);p.add_argument('--chromium',required=True);p.add_argument('--screenshots',default='/tmp/geoledger-postgis-shots');a=p.parse_args()
-token=json.loads(Path(a.token_file).read_text())[0]['token']
+p.add_argument('--url',required=True);p.add_argument('--api-key-file',required=True);p.add_argument('--chromium',required=True);p.add_argument('--screenshots',default='/tmp/geoledger-postgis-shots');a=p.parse_args()
+token=Path(a.api_key_file).read_text().strip()
 with sync_playwright() as pw:
     browser=pw.chromium.launch(headless=True,executable_path=a.chromium)
     context=browser.new_context(viewport={'width':1440,'height':960});page=context.new_page();errors=[]
     page.on('pageerror',lambda error:errors.append(str(error)))
-    page.goto(a.url+'/login');page.get_by_label('访问令牌',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
+    page.goto(a.url+'/login');page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_label('API Key',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
     def call(body):
         response=context.request.post(a.url+'/api/console',data=body,headers={'Origin':a.url})
         assert response.status==200,response.text()

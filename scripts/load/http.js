@@ -7,7 +7,7 @@ import exec from 'k6/execution';
 import { Counter, Rate } from 'k6/metrics';
 
 const base = __ENV.GL_BASE_URL || fail('GL_BASE_URL is required');
-const token = __ENV.GL_TOKEN || fail('GL_TOKEN is required');
+const token = __ENV.GL_API_KEY || fail('GL_API_KEY is required');
 const batch = Number(__ENV.GL_LOAD_BATCH || 10);
 
 const busy = new Rate('geoledger_busy');

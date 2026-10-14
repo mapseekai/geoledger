@@ -5,6 +5,7 @@ Only uses loopback ephemeral listeners and a temporary data directory. No busine
 connection settings or caller credentials are inherited. No tokens are logged.
 """
 from __future__ import annotations
+from auth_test_support import provision
 import argparse
 import json
 import os
@@ -34,7 +35,8 @@ def exercise(binary: Path, runtime: Path | None, sdk_consumer: Path | None = Non
         env['GL_SPATIALITE_EXTENSION'] = os.environ['GL_SPATIALITE_EXTENSION']
     env['GL_SHUTDOWN_TIMEOUT_SECS'] = '5'
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with tempfile.TemporaryDirectory(prefix='geoledger-binary-smoke-') as temporary:
+    Path('target/auth-refactor-smoke').mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir='target/auth-refactor-smoke') as temporary:
         root = Path(temporary)
         selected: set[int] = set()
         while len(selected) < 2:
@@ -60,8 +62,9 @@ def exercise(binary: Path, runtime: Path | None, sdk_consumer: Path | None = Non
                         if time.monotonic() >= until:
                             raise TimeoutError('server never became ready')
                         time.sleep(0.1)
-                    credentials = json.loads((root / 'data/admin-credentials.json').read_text())
-                    token = credentials[0]['token']
+                    if not restart:
+                        provision(base, root / "data", root / "api-key")
+                    token = (root / "api-key").read_text().strip()
                     def call(operation: str, body: dict):
                         request = urllib.request.Request(base + '/api/v1/' + operation, data=json.dumps(body).encode(), headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token})
                         try:
@@ -70,7 +73,7 @@ def exercise(binary: Path, runtime: Path | None, sdk_consumer: Path | None = Non
                         except urllib.error.HTTPError as error:
                             raise RuntimeError(f'{operation} returned HTTP {error.code}') from None
                     if sdk_consumer and not restart:
-                        sdk_env = dict(env, GL_TOKEN_FILE=str(root / 'data/admin-credentials.json'), GL_ENDPOINT=f'http://127.0.0.1:{grpc}')
+                        sdk_env = dict(env, GL_API_KEY_FILE=str(root / 'api-key'), GL_ENDPOINT=f'http://127.0.0.1:{grpc}')
                         sdk_env.pop('PYTHONPATH', None)
                         subprocess.run(['node', 'smoke.cjs'], cwd=sdk_consumer, env=sdk_env, check=True, timeout=120)
                         subprocess.run([str(sdk_consumer / 'python/bin/python'), 'smoke.py'], cwd=sdk_consumer, env=sdk_env, check=True, timeout=120)

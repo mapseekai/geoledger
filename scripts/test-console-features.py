@@ -5,11 +5,12 @@ from pathlib import Path
 from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright,expect
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--url',default='http://localhost:13001');p.add_argument('--token-file',required=True);p.add_argument('--chromium',required=True);p.add_argument('--fixture-report');p.add_argument('--report',default='/tmp/geoledger-features-report.json');a=p.parse_args()
-report={'page_errors':[]};token=json.loads(Path(a.token_file).read_text())[0]['token']
+p.add_argument('--url',default='http://localhost:13001');p.add_argument('--api-key-file',required=True);p.add_argument('--chromium',required=True);p.add_argument('--fixture-report');p.add_argument('--report',default='/tmp/geoledger-features-report.json');a=p.parse_args()
+report={'page_errors':[]};token=Path(a.api_key_file).read_text().strip()
 with sync_playwright() as pw:
  browser=pw.chromium.launch(headless=True,executable_path=a.chromium,args=['--no-sandbox','--disable-dev-shm-usage']);context=browser.new_context(viewport={'width':1600,'height':1000});page=context.new_page();page.on('pageerror',lambda e:report['page_errors'].append(str(e)))
- page.goto(a.url+'/login');page.get_by_label('访问令牌',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
+ page.goto(a.url+'/login');page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+ page.get_by_label('API Key',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
  def call(body):
   r=context.request.post(a.url+'/api/console',data=body,headers={'Origin':a.url});assert r.status==200,r.text();return json.loads(r.text())
  def get(url,status=200):

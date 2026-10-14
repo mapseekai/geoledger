@@ -235,22 +235,20 @@ class Empty(_message.Message):
     def __init__(self) -> None: ...
 
 class InfoReply(_message.Message):
-    __slots__ = ("platform_admin", "managed_tokens", "version", "backend", "format_version", "max_request_bytes", "max_feature_bytes")
+    __slots__ = ("platform_admin", "version", "backend", "format_version", "max_request_bytes", "max_feature_bytes")
     PLATFORM_ADMIN_FIELD_NUMBER: _ClassVar[int]
-    MANAGED_TOKENS_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     BACKEND_FIELD_NUMBER: _ClassVar[int]
     FORMAT_VERSION_FIELD_NUMBER: _ClassVar[int]
     MAX_REQUEST_BYTES_FIELD_NUMBER: _ClassVar[int]
     MAX_FEATURE_BYTES_FIELD_NUMBER: _ClassVar[int]
     platform_admin: bool
-    managed_tokens: bool
     version: str
     backend: str
     format_version: int
     max_request_bytes: int
     max_feature_bytes: int
-    def __init__(self, platform_admin: bool = ..., managed_tokens: bool = ..., version: _Optional[str] = ..., backend: _Optional[str] = ..., format_version: _Optional[int] = ..., max_request_bytes: _Optional[int] = ..., max_feature_bytes: _Optional[int] = ...) -> None: ...
+    def __init__(self, platform_admin: bool = ..., version: _Optional[str] = ..., backend: _Optional[str] = ..., format_version: _Optional[int] = ..., max_request_bytes: _Optional[int] = ..., max_feature_bytes: _Optional[int] = ...) -> None: ...
 
 class ProjectReply(_message.Message):
     __slots__ = ("project", "name", "head", "role", "state")
@@ -629,67 +627,3 @@ class PostgisTable(_message.Message):
     id_column: str
     geometry_column: str
     def __init__(self, schema: _Optional[str] = ..., table: _Optional[str] = ..., id_column: _Optional[str] = ..., geometry_column: _Optional[str] = ...) -> None: ...
-
-class ManagedToken(_message.Message):
-    __slots__ = ("id", "subject", "label", "created_by", "created_at", "expires_at", "revoked_at")
-    ID_FIELD_NUMBER: _ClassVar[int]
-    SUBJECT_FIELD_NUMBER: _ClassVar[int]
-    LABEL_FIELD_NUMBER: _ClassVar[int]
-    CREATED_BY_FIELD_NUMBER: _ClassVar[int]
-    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
-    REVOKED_AT_FIELD_NUMBER: _ClassVar[int]
-    id: str
-    subject: str
-    label: str
-    created_by: str
-    created_at: str
-    expires_at: str
-    revoked_at: str
-    def __init__(self, id: _Optional[str] = ..., subject: _Optional[str] = ..., label: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at: _Optional[str] = ..., expires_at: _Optional[str] = ..., revoked_at: _Optional[str] = ...) -> None: ...
-
-class TokensReply(_message.Message):
-    __slots__ = ("tokens",)
-    TOKENS_FIELD_NUMBER: _ClassVar[int]
-    tokens: _containers.RepeatedCompositeFieldContainer[ManagedToken]
-    def __init__(self, tokens: _Optional[_Iterable[_Union[ManagedToken, _Mapping]]] = ...) -> None: ...
-
-class IssueTokenRequest(_message.Message):
-    __slots__ = ("request_id", "subject", "label", "expires_at")
-    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
-    SUBJECT_FIELD_NUMBER: _ClassVar[int]
-    LABEL_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
-    request_id: str
-    subject: str
-    label: str
-    expires_at: str
-    def __init__(self, request_id: _Optional[str] = ..., subject: _Optional[str] = ..., label: _Optional[str] = ..., expires_at: _Optional[str] = ...) -> None: ...
-
-class ReissueTokenRequest(_message.Message):
-    __slots__ = ("request_id", "token_id", "label", "expires_at")
-    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
-    TOKEN_ID_FIELD_NUMBER: _ClassVar[int]
-    LABEL_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
-    request_id: str
-    token_id: str
-    label: str
-    expires_at: str
-    def __init__(self, request_id: _Optional[str] = ..., token_id: _Optional[str] = ..., label: _Optional[str] = ..., expires_at: _Optional[str] = ...) -> None: ...
-
-class TokenRefRequest(_message.Message):
-    __slots__ = ("token_id",)
-    TOKEN_ID_FIELD_NUMBER: _ClassVar[int]
-    token_id: str
-    def __init__(self, token_id: _Optional[str] = ...) -> None: ...
-
-class IssuedTokenReply(_message.Message):
-    __slots__ = ("credential", "token", "replayed")
-    CREDENTIAL_FIELD_NUMBER: _ClassVar[int]
-    TOKEN_FIELD_NUMBER: _ClassVar[int]
-    REPLAYED_FIELD_NUMBER: _ClassVar[int]
-    credential: ManagedToken
-    token: str
-    replayed: bool
-    def __init__(self, credential: _Optional[_Union[ManagedToken, _Mapping]] = ..., token: _Optional[str] = ..., replayed: bool = ...) -> None: ...

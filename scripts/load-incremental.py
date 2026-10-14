@@ -35,7 +35,7 @@ def main():
     if not 1<=a.workers<=100 or not 1<=a.seconds<=86400 or a.p95_ms<=0:p.error('invalid load limits')
     manifest=json.loads(a.manifest.read_text())
     with a.feature.open() as f: original=json.loads(next(f))
-    token=json.loads(Path(os.environ['GL_TOKEN_FILE']).read_text())[0]['token']
+    token=Path(os.environ['GL_API_KEY_FILE']).read_text().strip()
     base=os.environ['GL_BASE_URL']
     deadline=time.monotonic()+a.seconds
     def worker(index):

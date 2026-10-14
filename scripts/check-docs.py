@@ -19,6 +19,7 @@ URL = re.compile(r"https?://[^\s<>\)\]\"'`]+")
 STALE = re.compile(r"spatial[-_.]version|SpatialVersion|\bSV_|/Users/|/tmp/|/path/to/|\.reference/|rename-to-geoledger")
 NEGATIVE = re.compile(r"不支持|尚未|尚无|暂不|不兼容|未实现")
 AUTHOR_NOTE = re.compile(r"默认作者|默认署名|作者.{0,20}(?:默认|mapseekai)|default[ _-]author", re.IGNORECASE)
+CURRENT_FORMAT = re.compile(r"(?:当前(?:存储)?格式(?:为|是)?|新格式数据库按格式)\s*(\d+)")
 
 
 def anchors(path: Path) -> set[str]:
@@ -62,12 +63,20 @@ def main() -> int:
     ).decode().split("\0")
     tracked = {name for name in indexed if name and (ROOT / name).is_file()}
     documents = [ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "SECURITY.md", ROOT / "CHANGELOG.md", *sorted((ROOT / "docs").rglob("*.md"))]
+    version_match = re.search(r"pub const FORMAT_VERSION: i32 = (\d+);", (ROOT / "crates/engine/src/lib.rs").read_text())
+    if version_match is None:
+        raise ValueError("engine storage format declaration is missing")
+    current_format = int(version_match.group(1))
     errors: list[str] = []
     external: set[str] = set()
     local_count = 0
     for document in documents:
         text = document.read_text(encoding="utf-8")
         label = document.relative_to(ROOT)
+        for match in CURRENT_FORMAT.finditer(text):
+            if int(match.group(1)) != current_format:
+                line = text.count("\n", 0, match.start()) + 1
+                errors.append(f"{label}:{line}: current storage format must be {current_format}")
         for pattern in [STALE, NEGATIVE, AUTHOR_NOTE]:
             for match in pattern.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1

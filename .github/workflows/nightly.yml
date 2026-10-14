@@ -63,10 +63,12 @@ jobs:
           GL_LOAD_SUMMARY: ${{ runner.temp }}/load-postgis.json
           GL_DATABASE_ALLOW_PLAINTEXT: 'true'
         run: |
+          set -euo pipefail
           export PGPASSWORD=geoledger-ci-disposable
-          psql -h 127.0.0.1 -U mapseekai -d geoledger_test -c 'CREATE DATABASE geoledger_load'
-          psql -h 127.0.0.1 -U mapseekai -d geoledger_load -c 'CREATE EXTENSION postgis'
-          GL_DATABASE_URL="${GL_TEST_DATABASE_URL/geoledger_test/geoledger_load}" ./scripts/load-test.sh
+          database=$(psql -h 127.0.0.1 -U mapseekai -d geoledger_test -At -v ON_ERROR_STOP=1 -c 'SELECT current_database()')
+          [[ "$database" == geoledger_test ]] || { echo 'dedicated geoledger_test database required' >&2; exit 1; }
+          psql -h 127.0.0.1 -U mapseekai -d geoledger_test -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS postgis'
+          GL_DATABASE_URL="$GL_TEST_DATABASE_URL" ./scripts/load-test.sh
       - name: Incremental CRUD soak on both backends
         env:
           GL_SPATIALITE_EXTENSION: /usr/lib/x86_64-linux-gnu/mod_spatialite.so

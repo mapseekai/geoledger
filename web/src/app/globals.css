@@ -2662,31 +2662,6 @@ label {
   }
 }
 
-/* Token forms keep labels and compact time selectors within their grid cells. */
-.token-result label {
-  margin: 0;
-}
-.token-expiry {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 90px 90px;
-  gap: 8px;
-}
-.token-expiry [data-slot="select-trigger"] {
-  min-width: 0;
-  width: 100%;
-}
-.token-result > * {
-  min-width: 0;
-}
-@media (max-width: 640px) {
-  .token-expiry {
-    grid-template-columns: 1fr 1fr;
-  }
-  .token-expiry > :first-child {
-    grid-column: 1 / -1;
-  }
-}
-
 /* Field owns its spacing; legacy label margins must not double it. */
 [data-slot="field-label"] {
   margin: 0;

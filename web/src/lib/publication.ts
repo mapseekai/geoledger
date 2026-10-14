@@ -1,3 +1,4 @@
+import { uncertainStatus } from "./http-status";
 export type Publication = Readonly<{
   action: "publish";
   project: string;
@@ -43,5 +44,9 @@ export function releasePublication(
   uncertain: boolean,
   wasPending: boolean,
 ): boolean {
-  return !uncertain && (!wasPending || ![401, 403, 404].includes(status));
+  return (
+    !uncertain &&
+    (!wasPending ||
+      (!uncertainStatus(status) && ![401, 403, 404].includes(status)))
+  );
 }

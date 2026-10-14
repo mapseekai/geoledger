@@ -17,7 +17,7 @@ GeoLedger 使用项目、数据集和工作区组织管理空间数据。用户�
 | 历史查询与撤销 | 按修订读取要素，查询提交详情；将指定提交的反向变更保存为工作区，再发布为新修订。 |
 | PostGIS 业务表纳管 | 接入已有业务表并建立初始版本；发布事务同步修改源表，同时保留源表坐标系。 |
 | GIS 管理界面 | 提供地图、图层树、要素搜索、属性表和 GeoJSON 查看编辑，支持工作区、版本历史、成员权限与审计管理。 |
-| 身份与访问管理 | 配置项目成员角色，管理个人令牌；通过静态令牌或 JWT 接入身份认证，配置 TLS 与 mTLS 传输。 |
+| 身份与访问管理 | 管理用户、项目成员角色、API Key 和数据库 Session，配置 TLS 与 mTLS 传输。 |
 
 ## 获取代码
 
@@ -56,11 +56,11 @@ Rust 依赖由 `Cargo.lock` 固定，Web 与 TypeScript SDK 依赖由各自的 `
 | `GL_GRPC_LISTEN` | `127.0.0.1:7882` | gRPC 接口监听地址。 |
 | `GL_DATABASE_URL` | 按数据库部署设置 | PostGIS 连接信息。 |
 | `GL_SPATIALITE_EXTENSION` | 按运行时安装路径设置 | SpatiaLite 原生扩展路径。 |
-| `GL_WEB_ENDPOINT` | `http://127.0.0.1:7882` | 控制台连接的 gRPC 服务地址。 |
+| `GL_WEB_ENDPOINT` | `http://127.0.0.1:7881` | 控制台私有 HTTP 服务地址。 |
 | `GL_WEB_ORIGIN` | `http://localhost:3000` | 控制台的浏览器访问地址。 |
 | `GL_WEB_SESSION_SECRET` | 设置至少 32 字符的随机密钥 | 控制台会话配置。 |
 
-`gl` 通过 `GL_ENDPOINT` 配置服务地址，通过 `GL_TOKEN` 或客户端凭证文件配置身份。服务端令牌摘要保存在 `tokens.json`，首次启动生成的客户端凭证保存在 `admin-credentials.json`。
+`gl` 通过 `GL_ENDPOINT` 配置服务地址，通过 `GL_API_KEY` 或 `--api-key-file` 配置 API Key。首次管理员登录 Console 并修改初始密码后，可创建个人 API Key 并保存到权限 0600 的纯文本文件。
 
 完整配置见[生产运行](docs/production.md)和[安全配置](docs/security.md)。
 
@@ -87,10 +87,10 @@ Compose 启动包含业务服务与 Web 控制台的统一镜像，并将数据�
 
 ```sh
 curl --fail http://127.0.0.1:7881/ready
-docker compose exec geoledger gl --token-file /data/admin-credentials.json info
+docker compose exec geoledger gl --api-key-file /run/secrets/geoledger-api-key info
 ```
 
-就绪检查返回 `{"ok":true}`。首次启动在数据卷的 `/data/admin-credentials.json` 中生成客户端凭证，使用其中的用户令牌登录控制台。
+就绪检查返回 `{"ok":true}`。首次启动随机生成的管理员密码位于日志提示的数据卷 `initial-admin-<id>.json` 文件；使用用户名和密码登录 Console，修改初始密码，再创建 API Key。上面的 CLI 命令要求先将 Key 保存到指定的私有文件。
 
 ### 本地服务启动
 
@@ -105,11 +105,11 @@ cargo build --locked --bins
 
 ```sh
 curl --fail http://127.0.0.1:7881/ready
-./target/debug/gl --token-file ./geoledger-data/admin-credentials.json info
-./target/debug/gl --token-file ./geoledger-data/admin-credentials.json projects
+./target/debug/gl --api-key-file ./api-key info
+./target/debug/gl --api-key-file ./api-key projects
 ```
 
-服务端首次启动会创建 SQLite 数据库、令牌摘要文件与客户端凭证文件。新数据库使用存储格式 14；`gl info` 展示服务版本、存储后端和接口配置。
+服务端首次启动会创建 SQLite 数据库和初始管理员；随机初始密码文件路径仅在日志提示。新数据库使用存储格式 16；`gl info` 展示服务版本、存储后端和接口配置。
 
 ### Web 本地开发
 
@@ -134,7 +134,7 @@ openssl rand -base64 48
 npm --prefix web run dev
 ```
 
-访问 `http://localhost:3000`，使用管理员分配的令牌登录。控制台提供项目、数据集、工作区、版本历史、成员权限、审计和服务信息页面。
+访问 `http://localhost:3000`，使用用户名密码或 API Key 登录。控制台提供项目、数据集、工作区、版本历史、成员权限、审计和服务信息页面。
 
 ## 协作工作流
 
@@ -156,7 +156,7 @@ npm --prefix web run dev
 
 ## API 与 SDK
 
-HTTP API、gRPC、CLI 和四语言 SDK 共用业务服务。Web 控制台通过 HTTP 接收浏览器操作，其 Node.js 服务端通过 TypeScript SDK 调用 GeoLedger gRPC。
+HTTP API、gRPC、CLI 和四语言 SDK 共用业务服务。Web 控制台通过 HTTP 接收浏览器操作，其 Node.js 服务端通过私有 Session HTTP transport 调用 GeoLedger。
 
 | 接入方式 | 仓库位置 | 用途 |
 |---|---|---|
@@ -177,14 +177,14 @@ python3 -m venv .venv
 python -m pip install ./sdk/python
 ```
 
-在环境变量 `GL_TOKEN` 中配置用户令牌。以下示例创建监测点项目与数据集，保存一个要素，发布后读取对应修订：
+在环境变量 `GL_API_KEY` 中配置用户 API Key。以下示例创建监测点项目与数据集，保存一个要素，发布后读取对应修订：
 
 ```python
 import os
 
 from geoledger import Client
 
-with Client("http://127.0.0.1:7882", os.environ["GL_TOKEN"]) as client:
+with Client("http://127.0.0.1:7882", os.environ["GL_API_KEY"]) as client:
     project = client.create_project("监测点管理")
     dataset = client.create_dataset(
         project.id,
@@ -269,7 +269,7 @@ PostGIS 部署通过 `GL_STORAGE=postgis` 与 `GL_DATABASE_URL` 配置数据库�
 ./target/release/geoledger-server --storage postgis --data-dir ./geoledger-data
 ```
 
-服务端提供 TLS、mTLS、静态令牌、JWT/JWKS 和身份配置热加载。控制台通过 HTTPS 入口和服务端会话管理浏览器访问。部署时统一配置各组件的发布版本、服务地址、身份凭据和数据持久化。
+服务端提供 TLS、mTLS、数据库用户、API Key 和 Session 认证。控制台通过 HTTPS 入口和服务端会话管理浏览器访问。部署时统一配置各组件的发布版本、服务地址、身份凭据和数据持久化。
 
 容器、systemd、数据库账号与 HTTPS 配置见[生产运行](docs/production.md)。
 
@@ -290,7 +290,7 @@ PostGIS 部署通过 `GL_STORAGE=postgis` 与 `GL_DATABASE_URL` 配置数据库�
   verify --input ./geoledger-export.jsonl --file-only
 ```
 
-逻辑导出包含结构信息、表级摘要与校验信息，可配合 `import` 和 `verify` 完成业务数据搬迁与校验。备份、恢复及身份配置保存流程见[生产运行](docs/production.md)，令牌管理与传输配置见[安全配置](docs/security.md)。
+逻辑导出包含结构信息、表级摘要与校验信息，可配合 `import` 和 `verify` 完成业务数据搬迁与校验。备份、恢复及身份配置保存流程见[生产运行](docs/production.md)，身份管理与传输配置见[安全配置](docs/security.md)。
 
 ## 贡献
 
@@ -308,7 +308,7 @@ PostGIS 部署通过 `GL_STORAGE=postgis` 与 `GL_DATABASE_URL` 配置数据库�
 | [API 与 SDK](docs/api.md) | HTTP、四语言 SDK、分页与发布恢复。 |
 | [存储扩展](docs/storage.md) | 存储分层、事务接口与后端验证。 |
 | [生产运行](docs/production.md) | 部署、持久化、数据库配置与备份恢复。 |
-| [安全配置](docs/security.md) | TLS、令牌、JWT/JWKS 与控制台会话。 |
+| [安全配置](docs/security.md) | TLS、密码、API Key 与数据库 Session。 |
 | [开发指南](docs/development.md) | 构建、SDK 生成、测试与贡献流程。 |
 | [发布验收](docs/release.md) | 交付检查、恢复演练与负载验证。 |
 | [变更记录](CHANGELOG.md) | 版本更新与功能变化。 |

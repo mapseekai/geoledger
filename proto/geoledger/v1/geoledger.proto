@@ -6,10 +6,6 @@ option go_package = "github.com/mapseekai/geoledger/sdk/go/internal/geoledgerv1"
 // Revisions are int64; TypeScript SDK represents them as decimal strings.
 service GeoLedger {
  rpc Info(Empty) returns (InfoReply);
- rpc ListTokens(PageRequest) returns (TokensReply);
- rpc IssueToken(IssueTokenRequest) returns (IssuedTokenReply);
- rpc RevokeToken(TokenRefRequest) returns (OkReply);
- rpc ReissueToken(ReissueTokenRequest) returns (IssuedTokenReply);
  rpc CreateProject(NameRequest) returns (ProjectReply);
  rpc ListProjects(PageRequest) returns (ProjectsReply);
  rpc GetProject(ProjectRequest) returns (ProjectReply);
@@ -165,7 +161,6 @@ message Empty {
 }
 message InfoReply {
  bool platform_admin = 6;
- bool managed_tokens = 7;
  string version = 1;
  string backend = 2;
  uint32 format_version = 3;
@@ -361,35 +356,4 @@ message PostgisTable {
  string table = 2;
  string id_column = 3;
  string geometry_column = 4;
-}
-
-// Global credentials; only platform administrators may manage these.
-message ManagedToken {
- string id = 1;
- string subject = 2;
- string label = 3;
- string created_by = 4;
- string created_at = 5;
- string expires_at = 6;
- optional string revoked_at = 7;
-}
-message TokensReply { repeated ManagedToken tokens = 1; }
-message IssueTokenRequest {
- string request_id = 1;
- string subject = 2;
- string label = 3;
- string expires_at = 4;
-}
-message ReissueTokenRequest {
- string request_id = 1;
- string token_id = 2;
- string label = 3;
- string expires_at = 4;
-}
-message TokenRefRequest { string token_id = 1; }
-message IssuedTokenReply {
- ManagedToken credential = 1;
- // Present only on initial success, never on request_id replay.
- optional string token = 2;
- bool replayed = 3;
 }

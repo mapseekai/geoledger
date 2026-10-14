@@ -8,14 +8,14 @@ from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--url', default='http://localhost:13001')
-parser.add_argument('--token-file', required=True)
+parser.add_argument('--api-key-file', required=True)
 parser.add_argument('--chromium', required=True)
 parser.add_argument('--geojson', required=True)
 parser.add_argument('--screenshots', default='/tmp/geoledger-lifecycle-shots')
 args = parser.parse_args()
 shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
-token = json.loads(Path(args.token_file).read_text())[0]['token']
+token = Path(args.api_key_file).read_text().strip()
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(headless=True, executable_path=args.chromium, args=['--no-sandbox','--disable-dev-shm-usage'])
     page = browser.new_page(viewport={'width':1440,'height':960})
@@ -26,7 +26,8 @@ with sync_playwright() as playwright:
         assert result['status']==200, (body['action'],result)
         return result['data']
     page.goto(args.url+'/login')
-    page.get_by_label('访问令牌',exact=True).fill(token)
+    page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_label('API Key',exact=True).fill(token)
     page.get_by_role('button',name='进入控制台').click()
     page.wait_for_url('**/projects')
     name='管理验证 '+uuid.uuid4().hex[:8]

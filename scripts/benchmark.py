@@ -180,7 +180,7 @@ def main():
             database_monitor = subprocess.Popen(["docker", "stats", "--format", "{{json .}}", container], stdout=database_log, stderr=subprocess.STDOUT, start_new_session=True)
             env["GL_DATABASE_URL"] = f"postgresql://postgres@127.0.0.1:{dbport}/geoledger_test?sslmode=disable"
         base = f"http://127.0.0.1:{http}"
-        command = ["target/release/geoledger-server", "--storage", a.backend, "--data-dir", str(output / "data"), "--http", f"127.0.0.1:{http}", "--grpc", f"127.0.0.1:{grpc}", "--admin-subjects", "admin", "--request-timeout-secs", "600", "--db-statement-timeout-secs", "600"]
+        command = ["target/release/geoledger-server", "--storage", a.backend, "--data-dir", str(output / "data"), "--http", f"127.0.0.1:{http}", "--grpc", f"127.0.0.1:{grpc}", "--request-timeout-secs", "600", "--db-statement-timeout-secs", "600"]
         (output / "environment.json").write_text(json.dumps({"backend": a.backend, "server_command": command, "platform": platform.platform(), "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(), "server_sha256": fingerprint("target/release/geoledger-server"), "client_sha256": fingerprint("target/release/examples/large_data"), "rss_sampling_seconds": 0.5, "rpc_deadline_seconds": 600, "client_deadline_seconds": a.timeout, "files": [{"path": str(f.resolve()), "bytes": f.stat().st_size, "sha256": fingerprint(f)} for f in a.geojson]}, indent=2))
         with (output / "server.log").open("w") as log:
             server = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -196,7 +196,9 @@ def main():
                 time.sleep(0.5)
             else:
                 raise RuntimeError("server readiness timeout")
-            env.update(GL_ENDPOINT=f"http://127.0.0.1:{grpc}", GL_TOKEN_FILE=str(output / "data/admin-credentials.json"), GL_BENCH_DISPOSABLE="1")
+            from auth_test_support import provision
+            provision(base, output / "data", output / "api-key")
+            env.update(GL_ENDPOINT=f"http://127.0.0.1:{grpc}", GL_API_KEY_FILE=str(output / "api-key"), GL_BENCH_DISPOSABLE="1")
             binding_reports = []
             for path in a.geojson:
                 report = output / f"{path.stem}.json"
@@ -205,8 +207,8 @@ def main():
                 if result["exit_code"] == 0 and a.backend == "postgis":
                     binding_reports.append(report)
                 if result["exit_code"] == 0 and a.k6:
-                    token = json.loads(Path(env["GL_TOKEN_FILE"]).read_text())[0]["token"]
-                    load_env = dict(env, GL_BASE_URL=base, GL_TOKEN=token, GL_BENCH_REPORT=str(report))
+                    token = Path(env["GL_API_KEY_FILE"]).read_text().strip()
+                    load_env = dict(env, GL_BASE_URL=base, GL_API_KEY=token, GL_BENCH_REPORT=str(report))
                     for rate in [5, 20, 50]:
                         load_env["GL_LOAD_RATE"] = str(rate)
                         name = f"{path.stem}-http-{rate}rps"
@@ -215,9 +217,9 @@ def main():
                     break
             for fixture in binding_reports:
                 bind_env = dict(env, GL_BASE_URL=base, GL_BENCH_REPORT=str(fixture), GL_BENCH_CONTAINER=container)
-                command = ["python3", "-c", "import json,os; from pathlib import Path; from scripts.benchmark import track_table; p=Path(os.environ['GL_BENCH_REPORT']); token=json.loads(Path(os.environ['GL_TOKEN_FILE']).read_text())[0]['token']; track_table(os.environ['GL_BASE_URL'],token,json.loads(p.read_text()),os.environ['GL_BENCH_CONTAINER'],p.parent,p.stem)"]
+                command = ["python3", "-c", "import json,os; from pathlib import Path; from scripts.benchmark import track_table; p=Path(os.environ['GL_BENCH_REPORT']); token=Path(os.environ['GL_API_KEY_FILE']).read_text().strip(); track_table(os.environ['GL_BASE_URL'],token,json.loads(p.read_text()),os.environ['GL_BENCH_CONTAINER'],p.parent,p.stem)"]
                 results.append({"test": fixture.stem + "-binding", **monitor(command, bind_env, server, output, fixture.stem + "-binding", a.timeout, a.rss_limit_mib)})
-            token = json.loads(Path(env["GL_TOKEN_FILE"]).read_text())[0]["token"]
+            token = Path(env["GL_API_KEY_FILE"]).read_text().strip()
             request = urllib.request.Request(base + "/metrics", headers={"Authorization": "Bearer " + token})
             with urllib.request.urlopen(request, timeout=5) as response:
                 (output / "server-metrics.txt").write_bytes(response.read())

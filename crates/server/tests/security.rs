@@ -1,5 +1,6 @@
 //! Transport and credential lifecycle against the real server binary: TLS on both
-//! listeners, mutual TLS, hashed tokens with expiry/revocation and hot reload.
+//! listeners and mutual TLS with database API keys.
+mod common;
 use geoledger_client::{Client, ConnectOptions};
 use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
 use std::{
@@ -29,6 +30,8 @@ fn ports() -> Result<(SocketAddr, SocketAddr), BoxError> {
     Ok((h.local_addr()?, g.local_addr()?))
 }
 fn start(dir: &Path, extra: &[(&str, String)]) -> Result<Server, BoxError> {
+    std::fs::create_dir_all(dir)?;
+    common::database(&dir.join("geoledger.sqlite3"))?;
     let (http, grpc) = ports()?;
     let mut command = Command::new(env!("CARGO_BIN_EXE_geoledger-server"));
     command
@@ -38,9 +41,6 @@ fn start(dir: &Path, extra: &[(&str, String)]) -> Result<Server, BoxError> {
     for key in [
         "GL_STORAGE",
         "GL_DATABASE_URL",
-        "GL_TOKEN_FILE",
-        "GL_JWKS_FILE",
-        "GL_JWKS_URL",
         "GL_TLS_CERT",
         "GL_TLS_KEY",
         "GL_TLS_CLIENT_CA",
@@ -52,7 +52,7 @@ fn start(dir: &Path, extra: &[(&str, String)]) -> Result<Server, BoxError> {
     }
     let child = command
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()?;
     Ok(Server { child, http, grpc })
 }
@@ -90,25 +90,6 @@ fn pki() -> Result<Pki, BoxError> {
         client_cert: client.pem(),
         client_key: client_key.serialize_pem(),
     })
-}
-fn write_tokens(path: &Path, entries: serde_json::Value) -> Result<(), BoxError> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(&entries)?)?;
-    std::fs::rename(tmp, path)?;
-    Ok(())
-}
-async fn wait_for<F, Fut>(mut f: F) -> Result<(), BoxError>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    for _ in 0..200 {
-        if f().await {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    Err("condition not reached".into())
 }
 async fn https_get(
     addr: SocketAddr,
@@ -148,7 +129,7 @@ async fn https_get(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tls_listeners_and_mutual_tls() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let pki = pki()?;
     for (name, body) in [
         ("ca.pem", &pki.ca_pem),
@@ -171,35 +152,28 @@ async fn tls_listeners_and_mutual_tls() -> TestResult {
             ),
         ],
     )?;
-    let credentials = data.join("admin-credentials.json");
-    let server_tokens = data.join("tokens.json");
-    wait_for(|| {
-        let ready = credentials.exists() && server_tokens.exists();
-        async move { ready }
-    })
-    .await?;
-    let tokens: serde_json::Value = serde_json::from_slice(&std::fs::read(&credentials)?)?;
-    let token = tokens[0]["token"].as_str().ok_or("token")?.to_owned();
-    // The server file stores only a digest.
-    let server_file = std::fs::read_to_string(data.join("tokens.json"))?;
-    assert!(!server_file.contains(&token));
-    assert!(server_file.contains(&geoledger_server::sha256_hex(&token)));
+    let token = common::KEY.to_owned();
     let options = ConnectOptions {
         ca_pem: Some(pki.ca_pem.clone().into_bytes()),
         ..Default::default()
     };
     let endpoint = format!("https://localhost:{}", server.grpc.port());
     let mut connected = None;
+    let mut last_error = String::new();
     for _ in 0..100 {
-        if let Ok(c) = Client::connect_with(&endpoint, &token, options.clone()).await
-            && c.info().await.is_ok()
-        {
-            connected = Some(c);
-            break;
+        match Client::connect_with(&endpoint, &token, options.clone()).await {
+            Ok(client) => match client.info().await {
+                Ok(_) => {
+                    connected = Some(client);
+                    break;
+                }
+                Err(error) => last_error = error.to_string(),
+            },
+            Err(error) => last_error = error.to_string(),
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let client = connected.ok_or("TLS gRPC unavailable")?;
+    let client = connected.ok_or_else(|| format!("TLS gRPC unavailable: {last_error}"))?;
     assert_eq!(client.info().await?.backend, "sqlite");
     // Plaintext gRPC against the TLS listener fails instead of downgrading.
     let plain = Client::connect(format!("http://127.0.0.1:{}", server.grpc.port()), &token).await;
@@ -239,121 +213,5 @@ async fn tls_listeners_and_mutual_tls() -> TestResult {
     }
     assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
     assert!(https_get(mtls.http, &pki, false, "/health").await.is_err());
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_rotation_expiry_and_revocation_without_restart() -> TestResult {
-    let dir = tempfile::tempdir()?;
-    let file = dir.path().join("server-tokens.json");
-    let first = "f".repeat(64);
-    let second = "s".repeat(64);
-    let expired = "e".repeat(64);
-    write_tokens(
-        &file,
-        serde_json::json!([
-            {"subject":"alice","token_sha256":geoledger_server::sha256_hex(&first)},
-            {"subject":"bob","token_sha256":geoledger_server::sha256_hex(&expired),"expires_at":"2000-01-01T00:00:00Z"},
-        ]),
-    )?;
-    let server = start(
-        &dir.path().join("data"),
-        &[("GL_TOKEN_FILE", file.display().to_string())],
-    )?;
-    let endpoint = format!("http://{}", server.grpc);
-    let works = |token: String| {
-        let endpoint = endpoint.clone();
-        async move {
-            match Client::connect(&endpoint, &token).await {
-                Ok(c) => c.info().await.is_ok(),
-                Err(_) => false,
-            }
-        }
-    };
-    wait_for(|| works(first.clone())).await?;
-    assert!(!works(expired.clone()).await, "expired token");
-    assert!(!works(second.clone()).await);
-    // Rotate: add the second token, disable the first.
-    write_tokens(
-        &file,
-        serde_json::json!([
-            {"subject":"alice","token_sha256":geoledger_server::sha256_hex(&first),"disabled":true},
-            {"subject":"alice","token_sha256":geoledger_server::sha256_hex(&second),"label":"2026-10"},
-        ]),
-    )?;
-    wait_for(|| works(second.clone())).await?;
-    assert!(!works(first.clone()).await, "revoked token");
-    // An invalid file never replaces the active configuration.
-    std::fs::write(&file, b"not json")?;
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert!(works(second.clone()).await);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jwks_url_is_refreshed_and_keeps_last_good_keys() -> TestResult {
-    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let fixture: serde_json::Value = serde_json::from_slice(include_bytes!("fixtures/jwks.json"))?;
-    let mut renamed = fixture.clone();
-    renamed["keys"][0]["kid"] = "previous".into();
-    let current = Arc::new(std::sync::Mutex::new(serde_json::to_vec(&renamed)?));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let issuer_addr = listener.local_addr()?;
-    let served = current.clone();
-    tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
-            let body = served.lock().map(|b| b.clone()).unwrap_or_default();
-            tokio::spawn(async move {
-                let mut buf = [0u8; 2048];
-                let _ = socket.read(&mut buf).await;
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = socket.write_all(head.as_bytes()).await;
-                let _ = socket.write_all(&body).await;
-            });
-        }
-    });
-    let dir = tempfile::tempdir()?;
-    let server = start(
-        &dir.path().join("data"),
-        &[
-            ("GL_JWKS_URL", format!("http://{issuer_addr}/jwks.json")),
-            ("GL_JWKS_REFRESH_SECS", "1".into()),
-            ("GL_JWT_ISSUER", "https://issuer.example".into()),
-            ("GL_JWT_AUDIENCE", "geoledger".into()),
-        ],
-    )?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-    let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some("test-only".into());
-    // Publicly committed fixture key; exclusively for tests.
-    let token = encode(
-        &header,
-        &serde_json::json!({"iss":"https://issuer.example","aud":"geoledger","sub":"alice","exp":now+600}),
-        &EncodingKey::from_rsa_pem(include_bytes!("fixtures/jwt-test-only.pem"))?,
-    )?;
-    let endpoint = format!("http://{}", server.grpc);
-    let works = |token: String| {
-        let endpoint = endpoint.clone();
-        async move {
-            match Client::connect(&endpoint, &token).await {
-                Ok(c) => c.info().await.is_ok(),
-                Err(_) => false,
-            }
-        }
-    };
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(!works(token.clone()).await, "kid not yet published");
-    *current.lock().map_err(|_| "lock")? = serde_json::to_vec(&fixture)?;
-    wait_for(|| works(token.clone())).await?;
-    // A broken document keeps the last good key set.
-    *current.lock().map_err(|_| "lock")? = b"{}".to_vec();
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert!(works(token.clone()).await);
     Ok(())
 }

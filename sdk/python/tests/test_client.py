@@ -11,17 +11,17 @@ from geoledger._internal.v1 import geoledger_pb2 as wire
 
 class ContractTests(unittest.TestCase):
     def client(self, stub):
-        client = Client("http://127.0.0.1:7882", "test-only-token")
+        client = Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         self.addCleanup(client.close)
         client._stub = stub
         return client
 
     def test_plaintext_to_remote_host_requires_opt_in(self):
         with self.assertRaises(geoledger.GeoLedgerError) as raised:
-            geoledger.Client("http://geoledger.example:7882", "token")
+            geoledger.Client("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         self.assertEqual(raised.exception.code, "invalid_argument")
-        geoledger.Client("http://geoledger.example:7882", "token", allow_insecure=True).close()
-        geoledger.Client("http://127.0.0.1:7882", "token").close()
+        geoledger.Client("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", allow_insecure=True).close()
+        geoledger.Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").close()
 
     def test_public_api_has_no_generated_transport(self):
         self.assertNotIn("pb", geoledger.__all__)

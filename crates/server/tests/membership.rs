@@ -1,29 +1,33 @@
 //! Membership and project lifecycle through the Rust SDK over real gRPC, plus HTTP.
+mod common;
 use geoledger_client::{Client, Page};
-use geoledger_server::{
-    Application, Authentication, Authenticator, Policy, Service, Storage, Tokens,
-};
+use geoledger_server::{Application, Policy, Service, Storage};
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 // Public, test-only credentials for an ephemeral in-process server.
-const ALICE: &str = "test-only-membership-alice-credential-0123456789";
-const BOB: &str = "test-only-membership-bob-credential-0123456789ab";
-const ROOT: &str = "test-only-membership-root-credential-0123456789a";
+const ALICE: &str = "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const BOB: &str = "glk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const ROOT: &str = "glk_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn members_archive_delete_and_admin_over_grpc_and_http() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let app =
         Application::new(Storage::Sqlite(dir.path().join("members.sqlite3"))).with_policy(Policy {
-            admins: ["root".to_owned()].into(),
             admin_only_project_creation: false,
             max_owned_projects: Some(2),
         });
     app.migrate()?;
-    let tokens = Tokens::from_json(
-        format!(r#"[{{"subject":"alice","token_sha256":"{}"}},{{"subject":"bob","token_sha256":"{}"}},{{"subject":"root","token_sha256":"{}"}}]"#, geoledger_server::sha256_hex(ALICE), geoledger_server::sha256_hex(BOB), geoledger_server::sha256_hex(ROOT))
-            .as_bytes(),
+    common::seed(
+        &dir.path().join("members.sqlite3"),
+        &[
+            ("alice", ALICE, false),
+            ("bob", BOB, false),
+            ("root", ROOT, true),
+        ],
     )?;
-    let service = Service::new(app, Authentication::new(Authenticator::Tokens(tokens)));
+    let alice_id = common::user_id("alice");
+    let bob_id = common::user_id("bob");
+    let service = Service::new(app);
     let grpc = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let http = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let (grpc_addr, http_addr) = (grpc.local_addr()?, http.local_addr()?);
@@ -42,13 +46,14 @@ async fn members_archive_delete_and_admin_over_grpc_and_http() -> TestResult {
 
     let project = alice.create_project("lifecycle").await?;
     assert_eq!(project.state, "active");
-    alice.set_member(&project.id, "bob", "editor").await?;
+    alice.set_member(&project.id, &bob_id, "editor").await?;
     let members = bob.members(&project.id, Page::default()).await?;
     let subjects: Vec<_> = members
         .iter()
         .map(|m| (m.subject.as_str(), m.role.as_str()))
         .collect();
-    assert_eq!(subjects, [("alice", "owner"), ("bob", "editor")]);
+    assert!(subjects.contains(&(alice_id.as_str(), "owner")));
+    assert!(subjects.contains(&(bob_id.as_str(), "editor")));
     // HTTP exposes the same operation.
     let response = reqwest_like_post(
         http_addr,
@@ -57,7 +62,7 @@ async fn members_archive_delete_and_admin_over_grpc_and_http() -> TestResult {
         &format!(r#"{{"project":"{}"}}"#, project.id),
     )
     .await?;
-    assert!(response.contains(r#""subject":"bob""#), "{response}");
+    assert!(response.contains(&bob_id), "{response}");
 
     let archived = alice.archive_project(&project.id, true).await?;
     assert_eq!(archived.state, "archived");
@@ -70,13 +75,13 @@ async fn members_archive_delete_and_admin_over_grpc_and_http() -> TestResult {
     assert_eq!(bob.project(&project.id).await?.state, "archived");
     alice.archive_project(&project.id, false).await?;
 
-    bob.remove_member(&project.id, "bob").await?;
+    bob.remove_member(&project.id, &bob_id).await?;
     assert_eq!(
         bob.project(&project.id).await.err().ok_or("left")?.code,
         "not_found"
     );
     let last_owner = alice
-        .remove_member(&project.id, "alice")
+        .remove_member(&project.id, &alice_id)
         .await
         .err()
         .ok_or("last owner removed")?;
@@ -93,7 +98,7 @@ async fn members_archive_delete_and_admin_over_grpc_and_http() -> TestResult {
 
     // A platform administrator can recover a project and hand it over.
     assert_eq!(root.project(&project.id).await?.role, "admin");
-    root.set_member(&project.id, "bob", "owner").await?;
+    root.set_member(&project.id, &bob_id, "owner").await?;
     let wrong = bob
         .delete_project(&project.id, "not the name")
         .await

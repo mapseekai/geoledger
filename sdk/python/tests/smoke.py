@@ -5,9 +5,9 @@ from dataclasses import replace
 from uuid import uuid4
 from geoledger import Client, Edit, GeoLedgerError
 
-with open(os.environ["GL_TOKEN_FILE"]) as source:
-    token = json.load(source)[0]["token"]
-with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as client:
+with open(os.environ["GL_API_KEY_FILE"]) as source:
+    api_key = source.read().strip()
+with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), api_key) as client:
     info = client.info()
     project = client.create_project("python-" + str(uuid4()))
     dataset = client.create_dataset(project.id, "places", "point", 3, crs="EPSG:3857")
@@ -76,10 +76,10 @@ with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), token) as cl
     removal.publish("installed SDK delete")
     assert client.features(project.id, dataset.id)["features"] == []
     assert client.features(project.id, dataset.id, revision=published["revision"])["features"][0] == feature
-    client.set_member(project.id, "sdk-viewer", "viewer")
-    assert {m.subject for m in client.members(project.id)} >= {"sdk-viewer"}
-    client.remove_member(project.id, "sdk-viewer")
-    assert "sdk-viewer" not in {m.subject for m in client.members(project.id)}
+    client.set_member(project.id, os.environ["GL_TEST_MEMBER_ID"], "viewer")
+    assert {m.subject for m in client.members(project.id)} >= {os.environ["GL_TEST_MEMBER_ID"]}
+    client.remove_member(project.id, os.environ["GL_TEST_MEMBER_ID"])
+    assert os.environ["GL_TEST_MEMBER_ID"] not in {m.subject for m in client.members(project.id)}
     assert client.archive_project(project.id, True).state == "archived"
     assert client.archive_project(project.id, False).state == "active"
     client.delete_project(project.id, project.name)

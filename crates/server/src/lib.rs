@@ -6,8 +6,7 @@ mod resources;
 mod rpc;
 mod telemetry;
 pub mod tls;
-mod tokens;
-pub use auth::{Authentication, Authenticator, JwtAuthenticator, fetch_jwks};
+
 pub use geoledger_engine::{Application, Error, Policy, Result, Storage, StorageOptions};
 pub use http::{health_router, router};
 pub use limits::{Limits, Rate};
@@ -21,17 +20,10 @@ use std::{
     },
     time::Duration,
 };
-pub use tokens::{Tokens, sha256_hex};
+
 use tokio::sync::Semaphore;
 fn bad() -> Error {
     Error::new(400, "invalid request")
-}
-fn text(s: &str, max: usize) -> Result<()> {
-    if s.is_empty() || s.len() > max || s.chars().any(char::is_control) {
-        Err(bad())
-    } else {
-        Ok(())
-    }
 }
 /// Per-call context shared by logging, metrics and error correlation.
 #[derive(Clone)]
@@ -44,6 +36,7 @@ pub(crate) struct Call {
     pub peer: Option<IpAddr>,
     pub started: std::time::Instant,
     pub subject: Option<String>,
+    pub identity: Option<geoledger_engine::AuthenticatedIdentity>,
 }
 impl Call {
     pub fn new(
@@ -61,6 +54,7 @@ impl Call {
             peer,
             started: std::time::Instant::now(),
             subject: None,
+            identity: None,
         }
     }
 }
@@ -71,7 +65,9 @@ pub(crate) struct ExecutionPermit {
 #[derive(Clone)]
 pub struct Service {
     app: Application,
-    authentication: Arc<Authentication>,
+    password_capacity: Arc<Semaphore>,
+    auth_limiter: Arc<limits::Limiter>,
+    login_peer_limiter: Arc<limits::Limiter>,
     capacity: Arc<Semaphore>,
     requests: resources::ByteBudget,
     responses: resources::ByteBudget,
@@ -82,14 +78,18 @@ pub struct Service {
     draining: Arc<AtomicBool>,
 }
 impl Service {
-    pub fn new(app: Application, authentication: Authentication) -> Self {
-        Self::with_authentication(app, Arc::new(authentication))
-    }
-    /// Share a reloadable authenticator with the process that rotates credentials.
-    pub fn with_authentication(app: Application, authentication: Arc<Authentication>) -> Self {
+    pub fn new(app: Application) -> Self {
         Self {
             app,
-            authentication,
+            password_capacity: Arc::new(Semaphore::new(4)),
+            auth_limiter: Arc::new(limits::Limiter::new(Rate {
+                per_second: 0.2,
+                burst: 10.0,
+            })),
+            login_peer_limiter: Arc::new(limits::Limiter::new(Rate {
+                per_second: 10.0,
+                burst: 100.0,
+            })),
             requests: resources::ByteBudget::new(Limits::default().request_memory_bytes),
             responses: resources::ByteBudget::new(Limits::default().response_memory_bytes),
             capacity: Arc::new(Semaphore::new(Limits::default().max_concurrency)),
@@ -163,60 +163,45 @@ impl Service {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::new(429, "server busy"))?;
-        let bearer = if headers.get_all("authorization").iter().count() == 1 {
-            headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-        } else {
-            None
-        };
-        let subject = if bearer.is_some_and(|v| v.starts_with("glmt_")) {
-            if !self.authentication.managed_tokens() {
-                None
+        let credential = auth::credential(headers, call.protocol == "http")
+            .inspect_err(|_| self.metrics.auth_failure())?;
+        let app = self.app.clone();
+        let deadline = call
+            .started
+            .checked_add(self.limits.request_timeout)
+            .ok_or_else(|| Error::new(400, "invalid operation deadline"))?;
+        let (identity, permit) = tokio::task::spawn_blocking(move || {
+            // The blocking queue consumes the same request budget as database work.
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let identity = if remaining.is_zero() {
+                Err(Error::new(504, "operation deadline exceeded"))
             } else {
-                let token = bearer.unwrap_or_default().to_owned();
-                let app = self.app.clone().with_timeout(
-                    self.limits
-                        .request_timeout
-                        .saturating_sub(call.started.elapsed()),
-                );
-                // Hold the slot inside the blocking task even if the RPC is cancelled.
-                let (subject, returned) = tokio::task::spawn_blocking(move || {
-                    (app.authenticate_managed_token(&token), permit)
-                })
-                .await
-                .map_err(|_| Error::new(500, "authentication unavailable"))?;
-                let permit = returned;
-                let subject = subject?;
-                return self.admit_subject(call, subject, permit);
-            }
-        } else {
-            self.authentication.authenticate(headers)
-        };
-        self.admit_subject(call, subject, permit)
-    }
-    fn admit_subject(
-        &self,
-        call: &mut Call,
-        subject: Option<String>,
-        permit: tokio::sync::OwnedSemaphorePermit,
-    ) -> Result<ExecutionPermit> {
-        let subject = subject.ok_or_else(|| {
-            self.metrics.auth_failure();
-            Error::new(401, "bearer authentication required")
-        })?;
+                let app = app.with_timeout(remaining);
+                match credential {
+                    auth::Credential::ApiKey(key) => app.authenticate_api_key(&key),
+                    auth::Credential::Session(session) => app.authenticate_session(&session),
+                }
+            };
+            (identity, permit)
+        })
+        .await
+        .map_err(|_| Error::new(500, "authentication unavailable"))?;
+        let identity = identity.inspect_err(|_| self.metrics.auth_failure())?;
+        if identity.user.must_change_password && !call.operation.starts_with("auth:") {
+            return Err(Error::new(403, "password change required"));
+        }
+        let subject = identity.user.id.clone();
         call.subject = Some(subject.clone());
+        call.identity = Some(identity);
         if let Some(limiter) = &self.subject_limiter
             && !limiter.allow(&subject)
         {
             self.metrics.rate_limited(false);
             return Err(Error::new(429, "rate limit exceeded"));
         }
-        let memory = self.requests.reserve(0)?;
         Ok(ExecutionPermit {
             _slot: permit,
-            memory,
+            memory: self.requests.reserve(0)?,
         })
     }
     /// Finish a call: correlate the error with the transport request ID, log
@@ -264,16 +249,6 @@ impl Service {
         timeout: Option<Duration>,
         permit: ExecutionPermit,
     ) -> Result<Value> {
-        if matches!(
-            call.operation.as_str(),
-            "issue_token" | "reissue_token" | "revoke_token" | "list_tokens"
-        ) && !self.authentication.managed_tokens()
-        {
-            return Err(Error::new(
-                409,
-                "managed credentials are disabled in JWT mode",
-            ));
-        }
         let max = self.limits.request_timeout;
         let mut app = self
             .app
@@ -288,11 +263,32 @@ impl Service {
             .checked_add(timeout.map_or(max, |t| t.min(max)))
             .ok_or_else(|| Error::new(400, "invalid operation deadline"))?;
         let op = call.operation.clone();
-        let subject = call.subject.clone().unwrap_or_default();
+        let identity = call
+            .identity
+            .clone()
+            .ok_or_else(|| Error::new(401, "authentication failed"))?;
+        let password_permit = if identity.session_id.is_some()
+            && matches!(op.as_str(), "set_member" | "remove_member")
+        {
+            if !self
+                .auth_limiter
+                .allow(&format!("user:{}", identity.user.id))
+            {
+                return Err(Error::new(429, "authentication rate limit exceeded"));
+            }
+            Some(
+                self.password_capacity
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| Error::new(429, "authentication busy"))?,
+            )
+        } else {
+            None
+        };
         let worker = self.clone();
         let call = call.clone();
         tokio::task::spawn_blocking(move || {
-            let _permit = permit;
+            let (_permit, _password_permit) = (permit, password_permit);
             let _in_flight = worker.metrics.in_flight();
             // Completion belongs to the operation even when its waiter disappears.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -300,7 +296,8 @@ impl Service {
                 if remaining.is_zero() {
                     return Err(Error::new(504, "operation deadline exceeded"));
                 }
-                app.with_timeout(remaining).execute(&subject, &op, value)
+                app.with_timeout(remaining)
+                    .execute_authenticated(&identity, &op, value)
             }))
             .unwrap_or_else(|_| Err(Error::new(500, "operation failed")));
             worker.finish(&call, result)
@@ -315,5 +312,99 @@ impl Service {
             draining: self.is_draining(),
             pool: self.app.pool_stats(),
         }
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use geoledger_engine::repository::{RepositoryTransaction, StorageBackend};
+    use std::{future::Future, sync::atomic::AtomicUsize, task::Poll};
+
+    struct CountingStorage(AtomicUsize);
+    impl StorageBackend for CountingStorage {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+        fn initialize(&self, _: Duration) -> Result<()> {
+            Ok(())
+        }
+        fn health(&self, _: Duration) -> Result<()> {
+            Ok(())
+        }
+        fn begin(&self, _: bool, _: Duration) -> Result<Box<dyn RepositoryTransaction>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(Error::new(401, "test authentication failed"))
+        }
+    }
+
+    #[test]
+    fn queued_authentication_expires_before_storage_and_releases_permit()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+        runtime.block_on(async {
+            for (protocol, header, credential) in [
+                (
+                    "http",
+                    "authorization",
+                    format!("Bearer glk_{}", "a".repeat(64)),
+                ),
+                (
+                    "http",
+                    "x-geoledger-session",
+                    format!("gls_{}", "a".repeat(64)),
+                ),
+                (
+                    "grpc",
+                    "authorization",
+                    format!("Bearer glk_{}", "a".repeat(64)),
+                ),
+            ] {
+                let storage = Arc::new(CountingStorage(AtomicUsize::new(0)));
+                let service =
+                    Service::new(Application::with_backend(storage.clone())).with_limits(Limits {
+                        max_concurrency: 1,
+                        request_timeout: Duration::from_secs(1),
+                        ..Limits::default()
+                    });
+                let (entered, started) = tokio::sync::oneshot::channel();
+                let (release, wait) = std::sync::mpsc::channel();
+                let worker = tokio::task::spawn_blocking(move || {
+                    let _ = entered.send(());
+                    // A bounded wait also releases the worker if the test fails early.
+                    wait.recv_timeout(Duration::from_secs(5))
+                });
+                started.await?;
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert(header, credential.parse()?);
+                let mut call =
+                    Call::new(protocol, "list_projects", "queued-auth-test".into(), None);
+                let admission = service.admit(&mut call, &headers);
+                tokio::pin!(admission);
+                // Poll once to enqueue authentication behind the occupied blocking worker.
+                let queued = std::future::poll_fn(|cx| {
+                    Poll::Ready(admission.as_mut().poll(cx).is_pending())
+                })
+                .await;
+                let held = service.capacity.available_permits();
+                tokio::time::sleep(Duration::from_millis(1100)).await;
+                release.send(())?;
+                worker.await??;
+                assert!(queued);
+                assert_eq!(held, 0);
+                let error = admission.await.err().ok_or("expected expired admission")?;
+                assert_eq!(error.status, 504);
+                assert_eq!(
+                    storage.0.load(Ordering::SeqCst),
+                    0,
+                    "expired admission reached storage"
+                );
+                assert_eq!(service.capacity.available_permits(), 1);
+            }
+            Ok(())
+        })
     }
 }

@@ -2,14 +2,13 @@
 //! saturated execution slots, stalled request bodies and malformed credentials.
 //! Every failure is bounded in time, carries a request ID and leaves the service
 //! healthy afterwards.
+mod common;
 use axum::{
     body::{Body, Bytes},
     http::Request,
 };
 use geoledger_rpc::v1 as pb;
-use geoledger_server::{
-    Application, Authentication, Authenticator, Limits, Service, Storage, Tokens,
-};
+use geoledger_server::{Application, Limits, Service, Storage};
 use http_body_util::BodyExt;
 use prost::Message;
 use serde_json::Value;
@@ -18,19 +17,13 @@ use tower::ServiceExt;
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 // Public, test-only credential for ephemeral in-process servers.
-const TOKEN: &str = "test-only-limits-credential-0123456789-abcdefghijkl";
+const TOKEN: &str = "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn service(db: &std::path::Path, limits: Limits) -> Result<Service, BoxError> {
     let app = Application::new(Storage::Sqlite(db.to_owned()));
     app.migrate()?;
-    let tokens = Tokens::from_json(
-        format!(
-            r#"[{{"subject":"ops","token_sha256":"{}"}}]"#,
-            geoledger_server::sha256_hex(TOKEN)
-        )
-        .as_bytes(),
-    )?;
-    Ok(Service::new(app, Authentication::new(Authenticator::Tokens(tokens))).with_limits(limits))
+    common::seed(db, &[("ops", TOKEN, true)])?;
+    Ok(Service::new(app).with_limits(limits))
 }
 async fn send(
     router: &axum::Router,
@@ -81,7 +74,7 @@ fn assert_error(body: &Value, code: &str) {
 
 #[tokio::test]
 async fn storage_lock_past_deadline_and_saturated_slots_fail_fast_and_recover() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let db = dir.path().join("limits.sqlite3");
     let router = geoledger_server::router(service(
         &db,
@@ -157,7 +150,7 @@ async fn storage_lock_past_deadline_and_saturated_slots_fail_fast_and_recover() 
 
 #[tokio::test]
 async fn stalled_request_body_times_out_and_releases_its_slot() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let router = geoledger_server::router(service(
         &dir.path().join("body.sqlite3"),
         Limits {
@@ -178,7 +171,7 @@ async fn stalled_request_body_times_out_and_releases_its_slot() -> TestResult {
 
 #[tokio::test]
 async fn malformed_credentials_are_rejected_uniformly() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let router = geoledger_server::router(service(
         &dir.path().join("auth.sqlite3"),
         Limits::default(),
@@ -241,7 +234,7 @@ fn rpc_detail(status: &tonic::Status) -> Result<pb::ErrorDetail, BoxError> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grpc_deadline_busy_and_unauthenticated_paths() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let db = dir.path().join("rpc.sqlite3");
     let service = service(
         &db,

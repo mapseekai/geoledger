@@ -1,7 +1,11 @@
-import { GeoLedgerError, type Client } from "@geoledger/client";
+import { GeoLedgerError } from "@geoledger/client";
+import type { ConsoleClient } from "./console-client";
 import { requestSchema } from "./requests";
 import { featureItemsUrl } from "./feature-links";
-export async function featureCollection(client: Client, input: unknown) {
+export async function featureCollection(
+  client: Pick<ConsoleClient, "features">,
+  input: unknown,
+) {
   const r = requestSchema.parse(input);
   if (r.action !== "features") throw new Error("Expected features query");
   const page = await client.features(r.project, r.dataset, {

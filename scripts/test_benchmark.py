@@ -48,7 +48,8 @@ class SupervisorTests(unittest.TestCase):
 
     def test_ports_are_unique_and_failure_is_recorded(self):
         self.assertEqual(len(set(ports(3))), 3)
-        with tempfile.TemporaryDirectory() as folder:
+        # Process lifecycle is under test; RSS sampling has no dependency on host process permissions.
+        with tempfile.TemporaryDirectory() as folder, patch("benchmark.subprocess.run", return_value=subprocess.CompletedProcess(["ps"], 0, "1024", "")):
             server = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)"], start_new_session=True)
             try:
                 result = monitor([sys.executable, "-c", "raise SystemExit(7)"], os.environ.copy(), server, Path(folder), "failure", 5, 1024)

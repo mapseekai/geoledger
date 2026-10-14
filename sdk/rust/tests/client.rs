@@ -21,30 +21,6 @@ impl wire::geo_ledger_server::GeoLedger for Service {
     ) -> Result<Response<Self::FeaturesStreamStream>, Status> {
         Err(Status::unimplemented("unused"))
     }
-    async fn list_tokens(
-        &self,
-        _request: Request<wire::PageRequest>,
-    ) -> Result<Response<wire::TokensReply>, Status> {
-        Err(Status::unimplemented("unused"))
-    }
-    async fn issue_token(
-        &self,
-        _request: Request<wire::IssueTokenRequest>,
-    ) -> Result<Response<wire::IssuedTokenReply>, Status> {
-        Err(Status::unimplemented("unused"))
-    }
-    async fn reissue_token(
-        &self,
-        _request: Request<wire::ReissueTokenRequest>,
-    ) -> Result<Response<wire::IssuedTokenReply>, Status> {
-        Err(Status::unimplemented("unused"))
-    }
-    async fn revoke_token(
-        &self,
-        _request: Request<wire::TokenRefRequest>,
-    ) -> Result<Response<wire::OkReply>, Status> {
-        Err(Status::unimplemented("unused"))
-    }
     async fn info(
         &self,
         _request: Request<wire::Empty>,
@@ -272,7 +248,11 @@ async fn unknown_outcome_preserves_original_publication()
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
             .await
     });
-    let client = Client::connect(format!("http://{address}"), "test-only").await?;
+    let client = Client::connect(
+        format!("http://{address}"),
+        "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .await?;
     let mut draft = client.create_workspace("project").await?;
     let error = draft
         .publish("roads updated")
@@ -329,10 +309,13 @@ async fn unknown_outcome_preserves_original_publication()
 
 #[tokio::test]
 async fn plaintext_to_remote_hosts_requires_explicit_opt_in() {
-    let refused = geoledger_client::Client::connect("http://geoledger.example:7882", "t")
-        .await
-        .err()
-        .map(|e| e.code);
+    let refused = geoledger_client::Client::connect(
+        "http://geoledger.example:7882",
+        "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .await
+    .err()
+    .map(|e| e.code);
     assert_eq!(refused.as_deref(), Some("invalid_argument"));
     assert!(geoledger_client::is_loopback_host("127.0.0.1"));
     assert!(geoledger_client::is_loopback_host("[::1]"));

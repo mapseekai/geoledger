@@ -8,21 +8,22 @@ from playwright.sync_api import sync_playwright, expect
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--url', default='http://localhost:3000')
-parser.add_argument('--token-file', required=True)
+parser.add_argument('--api-key-file', required=True)
 parser.add_argument('--chromium')
 parser.add_argument('--screenshots', default='/tmp/geoledger-change-shots')
 args = parser.parse_args()
 shots = Path(args.screenshots)
 shots.mkdir(parents=True, exist_ok=True)
-token = json.loads(Path(args.token_file).read_text())[0]['token']
+api_key = Path(args.api_key_file).read_text().strip()
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True, executable_path=args.chromium,
-                               args=['--no-sandbox', '--disable-dev-shm-usage'])
+                               chromium_sandbox=True, args=['--disable-dev-shm-usage'])
     page = browser.new_page(viewport={'width':1600,'height':1000})
     errors=[]
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(args.url+'/login')
-    page.get_by_label('访问令牌',exact=True).fill(token)
+    page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_label('API Key',exact=True).fill(api_key)
     page.get_by_role('button',name='进入控制台').click()
     page.wait_for_url('**/projects')
     def command(body):
@@ -48,10 +49,10 @@ with sync_playwright() as p:
     edits.extend([edit(roads,'modify',1),edit(roads,'delete',None),edit(buildings,'added',1),edit(buildings,'modify',1),edit(buildings,'delete',None)])
     version=save(workspace,edits)
     summary=command({'action':'workspaceSummary','project':project,'workspace':workspace})
-    assert summary['total']=={'added':26,'deleted':2,'modified':2},summary
+    assert summary['total']=={'added':'26','deleted':'2','modified':'2'},summary
     by_name={row['name']:row for row in summary['datasets']}
-    assert [by_name['道路'][key] for key in ['added','deleted','modified']]==[25,1,1]
-    assert [by_name['建筑'][key] for key in ['added','deleted','modified']]==[1,1,1]
+    assert [by_name['道路'][key] for key in ['added','deleted','modified']]==['25','1','1']
+    assert [by_name['建筑'][key] for key in ['added','deleted','modified']]==['1','1','1']
     page.goto(args.url+'/workspaces?project='+project)
     expect(page.get_by_label('版本图表头',exact=True)).to_be_visible()
     expect(page.get_by_label('版本图表头',exact=True)).to_contain_text('数据集 / 要素变更')
@@ -70,7 +71,10 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots/'workspace-change-summary.png'),full_page=True)
     result=publish(workspace,version)
     historical=command({'action':'commitSummary','project':project,'revision':result['revision']})
-    assert historical==summary,(historical,summary)
+    assert historical['total']==summary['total'],(historical,summary)
+    assert historical['datasets']==summary['datasets'],(historical,summary)
+    assert historical['revision']==result['revision']
+    assert summary['version']==version
     page.goto(args.url+'/history?project='+project)
     table=page.get_by_role('table',name='版本历史',exact=True)
     row=table.get_by_role('row').filter(has_text='r'+result['revision'])

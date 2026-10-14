@@ -74,26 +74,37 @@ pub struct ConflictQuery<'a> {
 pub trait RepositoryTransaction: Send {
     /// Serialize global credential mutations and their audit/receipt writes until commit.
     fn lock_credentials(&mut self) -> Result<()>;
-    fn managed_token(&mut self, id: &str) -> Result<Option<crate::ManagedToken>>;
-    fn managed_subject(&mut self, digest: &str, now: &str) -> Result<Option<String>>;
-    fn list_tokens(&mut self, after: &str, limit: i64) -> Result<Vec<crate::ManagedToken>>;
-    fn insert_token(&mut self, token: &crate::ManagedToken, digest: &str) -> Result<()>;
-    fn revoke_token(&mut self, id: &str, now: &str) -> Result<()>;
-    fn token_receipt(&mut self, actor: &str, request: &str) -> Result<Option<crate::TokenReceipt>>;
-    fn save_token_receipt(
+    fn auth_user(&mut self, id: &str) -> Result<Option<crate::authentication::UserRecord>>;
+    fn auth_username(
         &mut self,
-        actor: &str,
-        request: &str,
-        payload: &str,
-        token_id: &str,
-    ) -> Result<()>;
-    fn append_token_audit(
+        username: &str,
+    ) -> Result<Option<crate::authentication::UserRecord>>;
+    fn auth_users(&mut self, after: &str, limit: i64, status: &str) -> Result<Vec<crate::User>>;
+    fn auth_insert_user(&mut self, user: &crate::authentication::UserRecord) -> Result<()>;
+    fn auth_update_user(&mut self, user: &crate::authentication::UserRecord) -> Result<()>;
+    fn auth_admin_count(&mut self) -> Result<i64>;
+    fn auth_membership_target(&mut self, id: &str) -> Result<bool>;
+    fn auth_user_count(&mut self) -> Result<i64>;
+    fn auth_key(&mut self, id: &str) -> Result<Option<crate::ApiKey>>;
+    fn auth_key_digest(&mut self, digest: &str, now: &str) -> Result<Option<crate::ApiKey>>;
+    fn auth_keys(&mut self, user: &str, after: &str, limit: i64) -> Result<Vec<crate::ApiKey>>;
+    fn auth_insert_key(&mut self, key: &crate::ApiKey, digest: &str) -> Result<()>;
+    fn auth_update_key(&mut self, key: &crate::ApiKey) -> Result<()>;
+    fn auth_delete_key(&mut self, id: &str) -> Result<()>;
+    fn auth_touch_key(&mut self, id: &str, now: &str, before: &str) -> Result<()>;
+    fn auth_session(
         &mut self,
-        actor: &str,
-        action: &str,
-        token_id: &str,
-        detail: &str,
+        digest: &str,
+    ) -> Result<Option<crate::authentication::SessionRecord>>;
+    fn auth_insert_session(
+        &mut self,
+        session: &crate::authentication::SessionRecord,
+        digest: &str,
     ) -> Result<()>;
+    fn auth_touch_session(&mut self, id: &str, now: &str, before: &str) -> Result<()>;
+    fn auth_delete_session(&mut self, id: &str) -> Result<()>;
+    fn auth_invalidate_user(&mut self, id: &str, now: &str, keys: bool) -> Result<()>;
+    fn auth_audit(&mut self, actor: &str, action: &str, resource: &str, now: &str) -> Result<()>;
 
     fn set_response_limit(&mut self, bytes: usize);
     fn response_limit(&self) -> usize;

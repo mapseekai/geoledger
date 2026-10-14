@@ -9,6 +9,8 @@ import time
 import urllib.request
 import uuid
 from benchmark import ports, stop
+from auth_test_support import provision, auth_call
+import secrets
 from benchmark_incremental import verify_source_crud
 
 
@@ -52,9 +54,10 @@ def main():
         assert sql("SELECT has_table_privilege('geoledger_app','private.unrelated','SELECT')") == 'f'
         assert sql("SELECT rolsuper OR rolcreatedb OR rolcreaterole FROM pg_roles WHERE rolname='geoledger_app'") == 'f'
         base=f'http://127.0.0.1:{http}'
-        cmd=[str(a.server.resolve()),'--storage','postgis','--data-dir',str(a.output/'data'),'--http',f'127.0.0.1:{http}','--grpc',f'127.0.0.1:{grpc}','--admin-subjects','admin']
+        cmd=[str(a.server.resolve()),'--storage','postgis','--data-dir',str(a.output/'data'),'--http',f'127.0.0.1:{http}','--grpc',f'127.0.0.1:{grpc}']
         server=start(cmd,'server',base+'/ready')
-        token=json.loads((a.output/'data/admin-credentials.json').read_text())[0]['token']
+        identity=provision(base,a.output/'data',a.output/'api-key')
+        token=identity['api_key']
         def call(op, body, credential=None):
             req=urllib.request.Request(base+'/api/v1/'+op,data=json.dumps(body).encode(),headers={'Authorization':'Bearer '+(credential or token),'Content-Type':'application/json'})
             with urllib.request.urlopen(req,timeout=30) as r:return json.load(r)
@@ -64,8 +67,13 @@ def main():
             workspace=call('create_workspace',{'project':project})['workspace']
             v=call('save',{'project':project,'workspace':workspace,'expected_workspace_version':0,'edits':[{'dataset':dataset,'feature_id':'one','feature':{'type':'Feature','id':'one','properties':{'name':value},'geometry':{'type':'LineString','coordinates':[[104,35],[106,37]]}}}]})['version']
             return call('publish',{'project':project,'workspace':workspace,'expected_workspace_version':v,'request_id':str(uuid.uuid4()),'message':value})
-        call('set_member',{'project':project,'subject':'restore-member','role':'viewer'})
-        member=call('issue_token',{'request_id':str(uuid.uuid4()),'subject':'restore-member','label':'restore','expires_at':'2099-01-01T00:00:00Z'})
+        temporary=secrets.token_urlsafe(32)
+        user=auth_call(base,'create_user',{'username':'restore-member','password':temporary,'current_password':identity['password']},identity['session'])
+        login=auth_call(base,'login_password',{'username':'restore-member','password':temporary})
+        password=secrets.token_urlsafe(32)
+        changed=auth_call(base,'change_password',{'current_password':temporary,'new_password':password},login['session'])
+        member=auth_call(base,'create_api_key',{'name':'restore','current_password':password},changed['session'])
+        call('set_member',{'project':project,'subject':user['id'],'role':'viewer'})
         publish('before backup')
         before=call('features',{'project':project,'dataset':dataset})
         audit=call('audit',{'project':project,'limit':1000})
@@ -73,29 +81,26 @@ def main():
             subprocess.run(['docker','exec',container,'pg_dump','-U','postgres','-Fc','geoledger_test'],stdout=output,check=True)
         stop(server)
         started=time.monotonic()
-        sql('CREATE DATABASE restored','postgres')
         with (a.output/'backup.dump').open('rb') as backup:
-            subprocess.run(['docker','exec','-i',container,'pg_restore','-U','postgres','--exit-on-error','-d','restored'],stdin=backup,check=True)
-        env['GL_DATABASE_URL']=env['GL_DATABASE_URL'].replace('/geoledger_test?','/restored?')
+            subprocess.run(['docker','exec','-i',container,'pg_restore','-U','postgres','--exit-on-error','--clean','--if-exists','-d','geoledger_test'],stdin=backup,check=True)
         server=start(cmd,'restored',base+'/ready')
         assert call('features',{'project':project,'dataset':dataset}) == before
         assert call('audit',{'project':project,'limit':1000}) == audit
-        assert call('features',{'project':project,'dataset':dataset},member['token']) == before
+        assert call('features',{'project':project,'dataset':dataset},member['api_key']) == before
         restore_seconds=time.monotonic()-started
         publish('after restore')
-        assert sql("SELECT name FROM business.roads WHERE id='one'",'restored') == 'after restore'
+        assert sql("SELECT name FROM business.roads WHERE id='one'",'geoledger_test') == 'after restore'
         assert call('features',{'project':project,'dataset':dataset,'revision':2}) == before
-        sql('SET ROLE geoledger_app; CREATE TABLE business.source(id text PRIMARY KEY, attributes jsonb, geom geometry(LineString,4326))','restored')
+        sql('SET ROLE geoledger_app; CREATE TABLE business.source(id text PRIMARY KEY, attributes jsonb, geom geometry(LineString,4326))','geoledger_test')
         source=call('create_dataset',{'project':project,'name':'batch source','postgis_table':{'schema':'business','table':'source','id_column':'id','geometry_column':'geom'}})['dataset']
-        verify_source_crud(call,lambda statement:sql(statement,'restored'),project,source,{'type':'Feature','id':'sample','properties':{'attributes':{'exact':18446744073709551615}},'geometry':{'type':'LineString','coordinates':[[104,35],[106,37]]}})
+        verify_source_crud(call,lambda statement:sql(statement,'geoledger_test'),project,source,{'type':'Feature','id':'sample','properties':{'attributes':{'exact':18446744073709551615}},'geometry':{'type':'LineString','coordinates':[[104,35],[106,37]]}})
         call('delete_project',{'project':project,'confirm_name':'restore drill'})
-        assert sql("SELECT name FROM business.roads WHERE id='one'",'restored') == 'after restore'
-        assert sql("SELECT count(*) FROM pg_trigger WHERE tgrelid='business.roads'::regclass AND NOT tgisinternal",'restored') == '0'
+        assert sql("SELECT name FROM business.roads WHERE id='one'",'geoledger_test') == 'after restore'
+        assert sql("SELECT count(*) FROM pg_trigger WHERE tgrelid='business.roads'::regclass AND NOT tgisinternal",'geoledger_test') == '0'
         if a.web:
-            import secrets
-            env.update(GL_WEB_ENDPOINT=f'http://127.0.0.1:{grpc}',GL_WEB_ORIGIN=f'http://127.0.0.1:{webport}',GL_WEB_SESSION_SECRET=secrets.token_urlsafe(48))
+            env.update(GL_WEB_ENDPOINT=f'http://127.0.0.1:{http}',GL_WEB_ORIGIN=f'http://127.0.0.1:{webport}',GL_WEB_SESSION_SECRET=secrets.token_urlsafe(48))
             start(['npm','--prefix','web','start','--','--port',str(webport)],'web',env['GL_WEB_ORIGIN']+'/login')
-            subprocess.run([os.sys.executable,'scripts/test-console-postgis.py','--url',env['GL_WEB_ORIGIN'],'--token-file',str(a.output/'data/admin-credentials.json'),'--chromium',a.chromium,'--screenshots',str(a.output/'screenshots')],check=True,timeout=180)
+            subprocess.run([os.sys.executable,'scripts/test-console-postgis.py','--url',env['GL_WEB_ORIGIN'],'--api-key-file',str(a.output/'api-key'),'--chromium',a.chromium,'--screenshots',str(a.output/'screenshots')],check=True,timeout=180)
         (a.output/'result.json').write_text(json.dumps({'passed':True,'restore_seconds':restore_seconds,'restricted_role':True,'native_restore':True,'source_survives_unbind':True,'source_batches':[1,100,500]},indent=2))
         print('PASS restricted role, native restore, history, audit, continued publication and source unbinding; restore seconds:',round(restore_seconds,3))
     finally:

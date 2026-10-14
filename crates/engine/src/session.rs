@@ -364,6 +364,49 @@ impl Client {
             Backend::Postgis(c) => c.batch_execute(sql),
         }
     }
+    fn sqlite_admission(
+        &self,
+        connection: &geoledger_spatialite::Connection,
+        sql: &str,
+    ) -> Result<()> {
+        self.check()?;
+        // Retry only lock admission and WAL initialization, never business SQL or COMMIT.
+        // SQLite's busy handler sleeps inside execute_batch. Holding the
+        // process-wide native access guard while sleeping would prevent
+        // unrelated databases from initializing/closing their connections.
+        loop {
+            let result = {
+                let access = connection.read().map_err(sqlite_error)?;
+                access.busy_timeout(Duration::ZERO).map_err(sqlite_error)?;
+                access.execute_batch(sql)
+            };
+            match result {
+                Ok(()) => break,
+                Err(error)
+                    if error.sqlite_error_code().is_some_and(|code| {
+                        matches!(
+                            code,
+                            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                        )
+                    }) =>
+                {
+                    // Preserve SQLITE_BUSY at lock expiry, while returning
+                    // a deadline error if no database work was ever attempted.
+                    // The native guard is gone before the bounded wait.
+                    std::thread::sleep(
+                        self.deadline
+                            .saturating_duration_since(Instant::now())
+                            .min(Duration::from_millis(5)),
+                    );
+                    if Instant::now() >= self.deadline {
+                        return Err(sqlite_error(error));
+                    }
+                }
+                Err(error) => return Err(sqlite_error(error)),
+            }
+        }
+        Ok(())
+    }
     pub fn transaction(mut self, read_only: bool) -> Result<SqlTransaction> {
         if read_only && matches!(self.backend, Backend::Sqlite(_)) {
             self.batch_execute("PRAGMA query_only=ON")?;
@@ -371,43 +414,7 @@ impl Client {
         if let Backend::Sqlite(connection) = &self.backend
             && !read_only
         {
-            self.check()?;
-            // Only retry acquiring a transaction, never business SQL or COMMIT.
-            // SQLite's busy handler sleeps inside execute_batch. Holding the
-            // process-wide native access guard while sleeping would prevent
-            // unrelated databases from initializing/closing their connections.
-            loop {
-                let result = {
-                    let access = connection.read().map_err(sqlite_error)?;
-                    access.busy_timeout(Duration::ZERO).map_err(sqlite_error)?;
-                    access.execute_batch("BEGIN IMMEDIATE")
-                };
-                match result {
-                    Ok(()) => break,
-                    Err(error)
-                        if error.sqlite_error_code().is_some_and(|code| {
-                            matches!(
-                                code,
-                                rusqlite::ErrorCode::DatabaseBusy
-                                    | rusqlite::ErrorCode::DatabaseLocked
-                            )
-                        }) =>
-                    {
-                        // Preserve SQLITE_BUSY at lock expiry, while returning
-                        // a deadline error if no database work was ever attempted.
-                        // The native guard is gone before the bounded wait.
-                        std::thread::sleep(
-                            self.deadline
-                                .saturating_duration_since(Instant::now())
-                                .min(Duration::from_millis(5)),
-                        );
-                        if Instant::now() >= self.deadline {
-                            return Err(sqlite_error(error));
-                        }
-                    }
-                    Err(error) => return Err(sqlite_error(error)),
-                }
-            }
+            self.sqlite_admission(connection, "BEGIN IMMEDIATE")?;
         } else {
             self.batch_execute(match self.backend {
                 Backend::Postgis(_) if read_only => "BEGIN ISOLATION LEVEL REPEATABLE READ",
@@ -418,10 +425,10 @@ impl Client {
         Ok(SqlTransaction(self, TransactionState::default()))
     }
     /// Initialize a fresh current-format database or validate an existing one.
-    pub fn migrate(mut self) -> Result<()> {
+    pub fn migrate(self) -> Result<()> {
         let sqlite = matches!(self.backend, Backend::Sqlite(_));
-        if sqlite {
-            self.batch_execute("PRAGMA journal_mode=WAL;")?;
+        if let Backend::Sqlite(connection) = &self.backend {
+            self.sqlite_admission(connection, "PRAGMA journal_mode=WAL")?;
         }
         let mut t = self.transaction(false)?;
         if !sqlite {
@@ -682,17 +689,7 @@ fn sqlite_error(source: rusqlite::Error) -> Error {
     Error::new(status, "storage operation failed").caused_by(source)
 }
 
-fn token_row(r: Row) -> Result<crate::ManagedToken> {
-    Ok(crate::ManagedToken {
-        id: r.get(0usize)?,
-        subject: r.get(1usize)?,
-        label: r.get(2usize)?,
-        created_by: r.get(3usize)?,
-        created_at: r.get(4usize)?,
-        expires_at: r.get(5usize)?,
-        revoked_at: r.get(6usize)?,
-    })
-}
+mod authentication;
 impl crate::repository::RepositoryTransaction for SqlTransaction {
     fn lock_credentials(&mut self) -> Result<()> {
         if matches!(self.0.backend, Backend::Postgis(_)) {
@@ -700,67 +697,169 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         }
         Ok(())
     }
-    fn managed_token(&mut self, id: &str) -> Result<Option<crate::ManagedToken>> {
-        self.query_opt("SELECT id,subject,label,created_by,created_at,expires_at,revoked_at FROM gl_managed_tokens WHERE id=$1", &[&id])?.map(token_row).transpose()
-    }
-    fn managed_subject(&mut self, digest: &str, now: &str) -> Result<Option<String>> {
-        self.query_opt("SELECT subject FROM gl_managed_tokens WHERE digest=$1 AND revoked_at IS NULL AND expires_at>$2", &[&digest,&now])?.map(|r|r.get(0usize)).transpose()
-    }
-    fn list_tokens(&mut self, after: &str, limit: i64) -> Result<Vec<crate::ManagedToken>> {
-        self.query("SELECT id,subject,label,created_by,created_at,expires_at,revoked_at FROM gl_managed_tokens WHERE id>$1 ORDER BY id LIMIT $2", &[&after,&limit])?.into_iter().map(token_row).collect()
-    }
-    fn insert_token(&mut self, r: &crate::ManagedToken, digest: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_managed_tokens(id,digest,subject,label,created_by,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)", &[&r.id,&digest,&r.subject,&r.label,&r.created_by,&r.created_at,&r.expires_at])
-    }
-    fn revoke_token(&mut self, id: &str, now: &str) -> Result<()> {
-        self.execute(
-            "UPDATE gl_managed_tokens SET revoked_at=$2 WHERE id=$1 AND revoked_at IS NULL",
-            &[&id, &now],
-        )
-    }
-    fn token_receipt(&mut self, actor: &str, request: &str) -> Result<Option<crate::TokenReceipt>> {
+    fn auth_user(&mut self, id: &str) -> Result<Option<crate::authentication::UserRecord>> {
         self.query_opt(
-            "SELECT payload,token_id FROM gl_token_receipts WHERE actor=$1 AND request_id=$2",
-            &[&actor, &request],
+            &format!("{} WHERE u.id=$1", authentication::USER_SELECT),
+            &[&id],
         )?
-        .map(|r| {
-            Ok(crate::TokenReceipt {
-                payload: r.get(0usize)?,
-                token_id: r.get(1usize)?,
-            })
-        })
+        .map(authentication::user_row)
         .transpose()
     }
-    fn save_token_receipt(
+    fn auth_username(
         &mut self,
-        actor: &str,
-        request: &str,
-        payload: &str,
-        token_id: &str,
-    ) -> Result<()> {
+        username: &str,
+    ) -> Result<Option<crate::authentication::UserRecord>> {
+        self.query_opt(
+            &format!("{} WHERE u.username=$1", authentication::USER_SELECT),
+            &[&username],
+        )?
+        .map(authentication::user_row)
+        .transpose()
+    }
+    fn auth_users(&mut self, after: &str, limit: i64, status: &str) -> Result<Vec<crate::User>> {
+        let select = "SELECT id,username,display_name,status,is_admin,must_change_password,created_at FROM gl_users";
+        let rows = if status.is_empty() {
+            self.query(
+                &format!("{select} WHERE id>$1 ORDER BY id LIMIT $2"),
+                &[&after, &limit],
+            )?
+        } else {
+            self.query(
+                &format!("{select} WHERE status=$3 AND id>$1 ORDER BY id LIMIT $2"),
+                &[&after, &limit, &status],
+            )?
+        };
+        rows.into_iter()
+            .map(|r| authentication::public_user_row(&r))
+            .collect()
+    }
+    fn auth_insert_user(&mut self, r: &crate::authentication::UserRecord) -> Result<()> {
+        let u = &r.user;
+        self.execute("INSERT INTO gl_users(id,username,display_name,status,is_admin,must_change_password,created_at,credential_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", &[&u.id,&u.username,&u.display_name,&u.status,&u.is_admin,&u.must_change_password,&u.created_at,&r.credential_version])?;
         self.execute(
-            "INSERT INTO gl_token_receipts(actor,request_id,payload,token_id) VALUES($1,$2,$3,$4)",
-            &[&actor, &request, &payload, &token_id],
+            "INSERT INTO gl_passwords(user_id,password_hash) VALUES($1,$2)",
+            &[&u.id, &r.password_hash],
         )
     }
-    fn append_token_audit(
-        &mut self,
-        actor: &str,
-        action: &str,
-        token_id: &str,
-        detail: &str,
-    ) -> Result<()> {
+    fn auth_update_user(&mut self, r: &crate::authentication::UserRecord) -> Result<()> {
+        let u = &r.user;
+        self.execute("UPDATE gl_users SET username=$2,display_name=$3,status=$4,is_admin=$5,must_change_password=$6,credential_version=$7 WHERE id=$1", &[&u.id,&u.username,&u.display_name,&u.status,&u.is_admin,&u.must_change_password,&r.credential_version])?;
         self.execute(
-            "INSERT INTO gl_token_audit(id,actor,action,token_id,detail) VALUES($1,$2,$3,$4,$5)",
+            "UPDATE gl_passwords SET password_hash=$2 WHERE user_id=$1",
+            &[&u.id, &r.password_hash],
+        )
+    }
+    fn auth_admin_count(&mut self) -> Result<i64> {
+        self.query_one(
+            "SELECT count(*) FROM gl_users WHERE status='active' AND is_admin",
+            &[],
+        )?
+        .get(0usize)
+    }
+    fn auth_membership_target(&mut self, id: &str) -> Result<bool> {
+        let suffix = if matches!(self.0.backend, Backend::Postgis(_)) {
+            " FOR SHARE"
+        } else {
+            ""
+        };
+        Ok(self
+            .query_opt(
+                &format!("SELECT id FROM gl_users WHERE id=$1 AND status='active'{suffix}"),
+                &[&id],
+            )?
+            .is_some())
+    }
+    fn auth_user_count(&mut self) -> Result<i64> {
+        self.query_one("SELECT count(*) FROM gl_users", &[])?
+            .get(0usize)
+    }
+    fn auth_key(&mut self, id: &str) -> Result<Option<crate::ApiKey>> {
+        self.query_opt(
+            &format!("{} WHERE id=$1", authentication::KEY_SELECT),
+            &[&id],
+        )?
+        .map(authentication::key_row)
+        .transpose()
+    }
+    fn auth_key_digest(&mut self, digest: &str, now: &str) -> Result<Option<crate::ApiKey>> {
+        self.query_opt(&format!("{} WHERE digest=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>$2)",authentication::KEY_SELECT), &[&digest,&now])?.map(authentication::key_row).transpose()
+    }
+    fn auth_keys(&mut self, user: &str, after: &str, limit: i64) -> Result<Vec<crate::ApiKey>> {
+        self.query(
+            &format!(
+                "{} WHERE user_id=$1 AND id>$2 ORDER BY id LIMIT $3",
+                authentication::KEY_SELECT
+            ),
+            &[&user, &after, &limit],
+        )?
+        .into_iter()
+        .map(authentication::key_row)
+        .collect()
+    }
+    fn auth_insert_key(&mut self, k: &crate::ApiKey, digest: &str) -> Result<()> {
+        self.execute("INSERT INTO gl_api_keys(id,user_id,digest,name,key_prefix,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)", &[&k.id,&k.user_id,&digest,&k.name,&k.key_prefix,&k.created_at,&k.expires_at])
+    }
+    fn auth_update_key(&mut self, k: &crate::ApiKey) -> Result<()> {
+        self.execute(
+            "UPDATE gl_api_keys SET name=$2,expires_at=$3,revoked_at=$4 WHERE id=$1",
+            &[&k.id, &k.name, &k.expires_at, &k.revoked_at],
+        )
+    }
+    fn auth_delete_key(&mut self, id: &str) -> Result<()> {
+        self.execute("DELETE FROM gl_api_keys WHERE id=$1", &[&id])
+    }
+    fn auth_touch_key(&mut self, id: &str, now: &str, before: &str) -> Result<()> {
+        self.execute("UPDATE gl_api_keys SET last_used_at=$2 WHERE id=$1 AND (last_used_at IS NULL OR last_used_at<$3)", &[&id,&now,&before])
+    }
+    fn auth_session(
+        &mut self,
+        digest: &str,
+    ) -> Result<Option<crate::authentication::SessionRecord>> {
+        self.query_opt("SELECT id,user_id,source_key_id,credential_version,created_at,last_seen_at,expires_at FROM gl_sessions WHERE digest=$1", &[&digest])?.map(|r| Ok(crate::authentication::SessionRecord {id:r.get(0usize)?,user_id:r.get(1usize)?,source_key_id:r.get(2usize)?,credential_version:r.get(3usize)?,created_at:r.get(4usize)?,last_seen_at:r.get(5usize)?,expires_at:r.get(6usize)?})).transpose()
+    }
+    fn auth_insert_session(
+        &mut self,
+        s: &crate::authentication::SessionRecord,
+        digest: &str,
+    ) -> Result<()> {
+        // Bound cleanup work per login; the expiry index avoids scanning live sessions.
+        self.execute(
+            "DELETE FROM gl_sessions WHERE id IN (SELECT id FROM gl_sessions WHERE expires_at<=$1 ORDER BY expires_at LIMIT 100)",
+            &[&s.created_at],
+        )?;
+        self.execute("INSERT INTO gl_sessions(id,user_id,digest,source_key_id,credential_version,created_at,last_seen_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", &[&s.id,&s.user_id,&digest,&s.source_key_id,&s.credential_version,&s.created_at,&s.last_seen_at,&s.expires_at])
+    }
+    fn auth_touch_session(&mut self, id: &str, now: &str, before: &str) -> Result<()> {
+        self.execute(
+            "UPDATE gl_sessions SET last_seen_at=$2 WHERE id=$1 AND last_seen_at<$3",
+            &[&id, &now, &before],
+        )
+    }
+    fn auth_delete_session(&mut self, id: &str) -> Result<()> {
+        self.execute("DELETE FROM gl_sessions WHERE id=$1", &[&id])
+    }
+    fn auth_invalidate_user(&mut self, id: &str, now: &str, keys: bool) -> Result<()> {
+        if keys {
+            self.execute(
+                "UPDATE gl_api_keys SET revoked_at=$2 WHERE user_id=$1 AND revoked_at IS NULL",
+                &[&id, &now],
+            )?;
+        }
+        self.execute("DELETE FROM gl_sessions WHERE user_id=$1", &[&id])
+    }
+    fn auth_audit(&mut self, actor: &str, action: &str, resource: &str, now: &str) -> Result<()> {
+        self.execute(
+            "INSERT INTO gl_auth_audit(id,actor,action,resource,created_at) VALUES($1,$2,$3,$4,$5)",
             &[
                 &uuid::Uuid::new_v4().to_string(),
                 &actor,
                 &action,
-                &token_id,
-                &detail,
+                &resource,
+                &now,
             ],
         )
     }
+
     fn set_response_limit(&mut self, bytes: usize) {
         self.0.result_limit = bytes;
         if let Backend::Postgis(c) = &mut self.0.backend {
@@ -1688,7 +1787,9 @@ mod tests {
         let mut client = Client::open(
             &Storage::Sqlite(dir.path().join("json.db")),
             &Arc::new(postgres::Pool::default()),
-            Duration::from_secs(5),
+            // This is a JSON correctness test, not a latency assertion. Native
+            // initialization can queue behind the other parallel storage tests.
+            Duration::from_secs(30),
         )?;
         for (source, key, expected) in [
             (

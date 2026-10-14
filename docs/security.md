@@ -2,7 +2,7 @@
 
 [项目概览](../README.md) · [生产运行](production.md) · [开发验证](development.md)
 
-本文说明传输加密、凭证生命周期、数据库 TLS 与控制台会话。所有设置均可通过环境变量或同名命令行参数提供。
+本文说明传输加密、凭证生命周期、数据库 TLS 与控制台会话。服务配置支持环境变量及对应命令行参数；初始管理员密码仅通过 `GL_ADMIN_PASSWORD` 环境变量注入。
 
 ## 传输加密
 
@@ -13,7 +13,7 @@
 | GL_TLS_CERT / --tls-cert | PEM 证书链，与私钥同时配置后两个监听器都启用 TLS |
 | GL_TLS_KEY / --tls-key | PEM 私钥（PKCS#8、PKCS#1 或 SEC1） |
 | GL_TLS_CLIENT_CA / --tls-client-ca | PEM CA；配置后要求客户端证书（mTLS） |
-| GL_RELOAD_INTERVAL_SECS | 证书、令牌与 JWKS 文件的变更检查间隔，默认 10 秒 |
+| GL_RELOAD_INTERVAL_SECS | TLS 证书文件的变更检查间隔，默认 10 秒 |
 
 HTTP 监听器协商 h2 与 http/1.1，gRPC 监听器协商 h2。证书文件更新后在检查间隔内生效，`kill -HUP` 立即重新加载；新文件校验失败时继续使用当前证书并记录错误日志。TLS 握手在独立任务中完成并有 10 秒期限。
 
@@ -28,47 +28,23 @@ HTTP 监听器协商 h2 与 http/1.1，gRPC 监听器协商 h2。证书文件更
 
 四种 SDK 与 `gl` 只允许对回环地址（`localhost`、`127.0.0.0/8`、`::1`）使用 `http://`。连接其他主机的明文地址需要显式开启：Rust `ConnectOptions { allow_insecure: true }`、Go `DialOptions{AllowInsecure: true}`、Python `allow_insecure=True`、TS `{ allowInsecure: true }`、CLI `--allow-insecure`，或统一设置 `GL_ALLOW_INSECURE_TRANSPORT=true`。该开关只用于隔离的内部网络，例如同一 Compose 网络中的控制台到服务端。
 
-## 静态令牌
+## 用户与密码
 
-服务端令牌文件只保存 SHA-256 摘要：
+用户身份由数据库中的稳定 UUID 标识，用户名去除首尾空白、按 ASCII 小写规范化并唯一，长度 3–64 字符，仅允许字母、数字、点、下划线和连字符；项目成员关系、历史与审计引用 UUID。平台管理员标志来自用户记录。用户禁用或软删除会使凭证与会话在下一次请求失效，同时保留内部身份和审计记录。
 
-```json
-[
-  {"subject": "alice", "token_sha256": "<64 位小写十六进制>", "expires_at": "2027-01-01T00:00:00Z", "label": "2026-10"},
-  {"subject": "alice", "token_sha256": "<旧令牌摘要>", "disabled": true}
-]
-```
+首次启动通过 `GL_ADMIN_USERNAME`（默认 `admin`）和可选 `GL_ADMIN_PASSWORD` 创建初始管理员。已有账户不会因重启重设密码。省略密码时使用系统随机源生成高强度密码，并以 create-new、0600 权限写入数据目录的 `initial-admin-<id>.json`；日志只提示路径。显式密码不写入该文件。初始密码和管理员重置的密码都必须先在 Console 修改。
 
-- `expires_at`（RFC 3339）到期后立即拒绝，无需重启。
-- `disabled: true` 吊销条目并保留记录；删除条目同样立即生效。
-- 同一 subject 可以有多个令牌，用于轮换期间新旧并存。
-- 文件变更在检查间隔内自动加载，`SIGHUP` 立即加载；格式错误的新文件被拒绝，当前凭证继续有效。
+密码保存为随机盐 Argon2id PHC 字符串（19 MiB、2 次迭代、1 并行度）。密码校验在有并发上限的阻塞任务中进行，不在数据库写锁内计算。登录失败采用统一语义，不存在的用户执行 dummy 密码校验。用户管理与凭证管理写操作，以及 Console 的项目成员权限修改，要求当前密码；自行改密也必须验证旧密码。
 
-生成凭证（明文只写入客户端文件或标准输出，服务端文件只含摘要）：
+密码登录按去除首尾空白并转为 ASCII 小写的用户名限速，每服务进程允许突发 10 次、每 5 秒恢复一次；不存在的账号使用相同规则，不同账号拥有独立配额。匿名入口另按来源 IP 限制每秒 10 次、突发 100 次，保护同一 BFF 下的共享入口；API Key 登录仅使用这一粗粒度配额。默认不信任 X-Forwarded-For。已认证的敏感操作按稳定用户 UUID 独立限速，普通业务请求不消耗密码验证配额。密码计算最多同时运行 4 个任务；用户名桶仅保存规范化名称的摘要，限流表各最多 100000 条并有界清理。这些配额在各服务进程独立维护。
 
-```sh
-geoledger-server tokens --out ./server-tokens.json --client-out ./team-credentials.json \
-  --expires-at 2027-01-01T00:00:00Z alice bob
-```
+## API Key
 
-客户端凭证文件格式为 `[{"subject": "...", "token": "..."}]`，权限 0600，交给对应用户后从服务器删除。手工计算摘要：`printf %s "$TOKEN" | sha256sum`。
+Console 的“API Key”页面创建、查看、重命名、设置可选到期时间、撤销或删除密钥。密钥使用 `glk_` 加 32 字节随机数的十六进制编码；数据库只存 SHA-256 摘要。明文仅在创建响应展示一次。SDK 和 CLI 自动发送 `Authorization: Bearer <API Key>`，Key 不放入 URL 或命令行参数。
 
-服务端身份文件使用 `token_sha256` 摘要字段；`geoledger-server tokens` 同时生成服务端摘要文件和客户端凭证文件。
+每个用户可以保留多个独立 Key，以便逐步轮换客户端。用户只管理自己的 Key；管理员管理其他用户也必须验证当前密码。Key 继承绑定用户的项目 RBAC，不获得额外数据权限。撤销、删除、过期或用户停用在后续请求强一致检查，已通过认证的在途操作可以完成。
 
-首次启动且数据目录没有令牌文件时，服务创建摘要格式的 `tokens.json` 和明文 `admin-credentials.json`（0600）。把后者交给运维人员后删除。生产环境可设置 `GL_BOOTSTRAP_ADMIN=false`，要求预先提供令牌文件。
-
-## JWT 与 JWKS
-
-JWT 只接受 RS256，校验签名、issuer（HTTPS）、audience、exp、可选 nbf 与 subject，JWKS 每个密钥都需要 `kid`。
-
-| 环境变量 / 参数 | 用途 |
-|---|---|
-| GL_JWKS_FILE / --jwks-file | 本地 JWKS 文件，变更后自动重新加载 |
-| GL_JWKS_URL / --jwks-url | HTTPS JWKS 地址，定时刷新 |
-| GL_JWKS_REFRESH_SECS | URL 刷新间隔，默认 300 秒 |
-| GL_JWT_ISSUER / GL_JWT_AUDIENCE | 固定 issuer 与 audience |
-
-启动时必须成功获取一次 JWKS。之后刷新失败时保留上一份有效密钥并记录警告，响应体上限 1 MiB、请求期限 10 秒、不跟随重定向。身份提供方轮换密钥时，先发布新 `kid`，等待一个刷新周期后再签发新令牌。
+CLI 通过 `GL_API_KEY` 或 `GL_API_KEY_FILE` / `--api-key-file` 读取 Key。文件是仅含一个 Key 的纯文本文件；Unix 下必须为私有普通文件（如 0600），符号链接和公开可读文件会被拒绝。
 
 ## PostgreSQL TLS
 
@@ -96,16 +72,8 @@ postgresql://geoledger@db.internal:5432/geoledger?sslmode=verify-full&sslrootcer
 
 ## 控制台会话
 
-浏览器 Cookie（HttpOnly、SameSite=Strict、HTTPS 下 Secure，iron-session 加密）只保存随机会话 ID，GeoLedger 凭证保存在控制台服务端内存。退出登录立即删除服务端会话，复制的 Cookie 随即失效；后端返回未认证时同样删除会话。会话绝对期限 8 小时，空闲期限由 `GL_WEB_SESSION_IDLE_MINUTES` 设置（默认 60 分钟）。控制台重启会让所有会话重新登录；多实例部署使用会话粘滞。
+浏览器 Cookie 仅持有 opaque Session（HttpOnly、SameSite=Strict、HTTPS 下 Secure）。Session 的摘要和来源保存在数据库，多实例共享状态。普通业务请求通过 Console 私有 HTTP transport 携带 Session；公开 SDK 仅接受 API Key。混合或重复凭证会被拒绝。
 
-## 控制台签发成员令牌
+数据库 Session 空闲期限为 30 分钟、绝对期限为 12 小时，Console Cookie 最长 8 小时；退出登录在数据库撤销会话。密码修改、管理员重置、用户停用或删除立即使已有会话失效，并撤销该用户已有 API Key。通过 API Key 登录创建的会话持续绑定来源 Key，Key 过期、撤销或删除同时使会话失效。敏感管理操作独立验证当前密码，普通业务操作不重复要求密码。
 
-使用本地令牌认证时，通过 `GL_ADMIN_SUBJECTS=admin` 显式配置平台管理员。管理员登录后进入“成员令牌”，填写成员身份（subject）、用途和到期时间（界面默认 90 天），点击签发。明文仅展示一次；请安全交付对应用户，由用户自行保存。项目所有者不等于平台管理员，不能签发身份凭据；受管令牌不能签发给配置的平台管理员身份。新增平台管理员配置后，该身份已存在的受管令牌会失效。
-
-随后在项目“访问权限”为同一 subject 分配角色。用户使用自己的令牌登录，签发本身不会自动授予项目权限。不要将令牌放入 URL。文件 `tokens.json` 的运维凭据不出现在管理列表，也不能从页面撤销；JWT/JWKS 模式关闭此功能，由身份提供方管理凭据。
-
-丢失令牌后可撤销，再签发；也可对未撤销的令牌选择“重新签发”，原子撤销旧令牌并返回新令牌。已撤销的令牌不可再重新签发，使用“签发令牌”创建新的。其他同身份令牌不会受影响。撤销提交后的新请求会重新校验数据库，已有 Web 会话的下一次请求收到未认证后清除会话；已通过认证的在途请求或流允许完成。
-
-签发与重新签发需要客户端提供 UUID `request_id`，失败重试保持 ID 和参数不变。同一请求只创建一次，重复成功响应仅包含令牌元数据，不再包含明文。首次响应丢失时，在列表中按返回的令牌 ID 撤销后重新签发，不提供找回功能。控制台仅在当前弹窗内存保存待确认请求，不持久化秘密；离开页面后可从列表处理未保存的凭据。
-
-数据库仅持久化摘要、元数据、无秘密操作回执和全局审计。原生备份包含这些数据；逻辑项目导入导出不包含全局凭据或其审计。恢复旧备份可能恢复已撤销凭据，恢复后必须在对外服务前轮换或撤销相关令牌。
+完整数据库备份包含身份与凭证摘要；逻辑项目导入导出只处理业务数据。恢复旧备份可能恢复旧凭证状态，恢复后在对外服务前撤销或轮换相关 Key。TLS 私钥、初始化凭证文件及数据库备份均按秘密管理。

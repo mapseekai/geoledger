@@ -25,7 +25,7 @@ python3 scripts/benchmark_incremental.py \
 
 `fixture_jsonl SOURCE OUTPUT CRS` 将显式指定的源坐标系写入夹具元数据，例如 `EPSG:4326`、`EPSG:3857` 或自定义 CRS 定义。参数应与源文件的实际坐标系一致；生成器保留原始坐标。已有 JSONL 夹具可通过 `benchmark_incremental.py --crs EPSG:4326` 补充经过核对的 CRS。监督器在启动前校验 CRS 元数据及显式参数的一致性。
 
-当前格式 14 将数据集 CRS 保存在 `gl_datasets.crs`，SQLite 和 PostGIS 的共享内部几何列使用 SRID 0。SQLite 的 XY/XYZ 分别写入 `geom`/`geom_z`；PostGIS 业务表按照 `EPSG:<编号>` 或 `POSTGIS:<编号>` 声明的 SRID 创建，历史表仍使用内部 SRID 0。两条写入路径均保留坐标数值。初始化先校验当前存储格式，SQLite 还校验几何列的维度及 SRID；运行结束后核对历史表与业务表的实际 SRID。`environment.json` 和 `result.json` 记录 CRS、内部/业务 SRID 及执行阶段。
+当前格式 16 将数据集 CRS 保存在 `gl_datasets.crs`，SQLite 和 PostGIS 的共享内部几何列使用 SRID 0。SQLite 的 XY/XYZ 分别写入 `geom`/`geom_z`；PostGIS 业务表按照 `EPSG:<编号>` 或 `POSTGIS:<编号>` 声明的 SRID 创建，历史表仍使用内部 SRID 0。两条写入路径均保留坐标数值。初始化先校验当前存储格式，SQLite 还校验几何列的维度及 SRID；运行结束后核对历史表与业务表的实际 SRID。`environment.json` 和 `result.json` 记录 CRS、内部/业务 SRID 及执行阶段。
 
 增量客户端与原表校验器在数据集原生坐标空间中执行可表示的 XY 平移，保留几何类型、环闭合和 Z 值。经纬度与投影坐标使用同一增量验证流程。功能诊断可使用 debug 构建；性能对照使用本次代码构建的 release 二进制，并核对服务版本及报告中的构建摘要。
 
@@ -93,7 +93,7 @@ cargo +nightly fuzz run codec -- -max_total_time=60 -rss_limit_mb=1024
 
 ```sh
 python3 scripts/test-console-file-performance.py \
-  --url http://127.0.0.1:3000 --token-file /temporary/data/admin-credentials.json \
+  --url http://127.0.0.1:3000 --api-key-file /temporary/run/secrets/geoledger-api-key \
   --chromium /absolute/path/chrome --geojson /absolute/path/building.geojson \
   --expected-features 251014 --report artifacts/performance/browser-building.json
 ```

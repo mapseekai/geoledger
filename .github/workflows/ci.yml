@@ -76,21 +76,21 @@ jobs:
           for backend in sqlite postgis; do
             export GL_DATA_DIR="$RUNNER_TEMP/geoledger-$backend"
             export GL_ENDPOINT=http://127.0.0.1:7882
-            export GL_TOKEN_FILE="$GL_DATA_DIR/admin-credentials.json"
+            export GL_API_KEY_FILE="$GL_DATA_DIR/api-key"
             mkdir -p "$GL_DATA_DIR"
-            target/debug/geoledger-server tokens --out "$GL_DATA_DIR/tokens.json" --client-out "$GL_TOKEN_FILE" admin
             if [[ "$backend" == postgis ]]; then
               export GL_DATABASE_URL="$GL_TEST_DATABASE_URL"
             else
               unset GL_DATABASE_URL
             fi
-            target/debug/geoledger-server --storage "$backend" --token-file "$GL_DATA_DIR/tokens.json" > "$RUNNER_TEMP/server-$backend.log" 2>&1 &
+            target/debug/geoledger-server --storage "$backend" > "$RUNNER_TEMP/server-$backend.log" 2>&1 &
             service_pid=$!
             trap 'kill "$service_pid" 2>/dev/null || true' EXIT
             for attempt in $(seq 1 100); do
               if curl --fail --silent http://127.0.0.1:7881/ready >/dev/null; then break; fi
               sleep .1
             done
+            python3 scripts/auth_test_support.py --base http://127.0.0.1:7881 --data-dir "$GL_DATA_DIR" --output "$GL_API_KEY_FILE"
             ./scripts/test-sdks.sh
             kill -TERM "$service_pid"
             wait "$service_pid"
@@ -128,14 +128,14 @@ jobs:
           cargo +1.92.0 build --locked -p geoledger-server
           python3 -m pip install playwright
           python3 -m playwright install --with-deps chromium
-      - name: Browser to Next.js to TS SDK to GeoLedger
+      - name: Browser to Next.js to private Session transport
         env:
           GL_WEB_ORIGIN: http://127.0.0.1:3000
-          GL_WEB_ENDPOINT: http://127.0.0.1:7896
+          GL_WEB_ENDPOINT: http://127.0.0.1:7895
         run: |
           set -euo pipefail
           export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
-          target/debug/geoledger-server --data-dir "$RUNNER_TEMP/console-data" --http 127.0.0.1:7895 --grpc 127.0.0.1:7896 --admin-subjects admin > "$RUNNER_TEMP/console-backend.log" 2>&1 &
+          target/debug/geoledger-server --data-dir "$RUNNER_TEMP/console-data" --http 127.0.0.1:7895 --grpc 127.0.0.1:7896 > "$RUNNER_TEMP/console-backend.log" 2>&1 &
           backend_pid=$!
           npm --prefix web start > "$RUNNER_TEMP/console-web.log" 2>&1 &
           web_pid=$!
@@ -144,9 +144,10 @@ jobs:
             if curl --fail --silent http://127.0.0.1:3000/login >/dev/null && curl --fail --silent http://127.0.0.1:7895/ready >/dev/null; then break; fi
             sleep .2
           done
-          python3 scripts/test-console.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/admin-credentials.json"
+          python3 scripts/auth_test_support.py --base http://127.0.0.1:7895 --data-dir "$RUNNER_TEMP/console-data" --output "$RUNNER_TEMP/console-data/api-key"
+          python3 scripts/test-console.py --url http://127.0.0.1:3000 --api-key-file "$RUNNER_TEMP/console-data/api-key"
           chromium=$(python3 -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')
-          python3 scripts/test-console-shadcn.py --url http://127.0.0.1:3000 --token-file "$RUNNER_TEMP/console-data/admin-credentials.json" --chromium "$chromium"
+          python3 scripts/test-console-shadcn.py --url http://127.0.0.1:3000 --api-key-file "$RUNNER_TEMP/console-data/api-key" --password-file "$RUNNER_TEMP/console-data/api-key.password" --member-id "$(cat "$RUNNER_TEMP/console-data/api-key.member-id")" --chromium "$chromium"
   msrv:
     needs: source
     runs-on: ubuntu-24.04

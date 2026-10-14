@@ -18,7 +18,7 @@ import { configuration } from "../src/lib/config";
 import { ApiError } from "../src/lib/browser-api";
 import { resolveProject } from "../src/lib/project-context";
 
-test("table tracking uses the business SDK and validates the source", async () => {
+test("table tracking uses the private business transport and validates the source", async () => {
   const source = {
     schema: "business",
     table: "roads",
@@ -117,7 +117,7 @@ test("feature editing and display preserve uint64, exponent tokens and user fiel
   assert.throws(() => featureText('{"type":"Feature","id":"other"}', "a"));
   assert.throws(() => featureText("null", "a"));
 });
-test("BFF uses business SDK with exact revisions and immutable publication", async () => {
+test("BFF preserves exact revisions and immutable publication", async () => {
   const intent = publication(
     "project",
     "workspace",
@@ -204,7 +204,12 @@ test("invalid actions, extra upstream addresses, missing delete values and unsaf
 test("membership and lifecycle requests are validated", () => {
   for (const value of [
     { action: "members", project: "p", limit: 20 },
-    { action: "removeMember", project: "p", subject: "alice" },
+    {
+      action: "removeMember",
+      project: "p",
+      subject: "alice",
+      currentPassword: "test-only-password",
+    },
     { action: "archiveProject", project: "p", archived: true },
     { action: "deleteProject", project: "p", confirmName: "roads" },
   ])
@@ -240,7 +245,7 @@ test("deployments require a secret and HTTPS for non-loopback production origins
 });
 
 test("pending publication survives expired authentication but releases definitive merge conflicts", () => {
-  for (const status of [401, 403, 404])
+  for (const status of [401, 403, 404, 408, 413, 429, 504])
     assert.equal(releasePublication(status, false, true), false);
   assert.equal(releasePublication(409, false, true), true);
   assert.equal(releasePublication(400, false, true), true);
@@ -309,30 +314,7 @@ test("map preview bounds cover collections and preserve the original exact text"
   );
 });
 
-test("credential issuance preserves request IDs and validates the request", async () => {
-  const request = {
-    action: "issueToken",
-    requestId: "733fcf66-a9a6-4636-9496-cc7d831f7789",
-    subject: "alice",
-    label: "work",
-    expiresAt: "2099-01-01T00:00:00Z",
-  };
-  const client = {
-    issueToken: async (r: unknown) => {
-      const { action: _action, ...expected } = request;
-      assert.deepEqual(r, expected);
-      return { replayed: true };
-    },
-  } as unknown as Client;
-  assert.deepEqual(await execute(client, request), { replayed: true });
-  for (const change of [
-    { requestId: "bad" },
-    { expiresAt: "tomorrow" },
-    { subject: "" },
-  ]) {
-    assert.equal(
-      requestSchema.safeParse({ ...request, ...change }).success,
-      false,
-    );
-  }
+test("legacy token management actions are rejected", () => {
+  for (const action of ["tokens", "issueToken", "reissueToken", "revokeToken"])
+    assert.equal(requestSchema.safeParse({ action }).success, false);
 });

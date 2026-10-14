@@ -1,33 +1,16 @@
-import { Client, stringifyJson } from "@geoledger/client";
+import { stringify } from "lossless-json";
+import { stringifyJson } from "@geoledger/client";
+import type { ConsoleClient } from "./console-client";
 import { datasetCrs } from "./crs-server";
 import { featureCollection } from "./feature-collection";
 import { requestSchema } from "./requests";
 /** The only bridge to the business SDK. No generated transport types or forwarding. */
 export async function execute(
-  client: Client,
+  client: ConsoleClient,
   input: unknown,
 ): Promise<unknown> {
   const r = requestSchema.parse(input);
   switch (r.action) {
-    case "tokens":
-      return client.tokens(r);
-    case "issueToken":
-      return client.issueToken({
-        requestId: r.requestId,
-        subject: r.subject,
-        label: r.label,
-        expiresAt: r.expiresAt,
-      });
-    case "reissueToken":
-      return client.reissueToken({
-        requestId: r.requestId,
-        tokenId: r.tokenId,
-        label: r.label,
-        expiresAt: r.expiresAt,
-      });
-    case "revokeToken":
-      await client.revokeToken(r.tokenId);
-      return { ok: true };
     case "info":
       return client.info();
     case "projects":
@@ -145,12 +128,12 @@ export async function execute(
       };
     }
     case "setMember":
-      await client.setMember(r.project, r.subject, r.role);
+      await client.setMember(r.project, r.subject, r.role, r.currentPassword);
       return { ok: true };
     case "members":
       return client.members(r.project, r);
     case "removeMember":
-      await client.removeMember(r.project, r.subject);
+      await client.removeMember(r.project, r.subject, r.currentPassword);
       return { ok: true };
     case "archiveProject":
       return client.archiveProject(r.project, r.archived);
@@ -160,7 +143,9 @@ export async function execute(
   }
 }
 export function encode(value: unknown) {
-  return JSON.stringify(value, (_, item) =>
-    typeof item === "bigint" ? item.toString() : item,
+  return (
+    stringify(value, (_, item) =>
+      typeof item === "bigint" ? item.toString() : item,
+    ) ?? "null"
   );
 }

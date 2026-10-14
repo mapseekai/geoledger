@@ -996,10 +996,15 @@ fn platform_admins_creation_policy_and_quota() -> TestResult {
     let f = Fixture::new()?;
     let status =
         |r: Result<Value, geoledger_engine::Error>| r.map(|_| 200).unwrap_or_else(|e| e.status);
-    let root = Uuid::new_v4().to_string();
+    f.app.bootstrap_admin("admin", "initial-test-password")?;
+    let login = f.app.auth_operation(
+        None,
+        "login_password",
+        json!({"username":"admin","password":"initial-test-password"}),
+    )?;
+    let root = login["user"]["id"].as_str().ok_or("admin id")?.to_owned();
     let carol = Uuid::new_v4().to_string();
     let restricted = f.app.clone().with_policy(geoledger_engine::Policy {
-        admins: [root.clone()].into(),
         admin_only_project_creation: true,
         max_owned_projects: Some(1),
     });
@@ -1044,10 +1049,10 @@ fn platform_admins_creation_policy_and_quota() -> TestResult {
             .iter()
             .any(|e| e["action"] == "set_member" && e["subject"] == root.as_str())
     );
-    // Without the policy the same subject is an outsider.
+    // Database administrators retain authorization across Application instances.
     assert_eq!(
         status(f.app.execute(&root, "get_project", json!({"project":f.p}))),
-        404
+        200
     );
     Ok(())
 }

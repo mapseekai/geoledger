@@ -14,7 +14,8 @@ else
   cargo build --locked --quiet --release -p geoledger-server
   server=${CARGO_TARGET_DIR:-target}/release/geoledger-server
 fi
-work=$(mktemp -d)
+mkdir -p target
+work=$(mktemp -d "$PWD/target/auth-refactor-drill.XXXXXX")
 pid=
 cleanup() {
   [[ -n $pid ]] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null
@@ -39,19 +40,21 @@ for _ in $(seq 100); do
   kill -0 "$pid" 2>/dev/null || { cat "$work/server.log" >&2; exit 1; }
   sleep 0.1
 done
-token=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d[0]["token"])' "$work/data/admin-credentials.json")
+python3 scripts/auth_test_support.py --base "$base" --data-dir "$work/data" --output "$work/api-key"
+api_key=$(cat "$work/api-key")
+(umask 077; printf 'Authorization: Bearer %s\n' "$api_key" > "$work/http-headers")
 summary=${GL_LOAD_SUMMARY:-$work/summary.json}
 status=0
-GL_BASE_URL=$base GL_TOKEN=$token "$k6" run --quiet --summary-export "$summary" scripts/load/http.js || status=$?
-metrics=$(curl -fsS "$base/metrics" -H "Authorization: Bearer $token")
+GL_BASE_URL=$base GL_API_KEY=$api_key "$k6" run --quiet --summary-export "$summary" scripts/load/http.js || status=$?
+metrics=$(curl -fsS "$base/metrics" -H "@$work/http-headers")
 internal=$(awk '$1=="geoledger_internal_errors_total"{print $2}' <<<"$metrics")
 echo "internal errors: ${internal:-missing}"
 [[ ${internal:-1} == 0 ]] || { echo "server reported internal errors" >&2; tail -50 "$work/server.log" >&2; status=1; }
 # Every publication k6 counted must be on the head, and nothing more.
 expected=$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["metrics"].get("geoledger_published",{}).get("count",0)))' "$summary")
-project=$(curl -fsS "$base/api/v1/list_projects" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data '{}' |
+project=$(curl -fsS "$base/api/v1/list_projects" -H "@$work/http-headers" -H 'Content-Type: application/json' --data '{}' |
   python3 -c 'import json,sys; v=json.load(sys.stdin); v=v.get("projects",v) if isinstance(v,dict) else v; print(max(v,key=lambda p:p["name"])["project"])')
-head=$(curl -fsS "$base/api/v1/get_project" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data "{\"project\":\"$project\"}" |
+head=$(curl -fsS "$base/api/v1/get_project" -H "@$work/http-headers" -H 'Content-Type: application/json' --data "{\"project\":\"$project\"}" |
   python3 -c 'import json,sys; print(json.load(sys.stdin)["head"])')
 echo "published: $expected, head: $head"
 [[ $head == "$expected" ]] || { echo "published head does not match successful publications" >&2; status=1; }

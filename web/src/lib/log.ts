@@ -6,13 +6,6 @@ export function logFailure(entry: {
   requestId?: string;
   error?: unknown;
 }) {
-  const error =
-    entry.error instanceof Error
-      ? {
-          name: entry.error.name,
-          message: entry.error.message.slice(0, 300),
-        }
-      : undefined;
   console.error(
     JSON.stringify({
       level: entry.status >= 500 ? "error" : "warn",
@@ -21,7 +14,6 @@ export function logFailure(entry: {
       status: entry.status,
       code: entry.code,
       requestId: entry.requestId,
-      error,
     }),
   );
 }

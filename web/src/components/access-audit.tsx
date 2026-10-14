@@ -1,4 +1,6 @@
 "use client";
+import { PasswordInput } from "./password-input";
+import { validatePasswordForm } from "@/lib/password";
 import { call, type Audit, type Member, type Project } from "@/lib/browser-api";
 import { pretty } from "@/lib/geojson";
 import { ScrollText, Users } from "lucide-react";
@@ -111,6 +113,7 @@ function MemberDialog({
         id="member-permissions"
         onSubmit={(event) => {
           event.preventDefault();
+          if (!validatePasswordForm(event.currentTarget)) return;
           const data = new FormData(event.currentTarget);
           void task.run(async () => {
             await call({
@@ -118,6 +121,7 @@ function MemberDialog({
               project: project.id,
               subject: String(data.get("subject")).trim(),
               role: String(data.get("role")),
+              currentPassword: String(data.get("currentPassword")),
             });
             saved();
           });
@@ -131,7 +135,7 @@ function MemberDialog({
               name="subject"
               required
               autoFocus
-              placeholder="例如 alice"
+              placeholder="用户管理页面中的固定用户 ID"
               maxLength={128}
               disabled={task.busy}
             />
@@ -150,6 +154,18 @@ function MemberDialog({
                 </SelectGroup>
               </SelectContent>
             </Select>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="member-password">当前密码</FieldLabel>
+            <PasswordInput
+              id="member-password"
+              name="currentPassword"
+              type="password"
+              autoComplete="current-password"
+              required
+              disabled={task.busy}
+            />
+            <small>UTF-8 1–1024 字节</small>
           </Field>
           <ErrorBox message={task.error} />
         </FieldGroup>
@@ -173,6 +189,7 @@ function Members({
 }) {
   const task = useAction();
   const [removed, setRemoved] = useState(0);
+  const [removing, setRemoving] = useState<Member>();
   const owner = project.role === "owner" || project.role === "admin";
   const page = usePage<Member>(async (after) => {
     const rows = await call<Member[]>({
@@ -220,16 +237,7 @@ function Members({
                     size="sm"
                     disabled={!owner || task.busy}
                     aria-label={`移除成员 ${m.subject}`}
-                    onClick={() =>
-                      void task.run(async () => {
-                        await call({
-                          action: "removeMember",
-                          project: project.id,
-                          subject: m.subject,
-                        });
-                        setRemoved((n) => n + 1);
-                      })
-                    }
+                    onClick={() => setRemoving(m)}
                   >
                     移除
                   </Button>
@@ -242,6 +250,50 @@ function Members({
         <Empty icon={Users} title="没有成员" />
       )}
       {page.footer}
+      {removing && (
+        <Modal
+          title="移除成员"
+          busy={task.busy}
+          close={() => setRemoving(undefined)}
+        >
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!validatePasswordForm(event.currentTarget)) return;
+              const currentPassword = String(
+                new FormData(event.currentTarget).get("currentPassword"),
+              );
+              void task.run(async () => {
+                await call({
+                  action: "removeMember",
+                  project: project.id,
+                  subject: removing.subject,
+                  currentPassword,
+                });
+                setRemoved((n) => n + 1);
+                setRemoving(undefined);
+              });
+            }}
+          >
+            <p>确认移除成员 {removing.subject} 的项目权限。</p>
+            <Field>
+              <FieldLabel htmlFor="remove-password">当前密码</FieldLabel>
+              <PasswordInput
+                id="remove-password"
+                name="currentPassword"
+                type="password"
+                autoComplete="current-password"
+                required
+              />
+              <small>UTF-8 1–1024 字节</small>
+            </Field>
+            <ErrorBox message={task.error} />
+            <Button type="submit" disabled={task.busy}>
+              确认移除
+            </Button>
+          </form>
+        </Modal>
+      )}
     </Panel>
   );
 }

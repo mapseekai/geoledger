@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 /// Transport request ID, accepted from `x-request-id` or minted per request.
 #[derive(Clone)]
 struct RequestId(String);
@@ -18,6 +19,7 @@ pub fn router(service: Service) -> Router {
         .route("/ready", get(ready))
         .route("/metrics", get(metrics))
         .route("/api/v1/{operation}", post(call))
+        .route("/auth/v1/{operation}", post(auth_call))
         .layer(middleware::from_fn(headers))
         .with_state(service)
 }
@@ -98,7 +100,14 @@ async fn call(State(s): State<Service>, Path(op): Path<String>, request: Request
         Ok((bytes, lease))
     }
     .await;
-    match s.finish(&call, result) {
+    finish_response(&s, &call, result)
+}
+fn finish_response(
+    s: &Service,
+    call: &Call,
+    result: Result<(Vec<u8>, resources::ByteLease)>,
+) -> Response {
+    match s.finish(call, result) {
         Ok((bytes, lease)) => {
             let mut response = Response::new(axum::body::Body::new(resources::LeasedBody::new(
                 axum::body::Body::from(bytes),
@@ -189,7 +198,7 @@ async fn handle(
     let input = geoledger_engine::parse_json(&body)?;
     if op == "info" {
         return Ok(
-            json!({"version":env!("CARGO_PKG_VERSION"),"backend":s.app.backend(),"format_version":geoledger_engine::FORMAT_VERSION,"platform_admin":call.subject.as_ref().is_some_and(|v|s.app.policy().admins.contains(v)),"managed_tokens":s.authentication.managed_tokens(),"max_request_bytes":s.limits.max_request_bytes,"max_feature_bytes":0}),
+            json!({"version":env!("CARGO_PKG_VERSION"),"backend":s.app.backend(),"format_version":geoledger_engine::FORMAT_VERSION,"platform_admin":call.identity.as_ref().is_some_and(|v|v.user.is_admin),"max_request_bytes":s.limits.max_request_bytes,"max_feature_bytes":0}),
         );
     }
     s.execute(call, input, None, permit).await
@@ -221,13 +230,169 @@ async fn ready(State(s): State<Service>) -> Response {
     }
 }
 async fn metrics(State(s): State<Service>, headers: HeaderMap) -> Response {
-    if s.authentication.authenticate(&headers).is_none() {
-        s.metrics.auth_failure();
-        return error(Error::new(401, "bearer authentication required"));
+    let credential = match auth::credential(&headers, true) {
+        Ok(value) => value,
+        Err(e) => {
+            s.metrics.auth_failure();
+            return error(e);
+        }
+    };
+    // Scraping remains available while business slots and rate buckets are exhausted.
+    let permit = match s.password_capacity.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => return error(Error::new(429, "authentication busy")),
+    };
+    let app = s.app.clone();
+    let authenticated = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        match credential {
+            auth::Credential::ApiKey(key) => app.authenticate_api_key(&key),
+            auth::Credential::Session(session) => app.authenticate_session(&session),
+        }
+    })
+    .await;
+    match authenticated {
+        Ok(Ok(identity)) if !identity.user.must_change_password => {}
+        Ok(Ok(_)) => return error(Error::new(403, "password change required")),
+        Ok(Err(e)) => {
+            s.metrics.auth_failure();
+            return error(e);
+        }
+        Err(_) => return error(Error::new(500, "authentication unavailable")),
     }
     (
         [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
         s.metrics.render(&s.gauges()),
     )
         .into_response()
+}
+
+/// Console-only transport; the public SDK exposes no session or password login.
+async fn auth_call(State(s): State<Service>, Path(op): Path<String>, request: Request) -> Response {
+    let id = request
+        .extensions()
+        .get::<RequestId>()
+        .map_or_else(|| limits::request_id(None), |r| r.0.clone());
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<tls::PeerAddr>>()
+        .map(|c| c.0.0.ip());
+    let mut call = Call::new("http", &format!("auth:{op}"), id, peer);
+    let result = async {
+        let anonymous = matches!(op.as_str(), "login_password" | "login_api_key");
+        let sensitive = !matches!(
+            op.as_str(),
+            "me" | "logout" | "list_users" | "list_api_keys"
+        );
+        let peer = limits::client_ip(
+            peer,
+            request
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok()),
+            s.limits.trust_forwarded_for,
+        );
+        if anonymous
+            && !s.login_peer_limiter.allow(&format!(
+                "ip:{}",
+                peer.map_or_else(|| "local".into(), |ip| ip.to_string())
+            ))
+        {
+            return Err(Error::new(429, "authentication rate limit exceeded"));
+        }
+        let permit = if anonymous {
+            if request.headers().contains_key("authorization")
+                || request.headers().contains_key("x-geoledger-session")
+            {
+                return Err(Error::new(401, "authentication failed"));
+            }
+            ExecutionPermit {
+                _slot: s
+                    .capacity
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| Error::new(429, "server busy"))?,
+                memory: s.requests.reserve(0)?,
+            }
+        } else {
+            s.admit(&mut call, request.headers()).await?
+        };
+        let lease = s.responses.reserve(0)?;
+        call.response_lease = Some(lease.clone());
+        if sensitive
+            && let Some(subject) = &call.subject
+            && !s.auth_limiter.allow(&format!("user:{subject}"))
+        {
+            return Err(Error::new(429, "authentication rate limit exceeded"));
+        }
+        let body = tokio::time::timeout(
+            s.limits
+                .request_timeout
+                .saturating_sub(call.started.elapsed()),
+            axum::body::to_bytes(
+                axum::body::Body::new(resources::BudgetedBody::new(
+                    request.into_body(),
+                    permit.memory.clone(),
+                    usize::MAX,
+                )),
+                s.limits.max_request_bytes.min(16 * 1024),
+            ),
+        )
+        .await
+        .map_err(|_| Error::new(408, "request body timeout"))?
+        .map_err(|_| Error::new(413, "request exceeds byte budget"))?;
+        let input = geoledger_engine::parse_json(&body)?;
+        if op == "login_password" {
+            let username = input
+                .get("username")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            // Match engine normalization; retain only a bounded digest, even for invalid names.
+            let digest: String = Sha256::digest(username.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            let bucket = format!("username:{digest}");
+            if !s.auth_limiter.allow(&bucket) {
+                return Err(Error::new(429, "authentication rate limit exceeded"));
+            }
+        }
+        let password_permit = if sensitive && op != "login_api_key" {
+            Some(
+                s.password_capacity
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| Error::new(429, "authentication busy"))?,
+            )
+        } else {
+            None
+        };
+        let app = s
+            .app
+            .clone()
+            .with_response_limit(s.limits.max_response_bytes)
+            .with_response_reservation(lease.reservation());
+        let deadline = call.started + s.limits.request_timeout;
+        let identity = call.identity.clone();
+        let value = tokio::task::spawn_blocking(move || {
+            let (_permit, _password_permit) = (permit, password_permit);
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::new(504, "operation deadline exceeded"));
+            }
+            app.with_timeout(remaining)
+                .auth_operation(identity.as_ref(), &op, input)
+        })
+        .await
+        .map_err(|_| Error::new(500, "authentication unavailable"))??;
+        let bytes =
+            serde_json::to_vec(&value).map_err(|_| Error::new(500, "response encoding failed"))?;
+        lease.grow(bytes.len())?;
+        lease.shrink(bytes.len());
+        Ok((bytes, lease))
+    }
+    .await;
+    finish_response(&s, &call, result)
 }

@@ -12,7 +12,8 @@ else
   cargo build --locked --quiet -p geoledger-server
   server=${CARGO_TARGET_DIR:-target}/debug/geoledger-server
 fi
-work=$(mktemp -d)
+mkdir -p target
+work=$(mktemp -d "$PWD/target/auth-refactor-drill.XXXXXX")
 pid=
 cleanup() {
   [[ -n $pid ]] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null
@@ -50,13 +51,14 @@ stop() {
   pid=
 }
 call() {
-  curl -fsS "$base/api/v1/$1" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data "$2"
+  curl -fsS "$base/api/v1/$1" -H "@$work/http-headers" -H 'Content-Type: application/json' --data "$2"
 }
 field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
 echo "== seed (SQLite, $base)"
 start "$work/live"
-token=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d[0]["token"])' "$work/live/admin-credentials.json")
+python3 scripts/auth_test_support.py --base "$base" --data-dir "$work/live" --output "$work/api-key"
+(umask 077; printf 'Authorization: Bearer %s\n' "$(cat "$work/api-key")" > "$work/http-headers")
 project=$(call create_project '{"name":"drill"}' | field project)
 dataset=$(call create_dataset "{\"project\":\"$project\",\"name\":\"roads\",\"geometry_type\":\"point\"}" | field dataset)
 for i in 1 2 3; do
@@ -75,7 +77,7 @@ if run --data-dir "$work/live" export --output "$work/export.jsonl" >/dev/null 2
   exit 1
 fi
 # Writes after the backup are outside it (RPO); verify must notice the drift.
-call set_member "{\"project\":\"$project\",\"subject\":\"late-member\",\"role\":\"viewer\"}" >/dev/null
+call rename_project "{\"project\":\"$project\",\"name\":\"drill-after-backup\"}" >/dev/null
 stop
 status=0
 run --data-dir "$work/live" verify --input "$work/export.jsonl" >/dev/null 2>&1 || status=$?
@@ -87,7 +89,7 @@ if run --data-dir "$work/restored" restore --input "$work/backup.sqlite3" >/dev/
   echo "restore overwrote an existing database" >&2
   exit 1
 fi
-start "$work/restored" --token-file "$work/live/tokens.json"
+start "$work/restored"
 [[ $(call get_project "{\"project\":\"$project\"}" | field head) == "$head" ]]
 [[ $(call audit "{\"project\":\"$project\",\"limit\":1000}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["events"]))') == "$audit" ]]
 call features "{\"project\":\"$project\",\"dataset\":\"$dataset\",\"feature_id\":\"road-2\"}" | grep -q 18446744073709551615

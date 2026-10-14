@@ -1,8 +1,7 @@
 //! Operational behaviour: request-ID correlation, limits, metrics, health and shutdown.
+mod common;
 use axum::{body::Body, http::Request};
-use geoledger_server::{
-    Application, Authentication, Authenticator, Limits, Rate, Service, Storage, Tokens,
-};
+use geoledger_server::{Application, Limits, Rate, Service, Storage};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use std::{
@@ -13,7 +12,7 @@ use std::{
 use tower::ServiceExt;
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 // Public, test-only credentials for ephemeral in-process servers.
-const TOKEN: &str = "test-only-operations-credential-0123456789-abcdefgh";
+const TOKEN: &str = "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn service(
     dir: &std::path::Path,
@@ -21,14 +20,8 @@ fn service(
 ) -> Result<Service, Box<dyn std::error::Error + Send + Sync>> {
     let app = Application::new(Storage::Sqlite(dir.join("ops.sqlite3")));
     app.migrate()?;
-    let tokens = Tokens::from_json(
-        format!(
-            r#"[{{"subject":"ops","token_sha256":"{}"}}]"#,
-            geoledger_server::sha256_hex(TOKEN)
-        )
-        .as_bytes(),
-    )?;
-    Ok(Service::new(app, Authentication::new(Authenticator::Tokens(tokens))).with_limits(limits))
+    common::seed(&dir.join("ops.sqlite3"), &[("ops", TOKEN, true)])?;
+    Ok(Service::new(app).with_limits(limits))
 }
 async fn send(
     router: &axum::Router,
@@ -52,12 +45,12 @@ async fn send(
 }
 const AUTH: (&str, &str) = (
     "authorization",
-    "Bearer test-only-operations-credential-0123456789-abcdefgh",
+    "Bearer glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 );
 
 #[tokio::test]
 async fn request_ids_correlate_errors_and_metrics_are_labelled() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let router = geoledger_server::router(service(dir.path(), Limits::default())?);
     let (status, headers, body) = send(
         &router,
@@ -121,7 +114,7 @@ async fn request_ids_correlate_errors_and_metrics_are_labelled() -> TestResult {
 
 #[tokio::test]
 async fn subject_and_ip_rate_limits() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let router = geoledger_server::router(service(
         dir.path(),
         Limits {
@@ -182,7 +175,7 @@ async fn subject_and_ip_rate_limits() -> TestResult {
 
 #[tokio::test]
 async fn draining_reports_not_ready_and_health_router_is_minimal() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let service = service(dir.path(), Limits::default())?;
     let router = geoledger_server::router(service.clone());
     let health = geoledger_server::health_router(service.clone());
@@ -208,7 +201,8 @@ fn free_port() -> Result<std::net::SocketAddr, std::io::Error> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn probe_grpc_health_and_bounded_shutdown() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
+    common::database(&dir.path().join("geoledger.sqlite3"))?;
     let (http, grpc, health) = (free_port()?, free_port()?, free_port()?);
     let mut child = Command::new(env!("CARGO_BIN_EXE_geoledger-server"))
         .args(["--data-dir", dir.path().to_str().ok_or("path")?])
@@ -217,8 +211,6 @@ async fn probe_grpc_health_and_bounded_shutdown() -> TestResult {
         .env("GL_SHUTDOWN_TIMEOUT_SECS", "5")
         .env_remove("GL_STORAGE")
         .env_remove("GL_DATABASE_URL")
-        .env_remove("GL_TOKEN_FILE")
-        .env_remove("GL_JWKS_FILE")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
@@ -254,9 +246,7 @@ async fn probe_grpc_health_and_bounded_shutdown() -> TestResult {
         tonic_health::pb::health_check_response::ServingStatus::Serving as i32
     );
     // gRPC errors carry the caller's request ID in metadata and in ErrorDetail.
-    let credentials: Value =
-        serde_json::from_slice(&std::fs::read(dir.path().join("admin-credentials.json"))?)?;
-    let token = credentials[0]["token"].as_str().ok_or("token")?;
+    let token = common::KEY;
     let mut gl = geoledger_rpc::v1::geo_ledger_client::GeoLedgerClient::new(
         tonic::transport::Endpoint::from_shared(format!("http://{grpc}"))?
             .connect()

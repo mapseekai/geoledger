@@ -68,11 +68,11 @@ SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读�
 
 PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。`geom` 使用原生 `geometry` 类型（派生索引 SRID 0，兼容 XY/XYZ；原坐标系保存在数据集 `crs`），直接创建 GiST 索引；bbox 直接查询几何列，不在查询时解析 GeoJSON。几何结构在共同应用层校验，自相交等拓扑问题仍作为警告，保持原始坐标。
 
-当前格式为 14，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
+当前格式为 16，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
 
 SQLite 必须加载 SpatiaLite 5 扩展，使用注册的 `geom`（XY）和 `geom_z`（XYZ）几何 BLOB 列与各自的标准 RTree 索引；两个维度共用业务表，单个要素按维度写入对应列。数据集创建时声明不可变的 `coordinate_dimension`（2 或 3，默认 2），所有要素坐标必须匹配，混合维度返回明确的参数错误。嵌套集合和集合中的多部件几何仅在派生的空间表示中展平，快照保持原样。扩展加载失败时启动失败。默认加载 `mod_spatialite`，可通过 `GL_SPATIALITE_EXTENSION` 指定管理员安装的可信库路径。扩展加载后立即关闭动态加载权限。
 
-两个后端的 `geometry_json` 保留原始几何快照，用于精确响应、版本比较和逻辑导出；空间过滤使用原生几何列。SpatiaLite 不表示空几何集合，因此这类要素仅保留快照、不进入空间索引，仍参与普通分页与计数。导入在同一事务内重建原生几何与索引；备份包含原生几何、空间元数据与索引。格式 14 直接初始化新库，部署使用匹配当前格式的数据目录。
+两个后端的 `geometry_json` 保留原始几何快照，用于精确响应、版本比较和逻辑导出；空间过滤使用原生几何列。SpatiaLite 不表示空几何集合，因此这类要素仅保留快照、不进入空间索引，仍参与普通分页与计数。导入在同一事务内重建原生几何与索引；备份包含原生几何、空间元数据与索引。格式 16 直接初始化新库，部署使用匹配当前格式的数据目录。
 
 ## 新后端验收
 
@@ -100,11 +100,11 @@ PostGIS 可以在已有业务数据库中初始化 GeoLedger 版本表，并将�
 
 SQLite/SpatiaLite 将要素、原生几何和历史保存在当前数据库；外部 GeoJSON 文件可以在创建数据集时导入。
 
-## 全局受管凭据
+## 用户、密钥与会话
 
-格式 13 新增 `gl_managed_tokens`、`gl_token_receipts`、`gl_token_audit`。Application 负责平台管理员授权、生命周期与每次请求的摘要认证；RepositoryTransaction 的 `lock_credentials`、`managed_token`、`managed_subject`、`list_tokens`、`insert_token`、`revoke_token`、`token_receipt`、`save_token_receipt`、`append_token_audit` 提供语义边界。SQL 仅在 session 适配器中实现。
+格式 16 将用户基本信息、密码哈希、API Key 摘要及元数据、Session 摘要及元数据分离存储。用户 UUID 是成员、工作区和审计的稳定身份。用户名唯一约束及凭证摘要索引由数据库维护；认证读取摘要和有效用户，不使用正向缓存。用户状态分页使用 `(status,id)` 索引，并为有状态筛选与全量分页选择独立的参数化查询；用户列表仅读取基本信息。Session 活动时间更新在 SQL 条件中检查一分钟间隔，API Key 最近使用时间按五分钟间隔更新。
 
-凭据写操作串行化直至提交，摘要、回执和全局审计原子提交并在失败时回滚。SQLite 使用现有写事务锁；PostGIS 使用事务级 advisory lock。全局回执及审计不可修改或删除。逻辑项目导出明确排除这些全局身份表；完整数据库备份包括它们。不要将项目导入作为凭据恢复操作。
+身份管理写操作使用 RepositoryTransaction / SqlTransaction 的语义操作与数据库事务，SQL 保留在 session 适配器内。认证请求在各阶段共享一个截止时间，事务准入使用剩余预算；响应编码与预算检查在写事务提交前完成，HTTP 响应体持有共享预算直到消费完成或释放。最后一位有效管理员的禁用、删除或降级在事务锁内检查，SQLite 与 PostGIS 保持相同语义。全局身份审计和项目审计保留；完整备份包含身份数据，逻辑项目导出只包含业务数据。逻辑导入保留历史 UUID，但新数据库的用户独立创建；管理员需重新分配当前成员权限。需要原样恢复用户及凭证时使用完整数据库备份。
 
 ## 格式 13 派生状态与查询预算
 
@@ -123,4 +123,4 @@ PostgreSQL 失败连接在清理确认之前继续占用池名额；明确取消
 
 数据集新增不可变 `crs`。空间索引列统一使用 SRID 0 进行数据集内的平面相交计算，避免错误标注为 4326；几何 JSON 和全部版本历史保留输入坐标。查询必须同时限定项目、数据集，并使用原坐标系的 bbox。PostGIS 原表写回使用原表 SRID；外部修改核对仍检查几何、属性和表结构签名。
 
-格式 14 只初始化新库，不自动升级或清理格式 13 数据。部署前保留旧库及备份，使用独立新数据库。当前格式备份、恢复和逻辑导入导出保留 CRS；派生几何和索引在导入时重建。
+当前格式 16 只初始化新库，服务拒绝旧格式；旧库和备份由运营者保留。部署前保留旧库及备份，使用独立新数据库。当前格式备份、恢复和逻辑导入导出保留 CRS；派生几何和索引在导入时重建。

@@ -2,10 +2,9 @@ use geoledger_client::{Client, FeatureQuery, Page};
 use serde_json::json;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let tokens: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(std::env::var("GL_TOKEN_FILE")?)?)?;
-    let token = tokens[0]["token"].as_str().ok_or("token")?;
-    let client = Client::connect(std::env::var("GL_ENDPOINT")?, token).await?;
+    let api_key = std::fs::read_to_string(std::env::var("GL_API_KEY_FILE")?)?;
+    let client = Client::connect(std::env::var("GL_ENDPOINT")?, api_key.trim()).await?;
+    let member_id = std::env::var("GL_TEST_MEMBER_ID")?;
     let project = client
         .create_project(&format!("rust-{}", uuid::Uuid::new_v4()))
         .await?;
@@ -96,12 +95,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .code,
         "conflict"
     );
-    client
-        .set_member(&project.id, "sdk-viewer", "viewer")
-        .await?;
+    client.set_member(&project.id, &member_id, "viewer").await?;
     let members = client.members(&project.id, Default::default()).await?;
-    assert!(members.iter().any(|m| m.subject == "sdk-viewer"));
-    client.remove_member(&project.id, "sdk-viewer").await?;
+    assert!(members.iter().any(|m| m.subject == member_id));
+    client.remove_member(&project.id, &member_id).await?;
     assert_eq!(
         client.archive_project(&project.id, true).await?.state,
         "archived"

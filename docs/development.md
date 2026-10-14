@@ -14,7 +14,7 @@
 | crates/server | 存储业务服务、HTTP、tonic、认证、监控 |
 | sdk/rust、sdk/go、sdk/ts、sdk/python | 四语言 gRPC 客户端 |
 | crates/cli | 基于 Rust SDK 的远程命令行 |
-| web | 独立 Next.js 控制台、服务端 TS SDK 与浏览器 HTTP |
+| web | 独立 Next.js 控制台、私有 Session HTTP transport 与浏览器 HTTP |
 
 ## 构建与检查
 
@@ -25,7 +25,7 @@ cargo build --locked --workspace --bins --examples
 ./scripts/check.sh
 ```
 
-`scripts/check.sh` 使用 Python 3.11+、Bash 和 Node.js 22（容器启动器回归），依次执行文档检查、rustfmt、Clippy、独立引擎单元测试和工作区测试。完整检查中的真实服务用例会监听临时本地端口。
+`scripts/check.sh` 使用 Python 3.11+、Bash 和 Node.js 22（容器启动器回归），依次执行文档检查、rustfmt、Clippy、独立引擎单元测试和工作区测试。安装 Docker Compose 时还会运行 `scripts/test_deployment_config.py`，仅渲染两份配置，验证自定义管理员及未设置密码的四种情况，不启动容器或输出凭证；没有 Compose 时明确跳过。完整检查中的真实服务用例会监听临时本地端口。
 
 PostGIS 回归通过环境中的 `GL_TEST_DATABASE_URL` 启用，目标库名为 `geoledger_test`。测试服务账号需要对应隔离库的建表和事务权限。Web 检查命令见 [Web 构建与测试](../web/README.md#构建测试与部署)。
 
@@ -54,7 +54,7 @@ npm ci --prefix sdk/ts
 
 ## 四语言联调
 
-启动一个隔离服务，设置 `GL_ENDPOINT` 和 `GL_TOKEN_FILE`，运行 [test-sdks.sh](../scripts/test-sdks.sh)。令牌通过私有文件读取，脚本通过公开业务接口创建独立项目、保存精确数字、发布、重复原请求和读回。分别对 SQLite/PostGIS 地址运行。
+启动一个隔离服务，设置 `GL_ENDPOINT` 和 `GL_API_KEY_FILE`，运行 [test-sdks.sh](../scripts/test-sdks.sh)。API Key 通过私有文件读取，脚本通过公开业务接口创建独立项目、保存精确数字、发布、重复原请求和读回。分别对 SQLite/PostGIS 地址运行。
 
 在一个终端启动专用服务：
 
@@ -70,7 +70,8 @@ python3 -m venv .venv
 python -m pip install ./sdk/python
 npm ci --prefix sdk/ts
 export GL_ENDPOINT=http://127.0.0.1:7882
-export GL_TOKEN_FILE="$PWD/target/sdk-test/admin-credentials.json"
+export GL_API_KEY_FILE="$PWD/target/sdk-test/api-key"
+python scripts/auth_test_support.py --base http://127.0.0.1:7881 --data-dir target/sdk-test --output "$GL_API_KEY_FILE"
 ./scripts/test-sdks.sh
 ```
 
@@ -94,7 +95,7 @@ SDK 示例与测试会写入新的测试项目，请使用专用测试服务。C
 | [多实例并发](../crates/engine/tests/multi_instance.rs) | 多个实例（各自连接池）共享 SQLite/PostGIS：无交集的发布全部落地且修订号唯一，原请求跨实例重试幂等，重叠编辑恰有一个胜出 |
 | [导出与备份](../crates/engine/tests/portable.rs) | 导出导入往返、损坏文件拒绝、SQLite 在线备份、SQLite ⇄ PostGIS 互通 |
 | [失败路径](../crates/server/tests/limits.rs) | 外部锁超过请求期限、执行槽耗尽（429 / RESOURCE_EXHAUSTED）、请求体停滞（408）、畸形凭证（401），失败后恢复 |
-| [运维接口](../crates/server/tests/operations.rs)、[传输安全](../crates/server/tests/security.rs) | request ID 与指标、限流、排空与停机；TLS/mTLS、令牌轮换、JWKS 刷新 |
+| [运维接口](../crates/server/tests/operations.rs)、[传输安全](../crates/server/tests/security.rs) | request ID 与指标、限流、排空与停机；TLS/mTLS、API Key 与 Session 认证 |
 | [Rust SDK](../sdk/rust/tests/client.rs) | 发布结果确认与原请求恢复 |
 | [Go SDK](../sdk/go/client_test.go)、[Python SDK](../sdk/python/tests/test_client.py)、[TS SDK](../sdk/ts/test/client.test.cjs) | JSON 精度、显式编辑、工作区版本与发布重试 |
 | [四语言联调](../scripts/test-sdks.sh) | SDK 连接实际服务完成创建、编辑、发布与读取 |
@@ -148,7 +149,7 @@ python -m playwright install chromium
 # 在独立终端用 --data-dir ./target/console-test 启动后端，按 Web 文档配置并启动控制台后：
 python3 scripts/test-console.py \
   --url http://localhost:3000 \
-  --token-file target/console-test/admin-credentials.json \
+  --api-key-file target/console-test/api-key \
   --screenshots artifacts
 ```
 
@@ -156,6 +157,8 @@ python3 scripts/test-console.py \
 测试会写入新项目，验证登录、CSRF、精确数字、断线后原请求重试、分页、
 撤销、权限、审计、退出与手机布局。只对隔离测试服务运行。
 前端检查独立于 Rust 的 `check.sh`，CI 单独安装依赖并执行 Web 检查。
+
+认证页面专项使用 `scripts/test-console-auth.py --url <测试控制台地址> --admin-file <0600初始化凭证文件> --output target/console-auth-browser`，在全新测试实例中完成初始管理员改密、用户和 Key 管理等真实操作。[认证重构验收记录](authentication-validation.md) 汇总三轮审查、双后端与 SDK 验证结果和复现入口。
 
 截图由 `--screenshots artifacts` 生成：`artifacts/next-login.png`、`artifacts/next-projects.png`、`artifacts/next-mobile.png` 和 `artifacts/next-login-mobile.png`。这些是本地生成产物。
 
@@ -193,14 +196,15 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 
 `./scripts/check.sh` 在设置 `GL_TEST_DATABASE_URL` 后执行 `postgis_table` 专项测试，覆盖初始快照、管理员权限、原表增删改、约束失败回滚、重复发布、撤销、外部修改检测、逻辑导入独立副本和解绑保留。
 
-`scripts/test-console-postgis.py` 验证完整 Web 纳管与发布。使用隔离 PostGIS 服务，在当前数据库准备 `business.roads(id bigint PRIMARY KEY, name text NOT NULL, geom geometry(LineString,4326))` 及一条要素，并通过 `GL_ADMIN_SUBJECTS=admin` 授权测试管理员。脚本接收与上传测试相同的 `--url`、`--token-file`、`--chromium` 和 `--screenshots` 参数。
+`scripts/test-console-postgis.py` 验证完整 Web 纳管与发布。使用隔离 PostGIS 服务，在当前数据库准备 `business.roads(id bigint PRIMARY KEY, name text NOT NULL, geom geometry(LineString,4326))` 及一条要素，并使用数据库平台管理员授权测试操作。脚本接收与上传测试相同的 `--url`、`--api-key-file`、`--chromium` 和 `--screenshots` 参数。
 
 2026-10-10 本机隔离验证：Node.js 22.23.2、Web 生产构建、PostgreSQL 17.10 / PostGIS 3.6.1；服务使用非超级用户并拥有测试业务表。浏览器经 `trackTable` 纳管一条 LineString，编辑属性与几何并发布 r2，直接 SQL 核对原表写回。对该库执行 `pg_dump -Fc` / `pg_restore` 到独立新库后，确认绑定和 r2 快照保留；继续发布 r3、重放原请求，再直接核对原表写回。该验证仅覆盖小规模功能恢复，不代表目标环境的容量、RPO、RTO 或高可用验收。
 
-## 成员令牌验收
+## 身份认证验收
 
-运行 `cargo test -p geoledger-engine --test credentials` 和 `cargo test -p geoledger-server --test credentials` 验证签发回执、权限边界、撤销、到期、原子重新签发、故障回滚与 SQLite 备份。可选 PostGIS 测试要求 `GL_TEST_DATABASE_URL` 指向隔离的 `geoledger_test`，执行 `cargo test -p geoledger-engine --test credentials -- --ignored`。额外设置 `GL_TEST_PG_BIN` 为包含 `pg_dump` 与 `pg_restore` 的目录时，同一测试还验证原生备份恢复；未设置时不运行原生备份步骤。
+`cargo test -p geoledger-engine --test authentication` 覆盖初始化、Argon2、强制改密、用户与 Key 生命周期、Session 失效、并发管理员不变量、UUID 历史与审计。`cargo test -p geoledger-server --test credentials` 覆盖共享 HTTP/gRPC 认证、重复凭证和限速。PostGIS 使用专用 `geoledger_test`，执行 `cargo test -p geoledger-engine --test authentication -- --ignored --test-threads=1`，测试会清理该专用库中的夹具。
 
+Console 真实 BFF 回归使用 `scripts/test-console-auth-http.py --url <Console地址> --admin-file <0600测试账户文件>`；真实浏览器使用 `scripts/test-console-auth.py`，参数相同。测试账户文件包含 `username`、`password`，仅用于隔离环境。浏览器脚本覆盖全部身份管理页面及 Cookie、CSRF、会话轮换与来源 Key 失效；运行结果以实际测试报告为准。
 
 ## 评审回归
 

@@ -1,3 +1,4 @@
+import { httpCode, uncertainStatus } from "./http-status";
 import "server-only";
 import { GeoLedgerError, stringifyJson } from "@geoledger/client";
 import { ZodError } from "zod";
@@ -12,7 +13,15 @@ export class HttpError extends Error {
     super(message);
   }
 }
+function guardCredentials(request: Request) {
+  if (
+    request.headers.has("authorization") ||
+    request.headers.has("x-geoledger-session")
+  )
+    throw new HttpError(400, "浏览器请求只能使用控制台 Cookie。");
+}
 export function guard(request: Request) {
+  guardCredentials(request);
   if (
     request.headers.get("origin") !== configuration().origin ||
     request.headers.get("sec-fetch-site") === "cross-site"
@@ -51,7 +60,12 @@ export async function body(
       }
       chunks.push(value);
     }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    // Preserve the BOM for JSON validation and reject malformed UTF-8, like the engine.
+    return JSON.parse(
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+        Buffer.concat(chunks),
+      ),
+    );
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(400, "JSON 格式无效。");
@@ -84,6 +98,7 @@ export function geoReply(data: unknown) {
   });
 }
 export function guardRead(request: Request) {
+  guardCredentials(request);
   const origin = request.headers.get("origin");
   if (
     (origin && origin !== configuration().origin) ||
@@ -93,7 +108,16 @@ export function guardRead(request: Request) {
 }
 export function failure(error: unknown) {
   if (error instanceof HttpError)
-    return reply({ error: { message: error.message } }, error.status);
+    return reply(
+      {
+        error: {
+          message: error.message,
+          code: httpCode(error.status),
+          uncertain: uncertainStatus(error.status),
+        },
+      },
+      error.status,
+    );
   if (error instanceof ZodError)
     return reply(
       {
@@ -116,7 +140,10 @@ export function failure(error: unknown) {
       resource_exhausted: 429,
       timeout: 504,
     };
-    const status = statuses[error.code] ?? 503;
+    const status =
+      "status" in error && typeof error.status === "number"
+        ? error.status
+        : (statuses[error.code] ?? 503);
     if (status >= 500)
       logFailure({ status, code: error.code, requestId: error.requestId });
     return reply(
@@ -126,6 +153,7 @@ export function failure(error: unknown) {
           message: error.message,
           requestId: error.requestId,
           uncertain: error.uncertain,
+          conflicts: error.conflicts,
         },
       },
       status,

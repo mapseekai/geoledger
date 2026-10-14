@@ -23,7 +23,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Access, AuditPanel } from "./access-audit";
-import { TokensPanel } from "./tokens";
+import { AccountPanel } from "./account";
+import type { User } from "@/lib/auth-model";
 import { Brand } from "./brand";
 import { MapConfigProvider } from "./map-config";
 import type { RasterBasemap } from "@/lib/basemap";
@@ -45,7 +46,10 @@ type Section = {
 };
 const sections: Section[] = [
   { id: "project-status", title: "项目状态", icon: FolderOpen, scoped: true },
-  { id: "tokens", title: "成员令牌", icon: Shield, scoped: false },
+  { id: "api-keys", title: "API Key", icon: Shield, scoped: false },
+  { id: "users", title: "用户管理", icon: UserRound, scoped: false },
+  { id: "profile", title: "个人资料", icon: UserRound, scoped: false },
+  { id: "password", title: "修改密码", icon: Shield, scoped: false },
   {
     id: "projects",
     title: "项目",
@@ -93,15 +97,26 @@ const groups = [
   { label: "数据管理", ids: ["projects", "datasets", "workspaces", "history"] },
   {
     label: "系统管理",
-    ids: ["access", "tokens", "project-status", "audit", "service"],
+    ids: [
+      "access",
+      "api-keys",
+      "users",
+      "profile",
+      "password",
+      "project-status",
+      "audit",
+      "service",
+    ],
   },
 ];
 export function Console({
   section,
+  user,
   projectId,
   basemap,
 }: {
   section: string;
+  user: User;
   projectId?: string;
   basemap?: RasterBasemap;
 }) {
@@ -116,7 +131,9 @@ export function Console({
   const [mobile, setMobile] = useState(false);
   const narrow = useMedia("(max-width: 1024px)");
   const logout = useAction();
+  const meta = sections.find((s) => s.id === section)!;
   useEffect(() => {
+    if (user.must_change_password) return;
     let active = true;
     const replaceProject = (id: string) => {
       const next = new URLSearchParams(query);
@@ -140,7 +157,8 @@ export function Console({
         return;
       }
       sessionStorage.setItem(currentProjectKey, result.project.id);
-      if (result.source === "explicit") setProject(result.project);
+      if (result.source === "explicit" || !meta.scoped)
+        setProject(result.project);
       else replaceProject(result.project.id);
     };
     void call<Info>({ action: "info" })
@@ -150,8 +168,14 @@ export function Console({
     return () => {
       active = false;
     };
-  }, [projectId, query, router, section]);
-  const meta = sections.find((s) => s.id === section)!;
+  }, [
+    projectId,
+    query,
+    router,
+    section,
+    meta.scoped,
+    user.must_change_password,
+  ]);
   const writable = project?.role === "owner" || project?.role === "editor";
   const status = info ? "online" : error ? "offline" : "pending";
   const statusText = info
@@ -210,8 +234,8 @@ export function Console({
               <div className="sidebar-label">{group.label}</div>
               {group.ids.map((id) => {
                 if (
-                  id === "tokens" &&
-                  !(info?.platformAdmin && info.managedTokens)
+                  (id === "users" && !user.is_admin) ||
+                  (user.must_change_password && id !== "password")
                 )
                   return null;
                 const item = sections.find((s) => s.id === id)!;
@@ -254,7 +278,7 @@ export function Console({
             <UserRound size={16} />
           </span>
           <div>
-            <strong>当前会话</strong>
+            <strong>{user.display_name || user.username}</strong>
           </div>
           <Tip label="退出登录" side="top">
             <Button
@@ -352,19 +376,8 @@ export function Console({
           <ErrorBox message={error} />
           {section === "projects" ? (
             <Projects info={info} />
-          ) : section === "tokens" ? (
-            info ? (
-              info.platformAdmin && info.managedTokens ? (
-                <TokensPanel key={project?.id || "none"} project={project} />
-              ) : (
-                <Empty
-                  icon={Shield}
-                  title="此功能仅对本地令牌模式的平台管理员开放"
-                />
-              )
-            ) : (
-              !error && <Loading />
-            )
+          ) : ["api-keys", "users", "profile", "password"].includes(section) ? (
+            <AccountPanel section={section} user={user} />
           ) : section === "service" ? (
             !error && <ServiceInfo info={info} />
           ) : projectId === undefined && resolved ? (

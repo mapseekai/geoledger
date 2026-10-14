@@ -343,7 +343,7 @@ fn sqlite_online_backup_is_consistent_and_verified() -> TestResult {
 }
 
 #[test]
-#[ignore = "requires GL_TEST_DATABASE_URL with permission to create databases"]
+#[ignore = "requires dedicated geoledger_test database; run with --test-threads=1"]
 fn postgis_and_sqlite_exchange_exports_both_ways() -> TestResult {
     let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
     let name = format!("geoledger_portable_{}", Uuid::new_v4().simple());
@@ -352,10 +352,10 @@ fn postgis_and_sqlite_exchange_exports_both_ways() -> TestResult {
     if actual != "geoledger_test" {
         return Err("requires isolated geoledger_test".into());
     }
-    admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
+    support::reset_database(&mut admin)?;
     let result = (|| -> TestResult {
         let (target, mut db) = support::connect_isolated(&dsn, &name)?;
-        db.batch_execute("CREATE EXTENSION postgis")?;
+        db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis")?;
         drop(db);
         let dir = tempfile::tempdir()?;
         let sqlite = Application::new(Storage::Sqlite(dir.path().join("source.sqlite3")));
@@ -389,6 +389,6 @@ fn postgis_and_sqlite_exchange_exports_both_ways() -> TestResult {
         );
         Ok(())
     })();
-    admin.batch_execute(&format!("DROP DATABASE {name} WITH (FORCE)"))?;
+    support::reset_database(&mut admin)?;
     result
 }

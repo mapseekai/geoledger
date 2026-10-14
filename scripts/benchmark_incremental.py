@@ -24,7 +24,7 @@ from benchmark import fingerprint, monitor, native_leaks, ports, stop
 
 
 # SQL fixture initialization targets the current service storage contract only.
-STORAGE_FORMAT = 14
+STORAGE_FORMAT = 16
 INTERNAL_SRID = 0
 
 
@@ -329,7 +329,7 @@ def main():
     docker_started = False
     log = stats_log = None
     result = {"success": False, "backend": args.backend, "phase": "startup", "crs": crs, "internal_srid": INTERNAL_SRID, "source_srid": source_srid}
-    command = [str(args.server.resolve()), "--storage", args.backend, "--data-dir", str(output / "data"), "--http", f"127.0.0.1:{http}", "--grpc", f"127.0.0.1:{grpc}", "--admin-subjects", "admin", "--request-timeout-secs", "600", "--db-statement-timeout-secs", "600"]
+    command = [str(args.server.resolve()), "--storage", args.backend, "--data-dir", str(output / "data"), "--http", f"127.0.0.1:{http}", "--grpc", f"127.0.0.1:{grpc}", "--request-timeout-secs", "600", "--db-statement-timeout-secs", "600"]
     (output / "environment.json").write_text(json.dumps({"backend": args.backend, "platform": platform.platform(), "server_command": command, "server_sha256": fingerprint(args.server), "client_sha256": fingerprint(args.client), "fixture": str(args.fixture.resolve()), "fixture_sha256": fingerprint(args.fixture), "metadata": metadata, "rounds": args.rounds, "load_seconds": args.load_seconds, "load_workers": args.load_workers, "postgis_image": args.postgis_image if args.backend == "postgis" else None, "timeout_seconds": args.timeout, "expected_storage_format": STORAGE_FORMAT, "internal_srid": INTERNAL_SRID, "source_srid": source_srid, "fixture_method": "untimed SQL in fresh disposable storage; measured client RPC only"}, indent=2))
 
     def psql(sql):
@@ -373,8 +373,9 @@ def main():
             stats = subprocess.Popen(["docker", "stats", "--format", "{{json .}}", container], stdout=stats_log, stderr=subprocess.STDOUT, start_new_session=True)
         log = (output / "server.log").open("w")
         server = start_server()
-        token_path = output / "data/admin-credentials.json"
-        token = json.loads(token_path.read_text())[0]["token"]
+        from auth_test_support import provision
+        token_path = output / "api-key"
+        token = provision(base, output / "data", token_path)["api_key"]
         def call(action, body):
             request = urllib.request.Request(base + "/api/v1/" + action, data=compact(body).encode(), headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
             try:
@@ -418,7 +419,7 @@ def main():
         manifest_path.write_text(json.dumps(manifest, indent=2))
         result.update(fixture_seconds=time.monotonic() - started, fixture_features=count, baseline_revision=revision)
         print(json.dumps({**result, "phase": "fixture_ready"}), flush=True)
-        env.update(GL_ENDPOINT=f"http://127.0.0.1:{grpc}", GL_TOKEN_FILE=str(token_path), GL_BENCH_DISPOSABLE="1", GL_BENCH_ROUNDS=str(args.rounds))
+        env.update(GL_ENDPOINT=f"http://127.0.0.1:{grpc}", GL_API_KEY_FILE=str(token_path), GL_BENCH_DISPOSABLE="1", GL_BENCH_ROUNDS=str(args.rounds))
         result["phase"] = "incremental"
         result["client"] = monitor([str(args.client.resolve()), str(manifest_path), str(output / "incremental.json")], env, server, output, "incremental", args.timeout, args.rss_limit_mib)
         if args.load_seconds and result["client"]["exit_code"] == 0:
@@ -431,7 +432,7 @@ def main():
             read_fixture = output / "read-fixture.json"
             read_fixture.write_text(json.dumps({"project": project, "dataset": dataset, "features": count,
                                                 "revision": call("get_project", {"project": project})["head"]}))
-            read_env = dict(env, GL_BASE_URL=base, GL_TOKEN=token, GL_BENCH_REPORT=str(read_fixture),
+            read_env = dict(env, GL_BASE_URL=base, GL_API_KEY=token, GL_BENCH_REPORT=str(read_fixture),
                             GL_LOAD_RATE="50", GL_LOAD_DURATION="30s")
             with (output / "reads.log").open("w") as read_log:
                 read_run = subprocess.run([str(args.k6.resolve()), "run", "--quiet", "--summary-export",

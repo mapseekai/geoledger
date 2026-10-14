@@ -1,5 +1,5 @@
 mod support;
-use geoledger_engine::{Application, Policy, Storage};
+use geoledger_engine::{Application, Storage};
 use serde_json::{Value, json};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[test]
@@ -14,19 +14,23 @@ fn existing_table_publication_is_atomic() -> TestResult {
         "geoledger_test"
     );
     let name = format!("geoledger_binding_{}", uuid::Uuid::new_v4().simple());
-    admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
+    support::reset_database(&mut admin)?;
     let result = (|| -> TestResult {
         let (dsn, mut db) = support::connect_isolated(&dsn, &name)?;
-        db.batch_execute("CREATE EXTENSION postgis; CREATE SCHEMA business; CREATE TABLE business.points(id bigint PRIMARY KEY,label text NOT NULL CHECK(label <> 'invalid'), n numeric(20,0), geom geometry(PointZ,3857)); INSERT INTO business.points VALUES(1,'original',18446744073709551615,ST_SetSRID(ST_MakePoint(500000,3500000,3),3857))")?;
-        let app = Application::new(Storage::Postgis(dsn)).with_policy(Policy {
-            admins: ["alice".into()].into(),
-            ..Policy::default()
-        });
+        db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis; CREATE SCHEMA business; CREATE TABLE business.points(id bigint PRIMARY KEY,label text NOT NULL CHECK(label <> 'invalid'), n numeric(20,0), geom geometry(PointZ,3857)); INSERT INTO business.points VALUES(1,'original',18446744073709551615,ST_SetSRID(ST_MakePoint(500000,3500000,3),3857))")?;
+        let app = Application::new(Storage::Postgis(dsn));
         app.migrate()?;
-        let p = app.execute("alice", "create_project", json!({"name":"bound"}))?["project"].clone();
+        app.bootstrap_admin("alice", "initial-test-password")?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":"initial-test-password"}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let p = app.execute(alice, "create_project", json!({"name":"bound"}))?["project"].clone();
         let run = |op: &str, mut value: Value| {
             value["project"] = p.clone();
-            app.execute("alice", op, value)
+            app.execute(alice, op, value)
         };
         let source =
             json!({"schema":"business","table":"points","id_column":"id","geometry_column":"geom"});
@@ -71,11 +75,11 @@ fn existing_table_publication_is_atomic() -> TestResult {
         let imported = Application::new(Storage::Sqlite(temp.path().join("import.db")));
         imported.import_data(&mut std::io::Cursor::new(exported))?;
         assert!(
-            imported.execute("alice", "list_datasets", json!({"project":p}))?[0]["postgis_table"]
+            imported.execute(alice, "list_datasets", json!({"project":p}))?[0]["postgis_table"]
                 .is_null()
         );
         assert_eq!(
-            imported.execute("alice", "features", json!({"project":p,"dataset":d}))?["features"],
+            imported.execute(alice, "features", json!({"project":p,"dataset":d}))?["features"],
             features["features"]
         );
         // A full PostgreSQL restore recreates relation OIDs; names/schema/data define the binding.
@@ -290,7 +294,7 @@ fn existing_table_publication_is_atomic() -> TestResult {
         assert_eq!(run("publish",json!({"workspace":w,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"reject SRID drift"})).err().ok_or("SRID drift overwritten")?.status,409);
         Ok(())
     })();
-    admin.batch_execute(&format!("DROP DATABASE {name} WITH (FORCE)"))?;
+    support::reset_database(&mut admin)?;
     if let Err(error) = &result {
         let mut source = error.source();
         while let Some(error) = source {
@@ -313,20 +317,24 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
         "geoledger_test"
     );
     let name = format!("geoledger_deferred_{}", uuid::Uuid::new_v4().simple());
-    admin.batch_execute(&format!("CREATE DATABASE {name}"))?;
+    support::reset_database(&mut admin)?;
     let result = (|| -> TestResult {
         let (dsn, mut db) = support::connect_isolated(&dsn, &name)?;
-        db.batch_execute("CREATE EXTENSION postgis; CREATE SCHEMA business; CREATE TABLE business.zz_parent(id bigint PRIMARY KEY,label text,geom geometry(Point,3857)); CREATE TABLE business.aa_child(id bigint PRIMARY KEY,parent_id bigint REFERENCES business.zz_parent(id) DEFERRABLE INITIALLY DEFERRED,geom geometry(Point,3857)); CREATE TABLE business.deferred_key(id bigint PRIMARY KEY DEFERRABLE INITIALLY DEFERRED,label text,geom geometry(Point,3857))")?;
-        let app = Application::new(Storage::Postgis(dsn)).with_policy(Policy {
-            admins: ["alice".into()].into(),
-            ..Policy::default()
-        });
+        db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis; CREATE SCHEMA business; CREATE TABLE business.zz_parent(id bigint PRIMARY KEY,label text,geom geometry(Point,3857)); CREATE TABLE business.aa_child(id bigint PRIMARY KEY,parent_id bigint REFERENCES business.zz_parent(id) DEFERRABLE INITIALLY DEFERRED,geom geometry(Point,3857)); CREATE TABLE business.deferred_key(id bigint PRIMARY KEY DEFERRABLE INITIALLY DEFERRED,label text,geom geometry(Point,3857))")?;
+        let app = Application::new(Storage::Postgis(dsn));
         app.migrate()?;
+        app.bootstrap_admin("alice", "initial-test-password")?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":"initial-test-password"}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
         let p =
-            app.execute("alice", "create_project", json!({"name":"deferred"}))?["project"].clone();
+            app.execute(alice, "create_project", json!({"name":"deferred"}))?["project"].clone();
         let run = |op: &str, mut value: Value| {
             value["project"] = p.clone();
-            app.execute("alice", op, value)
+            app.execute(alice, op, value)
         };
         let attach = |table: &str| {
             run(
@@ -427,6 +435,6 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
         );
         Ok(())
     })();
-    admin.batch_execute(&format!("DROP DATABASE {name} WITH (FORCE)"))?;
+    support::reset_database(&mut admin)?;
     result
 }

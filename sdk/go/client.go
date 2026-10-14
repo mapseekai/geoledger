@@ -89,7 +89,7 @@ type Client struct {
 }
 
 // DialOptions configures a client. Plaintext http:// is accepted only for loopback hosts
-// unless AllowInsecure is set (or GL_ALLOW_INSECURE_TRANSPORT=true): the bearer token would
+// unless AllowInsecure is set (or GL_ALLOW_INSECURE_TRANSPORT=true): the API Key would
 // otherwise cross the network unencrypted.
 type DialOptions struct {
 	Timeout       time.Duration
@@ -114,21 +114,21 @@ func insecureOptIn() bool {
 	return false
 }
 
-// Dial accepts a service URL and a token. It never retries writes automatically.
-func Dial(endpoint, token string) (*Client, error) {
-	return DialWithOptions(endpoint, token, DialOptions{Timeout: 30 * time.Second})
+// Dial accepts a service URL and an API Key. It never retries writes automatically.
+func Dial(endpoint, apiKey string) (*Client, error) {
+	return DialWithOptions(endpoint, apiKey, DialOptions{Timeout: 30 * time.Second})
 }
-func DialWithTimeout(endpoint, token string, timeout time.Duration) (*Client, error) {
-	return DialWithOptions(endpoint, token, DialOptions{Timeout: timeout})
+func DialWithTimeout(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
+	return DialWithOptions(endpoint, apiKey, DialOptions{Timeout: timeout})
 }
-func DialWithOptions(endpoint, token string, options DialOptions) (*Client, error) {
+func DialWithOptions(endpoint, apiKey string, options DialOptions) (*Client, error) {
 	timeout := options.Timeout
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Hostname() == "" || u.Port() == "" || (u.Scheme != "http" && u.Scheme != "https") || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return nil, invalid("endpoint must be http(s)://host:port")
 	}
-	if token == "" || timeout <= 0 || strings.IndexFunc(token, func(r rune) bool { return r < 32 || r > 126 }) >= 0 {
-		return nil, invalid("ASCII token and positive timeout required")
+	if len(apiKey) != 68 || !strings.HasPrefix(apiKey, "glk_") || strings.IndexFunc(apiKey[4:], func(r rune) bool { return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') }) >= 0 || timeout <= 0 {
+		return nil, invalid("API Key and positive timeout required")
 	}
 	if u.Scheme == "http" && !IsLoopbackHost(u.Hostname()) && !options.AllowInsecure && !insecureOptIn() {
 		return nil, invalid("refusing to send credentials over plaintext http to a non-loopback host; use https or set AllowInsecure / GL_ALLOW_INSECURE_TRANSPORT=true")
@@ -147,7 +147,7 @@ func DialWithOptions(endpoint, token string, options DialOptions) (*Client, erro
 		}
 		md, _ := metadata.FromOutgoingContext(ctx)
 		md = md.Copy()
-		md.Set("authorization", "Bearer "+token)
+		md.Set("authorization", "Bearer "+apiKey)
 		return invoker(metadata.NewOutgoingContext(ctx, md), method, req, reply, cc, opts...)
 	}
 	conn, err := grpc.NewClient(u.Host, grpc.WithTransportCredentials(transport), grpc.WithUnaryInterceptor(auth), grpc.WithDisableRetry(), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(int(^uint(0)>>1)), grpc.MaxCallSendMsgSize(int(^uint(0)>>1))))
@@ -449,29 +449,4 @@ func (c *Client) TrackTable(ctx context.Context, project, name string, source Po
 	var r Dataset
 	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, PostgisTable: &pb.PostgisTable{Schema: source.Schema, Table: source.Table, IdColumn: source.IDColumn, GeometryColumn: source.GeometryColumn}}, &r)
 	return r, e
-}
-
-// Tokens lists metadata only; platform administrators are required.
-func (c *Client) Tokens(ctx context.Context, page Page) ([]ManagedToken, error) {
-	var r struct {
-		Tokens []ManagedToken `json:"tokens"`
-	}
-	e := call(c, ctx, c.rpc.ListTokens, &pb.PageRequest{After: page.After, Limit: limit(page.Limit)}, &r)
-	return r.Tokens, e
-}
-
-// IssueToken returns plaintext only on initial success. Preserve requestID when retrying.
-func (c *Client) IssueToken(ctx context.Context, requestID, subject, label, expiresAt string) (IssuedToken, error) {
-	var r IssuedToken
-	e := call(c, ctx, c.rpc.IssueToken, &pb.IssueTokenRequest{RequestId: requestID, Subject: subject, Label: label, ExpiresAt: expiresAt}, &r)
-	return r, e
-}
-func (c *Client) ReissueToken(ctx context.Context, requestID, tokenID, label, expiresAt string) (IssuedToken, error) {
-	var r IssuedToken
-	e := call(c, ctx, c.rpc.ReissueToken, &pb.ReissueTokenRequest{RequestId: requestID, TokenId: tokenID, Label: label, ExpiresAt: expiresAt}, &r)
-	return r, e
-}
-func (c *Client) RevokeToken(ctx context.Context, tokenID string) error {
-	var r struct{ OK bool }
-	return call(c, ctx, c.rpc.RevokeToken, &pb.TokenRefRequest{TokenId: tokenID}, &r)
 }

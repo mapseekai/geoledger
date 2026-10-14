@@ -18,10 +18,29 @@ export function configuration() {
     throw new Error(
       "Production GL_WEB_ORIGIN requires HTTPS (except loopback)",
     );
+  const endpoint = new URL(
+    process.env.GL_WEB_ENDPOINT ?? "http://127.0.0.1:7881",
+  );
+  if (
+    !["http:", "https:"].includes(endpoint.protocol) ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.search ||
+    endpoint.hash ||
+    endpoint.pathname !== "/"
+  )
+    throw new Error(
+      "GL_WEB_ENDPOINT must be an HTTP(S) origin without credentials",
+    );
+  if (
+    endpoint.protocol === "http:" &&
+    !["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname)
+  )
+    throw new Error("GL_WEB_ENDPOINT requires HTTPS except on loopback");
   return {
     origin: origin.origin,
     secure: origin.protocol === "https:",
     password,
-    endpoint: process.env.GL_WEB_ENDPOINT ?? "http://127.0.0.1:7882",
+    endpoint: endpoint.origin,
   };
 }

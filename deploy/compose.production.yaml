@@ -2,7 +2,7 @@
 # nginx TLS gateway (deploy/gateway/nginx.conf). Only the gateway publishes ports.
 #
 #   scripts/make-test-certs.sh deploy/tls        # or put real certificates there
-#   export GL_ADMIN_SUBJECTS=admin
+#   export GL_ADMIN_USERNAME=admin
 #   export GL_DB_PASSWORD=$(openssl rand -hex 32) GL_DB_APP_PASSWORD=$(openssl rand -hex 32) GL_WEB_SESSION_SECRET=$(openssl rand -base64 48)
 #   docker compose -f deploy/compose.production.yaml up -d --build
 #
@@ -65,7 +65,9 @@ services:
       GL_RATE_LIMIT_IP_RPS: "50"
       GL_SHUTDOWN_DRAIN_SECS: "5"
       GL_SHUTDOWN_TIMEOUT_SECS: "40"
-      GL_ADMIN_SUBJECTS: ${GL_ADMIN_SUBJECTS:?set GL_ADMIN_SUBJECTS}
+      GL_ADMIN_USERNAME: ${GL_ADMIN_USERNAME:-admin}
+      # Unset values are omitted so the server generates its private bootstrap password.
+      GL_ADMIN_PASSWORD:
     volumes:
       - geoledger-data:/data
       - ${GL_TLS_DIR:-./tls}/ca.crt:/etc/geoledger/tls/ca.crt:ro

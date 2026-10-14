@@ -1,11 +1,10 @@
 //! Regressions for pre-decode admission, transfer ownership and detached operations.
+mod common;
 use axum::{
     body::{Body, Bytes},
     http::{Request, StatusCode},
 };
-use geoledger_server::{
-    Application, Authentication, Authenticator, Limits, Service, Storage, Tokens,
-};
+use geoledger_server::{Application, Limits, Service, Storage};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::{
@@ -19,17 +18,15 @@ use std::{
 };
 use tower::ServiceExt;
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
-const TOKEN: &str = "test-only-resource-lifecycle-no-production-use";
+const TOKEN: &str = "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 fn service(
     path: &std::path::Path,
     limits: Limits,
 ) -> Result<Service, Box<dyn std::error::Error + Send + Sync>> {
     let app = Application::new(Storage::Sqlite(path.to_owned()));
     app.migrate()?;
-    let tokens = Tokens::from_json(&serde_json::to_vec(
-        &json!([{"subject":"owner","token_sha256":geoledger_server::sha256_hex(TOKEN)}]),
-    )?)?;
-    Ok(Service::new(app, Authentication::new(Authenticator::Tokens(tokens))).with_limits(limits))
+    common::seed(path, &[("ops", TOKEN, true)])?;
+    Ok(Service::new(app).with_limits(limits))
 }
 fn request(op: &str, value: Value) -> Result<Request<Body>, axum::http::Error> {
     Request::builder()
@@ -77,7 +74,7 @@ async fn metrics(
 }
 #[tokio::test]
 async fn grpc_rejects_before_body_poll_and_releases_failed_decode_admission() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let service = service(
         &dir.path().join("state.db"),
         Limits {
@@ -123,7 +120,7 @@ async fn grpc_rejects_before_body_poll_and_releases_failed_decode_admission() ->
 }
 #[tokio::test]
 async fn unconsumed_http_response_holds_and_releases_its_budget() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let router = geoledger_server::router(service(
         &dir.path().join("state.db"),
         Limits {
@@ -154,7 +151,7 @@ async fn unconsumed_http_response_holds_and_releases_its_budget() -> TestResult 
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_waiter_does_not_hide_running_or_completed_operation() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let path = dir.path().join("state.db");
     let router = geoledger_server::router(service(
         &path,
@@ -210,16 +207,20 @@ async fn cancelled_waiter_does_not_hide_running_or_completed_operation() -> Test
 async fn stream_budget_survives_slow_consumer_and_releases_at_eof_or_drop() -> TestResult {
     use geoledger_rpc::v1::{self as pb, geo_ledger_server::GeoLedger};
     use tokio_stream::StreamExt;
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let path = dir.path().join("stream.db");
     let app = Application::new(Storage::Sqlite(path.clone()));
     app.migrate()?;
-    let project = app.execute("owner", "create_project", json!({"name":"stream"}))?["project"]
+    let project = app.execute(
+        &common::user_id("ops"),
+        "create_project",
+        json!({"name":"stream"}),
+    )?["project"]
         .as_str()
         .ok_or("project")?
         .to_owned();
     let dataset = app.execute(
-        "owner",
+        &common::user_id("ops"),
         "create_dataset",
         json!({"project":project,"name":"points","geometry_type":"point"}),
     )?["dataset"]
@@ -265,7 +266,7 @@ async fn tls_grpc_admission_preserves_ip_rate_limits() -> TestResult {
         tls::{Tls, TlsFiles, spawn_acceptor},
     };
     use tokio_stream::StreamExt;
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
     let pem = cert.cert.pem();
     let files = TlsFiles {
@@ -329,7 +330,7 @@ async fn tls_grpc_admission_preserves_ip_rate_limits() -> TestResult {
 
 #[tokio::test]
 async fn unconsumed_error_response_holds_transfer_budget() -> TestResult {
-    let dir = tempfile::tempdir()?;
+    let dir = common::tempdir()?;
     let router = geoledger_server::router(service(
         &dir.path().join("errors.db"),
         Limits {
@@ -359,5 +360,52 @@ async fn unconsumed_error_response_holds_transfer_budget() -> TestResult {
             .status(),
         StatusCode::OK
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn auth_responses_hold_budget_until_dropped_and_enforce_limit() -> TestResult {
+    let dir = common::tempdir()?;
+    let path = dir.path().join("auth-budget.db");
+    let router = geoledger_server::router(service(
+        &path,
+        Limits {
+            max_response_bytes: 1024,
+            response_memory_bytes: 1024,
+            ..Limits::default()
+        },
+    )?);
+    let auth_request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/auth/v1/list_users")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+    };
+    let first = router.clone().oneshot(auth_request()?).await?;
+    assert_eq!(first.status(), StatusCode::OK);
+    let second = router.clone().oneshot(auth_request()?).await?;
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    drop((first, second));
+    let recovered = router.clone().oneshot(auth_request()?).await?;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    drop(recovered);
+    let invalid = Request::builder()
+        .method("POST")
+        .uri("/auth/v1/list_users")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::from(r#"{"status":false}"#))?;
+    let error = router.clone().oneshot(invalid).await?;
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    let blocked = router.clone().oneshot(auth_request()?).await?;
+    assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+    drop((error, blocked));
+    let db = rusqlite::Connection::open(&path)?;
+    for i in 0..10 {
+        db.execute("INSERT INTO gl_users(id,username,display_name,status,is_admin,must_change_password,created_at) VALUES (?1,?1,?2,'active',false,false,'2026-01-01T00:00:00Z')", rusqlite::params![format!("user-{i}"), "x".repeat(200)])?;
+    }
+    let large = router.oneshot(auth_request()?).await?;
+    assert_eq!(large.status(), StatusCode::PAYLOAD_TOO_LARGE);
     Ok(())
 }

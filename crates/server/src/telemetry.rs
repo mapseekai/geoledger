@@ -14,10 +14,6 @@ const BUCKETS: [u64; 8] = [
 /// Every application operation name; anything else is reported as `other`.
 pub(crate) const OPERATIONS: &[&str] = &[
     "info",
-    "list_tokens",
-    "issue_token",
-    "revoke_token",
-    "reissue_token",
     "create_project",
     "list_projects",
     "get_project",

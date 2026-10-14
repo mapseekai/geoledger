@@ -20,10 +20,6 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	GeoLedger_Info_FullMethodName             = "/geoledger.v1.GeoLedger/Info"
-	GeoLedger_ListTokens_FullMethodName       = "/geoledger.v1.GeoLedger/ListTokens"
-	GeoLedger_IssueToken_FullMethodName       = "/geoledger.v1.GeoLedger/IssueToken"
-	GeoLedger_RevokeToken_FullMethodName      = "/geoledger.v1.GeoLedger/RevokeToken"
-	GeoLedger_ReissueToken_FullMethodName     = "/geoledger.v1.GeoLedger/ReissueToken"
 	GeoLedger_CreateProject_FullMethodName    = "/geoledger.v1.GeoLedger/CreateProject"
 	GeoLedger_ListProjects_FullMethodName     = "/geoledger.v1.GeoLedger/ListProjects"
 	GeoLedger_GetProject_FullMethodName       = "/geoledger.v1.GeoLedger/GetProject"
@@ -67,10 +63,6 @@ const (
 // Revisions are int64; TypeScript SDK represents them as decimal strings.
 type GeoLedgerClient interface {
 	Info(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*InfoReply, error)
-	ListTokens(ctx context.Context, in *PageRequest, opts ...grpc.CallOption) (*TokensReply, error)
-	IssueToken(ctx context.Context, in *IssueTokenRequest, opts ...grpc.CallOption) (*IssuedTokenReply, error)
-	RevokeToken(ctx context.Context, in *TokenRefRequest, opts ...grpc.CallOption) (*OkReply, error)
-	ReissueToken(ctx context.Context, in *ReissueTokenRequest, opts ...grpc.CallOption) (*IssuedTokenReply, error)
 	CreateProject(ctx context.Context, in *NameRequest, opts ...grpc.CallOption) (*ProjectReply, error)
 	ListProjects(ctx context.Context, in *PageRequest, opts ...grpc.CallOption) (*ProjectsReply, error)
 	GetProject(ctx context.Context, in *ProjectRequest, opts ...grpc.CallOption) (*ProjectReply, error)
@@ -119,46 +111,6 @@ func (c *geoLedgerClient) Info(ctx context.Context, in *Empty, opts ...grpc.Call
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InfoReply)
 	err := c.cc.Invoke(ctx, GeoLedger_Info_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *geoLedgerClient) ListTokens(ctx context.Context, in *PageRequest, opts ...grpc.CallOption) (*TokensReply, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TokensReply)
-	err := c.cc.Invoke(ctx, GeoLedger_ListTokens_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *geoLedgerClient) IssueToken(ctx context.Context, in *IssueTokenRequest, opts ...grpc.CallOption) (*IssuedTokenReply, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(IssuedTokenReply)
-	err := c.cc.Invoke(ctx, GeoLedger_IssueToken_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *geoLedgerClient) RevokeToken(ctx context.Context, in *TokenRefRequest, opts ...grpc.CallOption) (*OkReply, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(OkReply)
-	err := c.cc.Invoke(ctx, GeoLedger_RevokeToken_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *geoLedgerClient) ReissueToken(ctx context.Context, in *ReissueTokenRequest, opts ...grpc.CallOption) (*IssuedTokenReply, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(IssuedTokenReply)
-	err := c.cc.Invoke(ctx, GeoLedger_ReissueToken_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -506,10 +458,6 @@ func (c *geoLedgerClient) DeleteProject(ctx context.Context, in *DeleteProjectRe
 // Revisions are int64; TypeScript SDK represents them as decimal strings.
 type GeoLedgerServer interface {
 	Info(context.Context, *Empty) (*InfoReply, error)
-	ListTokens(context.Context, *PageRequest) (*TokensReply, error)
-	IssueToken(context.Context, *IssueTokenRequest) (*IssuedTokenReply, error)
-	RevokeToken(context.Context, *TokenRefRequest) (*OkReply, error)
-	ReissueToken(context.Context, *ReissueTokenRequest) (*IssuedTokenReply, error)
 	CreateProject(context.Context, *NameRequest) (*ProjectReply, error)
 	ListProjects(context.Context, *PageRequest) (*ProjectsReply, error)
 	GetProject(context.Context, *ProjectRequest) (*ProjectReply, error)
@@ -556,18 +504,6 @@ type UnimplementedGeoLedgerServer struct{}
 
 func (UnimplementedGeoLedgerServer) Info(context.Context, *Empty) (*InfoReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Info not implemented")
-}
-func (UnimplementedGeoLedgerServer) ListTokens(context.Context, *PageRequest) (*TokensReply, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListTokens not implemented")
-}
-func (UnimplementedGeoLedgerServer) IssueToken(context.Context, *IssueTokenRequest) (*IssuedTokenReply, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method IssueToken not implemented")
-}
-func (UnimplementedGeoLedgerServer) RevokeToken(context.Context, *TokenRefRequest) (*OkReply, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RevokeToken not implemented")
-}
-func (UnimplementedGeoLedgerServer) ReissueToken(context.Context, *ReissueTokenRequest) (*IssuedTokenReply, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReissueToken not implemented")
 }
 func (UnimplementedGeoLedgerServer) CreateProject(context.Context, *NameRequest) (*ProjectReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateProject not implemented")
@@ -700,78 +636,6 @@ func _GeoLedger_Info_Handler(srv interface{}, ctx context.Context, dec func(inte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GeoLedgerServer).Info(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _GeoLedger_ListTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PageRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(GeoLedgerServer).ListTokens(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: GeoLedger_ListTokens_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GeoLedgerServer).ListTokens(ctx, req.(*PageRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _GeoLedger_IssueToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(IssueTokenRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(GeoLedgerServer).IssueToken(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: GeoLedger_IssueToken_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GeoLedgerServer).IssueToken(ctx, req.(*IssueTokenRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _GeoLedger_RevokeToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TokenRefRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(GeoLedgerServer).RevokeToken(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: GeoLedger_RevokeToken_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GeoLedgerServer).RevokeToken(ctx, req.(*TokenRefRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _GeoLedger_ReissueToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReissueTokenRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(GeoLedgerServer).ReissueToken(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: GeoLedger_ReissueToken_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GeoLedgerServer).ReissueToken(ctx, req.(*ReissueTokenRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1344,22 +1208,6 @@ var GeoLedger_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Info",
 			Handler:    _GeoLedger_Info_Handler,
-		},
-		{
-			MethodName: "ListTokens",
-			Handler:    _GeoLedger_ListTokens_Handler,
-		},
-		{
-			MethodName: "IssueToken",
-			Handler:    _GeoLedger_IssueToken_Handler,
-		},
-		{
-			MethodName: "RevokeToken",
-			Handler:    _GeoLedger_RevokeToken_Handler,
-		},
-		{
-			MethodName: "ReissueToken",
-			Handler:    _GeoLedger_ReissueToken_Handler,
 		},
 		{
 			MethodName: "CreateProject",

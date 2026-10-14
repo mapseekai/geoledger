@@ -18,7 +18,7 @@ GeoLedger 处于 `0.x` 预发布阶段。安全修复发布在最新的预发布
 1. 首选 GitHub 私密漏洞报告：在仓库 **Security → Report a vulnerability** 提交（维护者需在仓库设置中启用 *Private vulnerability reporting*）。
 2. 该入口不可用时，开一个只写“请求私密安全联系方式”的 issue，**不要**包含漏洞细节，维护者会提供私密渠道。
 
-报告请包含：受影响的版本或 commit、部署方式（SQLite / PostGIS、容器或 systemd、是否经过网关）、复现步骤或概念验证、影响评估，以及希望如何署名。日志与样例数据请先脱敏，不要附带真实令牌、私钥或数据库文件。
+报告请包含：受影响的版本或 commit、部署方式（SQLite / PostGIS、容器或 systemd、是否经过网关）、复现步骤或概念验证、影响评估，以及希望如何署名。日志与样例数据请先脱敏，不要附带真实密码、API Key、Session、私钥或数据库文件。
 
 处理目标：
 
@@ -32,7 +32,7 @@ GeoLedger 处于 `0.x` 预发布阶段。安全修复发布在最新的预发布
 
 ## 范围
 
-范围内：`geoledger-server`（HTTP、gRPC、认证、存储与迁移、导出导入与备份命令）、`gl` CLI、四种 SDK、`web/` 控制台及其 BFF、仓库内的部署参考（Dockerfile、Compose、systemd、nginx/Caddy 网关）。
+范围内：`geoledger-server`（HTTP、gRPC、认证、当前格式存储、导出导入与备份命令）、`gl` CLI、四种 SDK、`web/` 控制台及其 BFF、仓库内的部署参考（Dockerfile、Compose、systemd、nginx/Caddy 网关）。
 
 以下情况通常不作为漏洞处理，但欢迎以普通 issue 报告加固建议：
 
@@ -50,3 +50,5 @@ GeoLedger 处于 `0.x` 预发布阶段。安全修复发布在最新的预发布
 ## 协议与存储契约
 
 `geoledger.v1` 协议、HTTP `/api/v1` 与存储格式的版本规则见 [当前版本契约](docs/api.md#当前版本契约)。
+
+身份安全边界包括 Argon2id 密码校验、初始改密要求、数据库用户 UUID、最后管理员事务不变量、API Key 来源会话失效、独立密码验证和 Console Origin/CSRF 校验。报告请只提供专用测试账户与已脱敏证据。

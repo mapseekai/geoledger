@@ -1,11 +1,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use geoledger_server::{
-    Application, Authentication, Authenticator, JwtAuthenticator, Limits, Rate, Service, Storage,
-    StorageOptions, Tokens,
+    Application, Limits, Rate, Service, Storage, StorageOptions,
     tls::{Tls, TlsFiles, TlsListener},
 };
 use std::{
-    io::{Read, Write},
+    io::Write,
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
@@ -44,23 +43,10 @@ struct Args {
     /// PEM CA bundle; when set, clients must present a certificate it signed (mTLS).
     #[arg(long, env = "GL_TLS_CLIENT_CA")]
     tls_client_ca: Option<PathBuf>,
-    #[arg(long, env = "GL_TOKEN_FILE")]
-    token_file: Option<PathBuf>,
-    /// Create tokens.json and admin-credentials.json in the data directory when no token file exists.
-    #[arg(long, env = "GL_BOOTSTRAP_ADMIN", default_value_t = true, action = clap::ArgAction::Set)]
-    bootstrap_admin: bool,
-    #[arg(long, env = "GL_JWKS_FILE")]
-    jwks_file: Option<PathBuf>,
-    /// HTTPS JWKS endpoint, refreshed every --jwks-refresh-secs; the last good key set is kept on failure.
-    #[arg(long, env = "GL_JWKS_URL")]
-    jwks_url: Option<String>,
-    #[arg(long, env = "GL_JWKS_REFRESH_SECS", default_value_t = 300)]
-    jwks_refresh_secs: u64,
-    #[arg(long, env = "GL_JWT_ISSUER")]
-    jwt_issuer: Option<String>,
-    #[arg(long, env = "GL_JWT_AUDIENCE")]
-    jwt_audience: Option<String>,
-    /// How often token, JWKS and TLS files are checked for changes (SIGHUP reloads immediately).
+    #[arg(long, env = "GL_ADMIN_USERNAME", default_value = "admin")]
+    admin_username: String,
+    // Passwords are accepted only from the environment, never command-line arguments.
+    /// How often TLS files are checked for changes (SIGHUP reloads immediately).
     #[arg(long, env = "GL_RELOAD_INTERVAL_SECS", default_value_t = 10)]
     reload_interval_secs: u64,
     /// Optional plaintext listener serving only /health and /ready (for container probes).
@@ -107,9 +93,6 @@ struct Args {
     /// Maximum seconds to wait for in-flight requests after listeners close.
     #[arg(long, env = "GL_SHUTDOWN_TIMEOUT_SECS", default_value_t = 30)]
     shutdown_timeout_secs: u64,
-    /// Comma-separated platform administrators: manage any project and bypass creation limits.
-    #[arg(long, env = "GL_ADMIN_SUBJECTS", value_delimiter = ',')]
-    admin_subjects: Vec<String>,
     /// Who may create projects.
     #[arg(long, env = "GL_PROJECT_CREATION", default_value = "anyone")]
     project_creation: ProjectCreation,
@@ -132,19 +115,6 @@ enum Backend {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Generate credentials. The server file stores SHA-256 digests only; plaintext tokens
-    /// go to --client-out (mode 0600) or stdout. Existing files are never overwritten.
-    Tokens {
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long)]
-        client_out: Option<PathBuf>,
-        /// RFC 3339 expiry applied to every generated token.
-        #[arg(long)]
-        expires_at: Option<String>,
-        #[arg(required = true)]
-        subjects: Vec<String>,
-    },
     /// Write a portable logical export (JSON lines with per-table digests and a
     /// checksum) of the configured database. Safe while the server runs.
     Export {
@@ -212,12 +182,6 @@ async fn main() {
     std::process::exit(code);
 }
 fn application(args: &Args, storage: Storage) -> Application {
-    let admins: std::collections::BTreeSet<String> = args
-        .admin_subjects
-        .iter()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .collect();
     Application::with_options(
         storage,
         StorageOptions {
@@ -228,7 +192,6 @@ fn application(args: &Args, storage: Storage) -> Application {
     )
     .with_timeout(Duration::from_secs(600))
     .with_policy(geoledger_server::Policy {
-        admins,
         admin_only_project_creation: matches!(args.project_creation, ProjectCreation::Admins),
         max_owned_projects: (args.max_projects_per_subject > 0)
             .then_some(args.max_projects_per_subject),
@@ -263,51 +226,8 @@ async fn probe(args: &Args, url: Option<String>) -> Result<(), BoxError> {
         Err(format!("{url} returned {}", response.status()).into())
     }
 }
-/// Where authentication material comes from, for reloads.
-#[derive(Clone)]
-enum AuthSource {
-    TokenFile(PathBuf),
-    JwksFile {
-        path: PathBuf,
-        issuer: String,
-        audience: String,
-    },
-    JwksUrl {
-        url: String,
-        issuer: String,
-        audience: String,
-    },
-}
-fn load_tokens(path: &Path) -> Result<Authenticator, BoxError> {
-    let tokens = Tokens::from_json(&read(path)?)?;
-    Ok(Authenticator::Tokens(tokens))
-}
-fn load_jwks(bytes: &[u8], issuer: &str, audience: &str) -> Result<Authenticator, BoxError> {
-    Ok(Authenticator::Jwt(Box::new(JwtAuthenticator::from_jwks(
-        bytes, issuer, audience,
-    )?)))
-}
 async fn run(args: Args) -> Result<(), BoxError> {
     match args.command {
-        Some(Command::Tokens {
-            out,
-            client_out,
-            expires_at,
-            subjects,
-        }) => {
-            let issued = tokens(
-                &out,
-                client_out.as_deref(),
-                expires_at.as_deref(),
-                &subjects,
-            )?;
-            if client_out.is_none() {
-                for (subject, token) in issued {
-                    println!("{subject}\t{token}");
-                }
-            }
-            return Ok(());
-        }
         Some(Command::Probe { ref url }) => return probe(&args, url.clone()).await,
         Some(
             Command::Export { .. }
@@ -317,16 +237,6 @@ async fn run(args: Args) -> Result<(), BoxError> {
             | Command::Restore { .. },
         )
         | None => {}
-    }
-    let jwt = args.jwks_file.is_some() || args.jwks_url.is_some();
-    if args.jwks_file.is_some() && args.jwks_url.is_some() {
-        return Err("choose GL_JWKS_FILE or GL_JWKS_URL".into());
-    }
-    if jwt && args.token_file.is_some() {
-        return Err("choose JWT or static tokens".into());
-    }
-    if !jwt && (args.jwt_issuer.is_some() || args.jwt_audience.is_some()) {
-        return Err("JWT issuer/audience require a JWKS file or URL".into());
     }
     if matches!(args.storage, Backend::Sqlite) && args.database_url.is_some() {
         return Err(
@@ -399,65 +309,17 @@ async fn run(args: Args) -> Result<(), BoxError> {
         })?),
         _ => None,
     };
-    let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
-    let (source, initial) = if let Some(path) = args.jwks_file.clone() {
-        let issuer = args.jwt_issuer.clone().ok_or("JWT issuer required")?;
-        let audience = args.jwt_audience.clone().ok_or("JWT audience required")?;
-        let initial = load_jwks(&read(&path)?, &issuer, &audience)?;
-        (
-            AuthSource::JwksFile {
-                path,
-                issuer,
-                audience,
-            },
-            initial,
-        )
-    } else if let Some(url) = args.jwks_url.clone() {
-        let issuer = args.jwt_issuer.clone().ok_or("JWT issuer required")?;
-        let audience = args.jwt_audience.clone().ok_or("JWT audience required")?;
-        let initial = load_jwks(
-            &geoledger_server::fetch_jwks(&http_client, &url).await?,
-            &issuer,
-            &audience,
-        )?;
-        (
-            AuthSource::JwksUrl {
-                url,
-                issuer,
-                audience,
-            },
-            initial,
-        )
-    } else {
-        let explicit_token_file = args.token_file.is_some();
-        let path = args
-            .token_file
-            .clone()
-            .unwrap_or_else(|| args.data_dir.join("tokens.json"));
-        if !path.exists() {
-            if explicit_token_file {
-                return Err("configured token file does not exist".into());
-            }
-            if !args.bootstrap_admin {
-                return Err("no token file; create one with `geoledger-server tokens` or enable GL_BOOTSTRAP_ADMIN".into());
-            }
-            let client = args.data_dir.join("admin-credentials.json");
-            tokens(&path, Some(&client), None, &["admin".into()])?;
-            tracing::warn!(
-                credentials = %client.display(),
-                "created initial admin credential; copy it to the operator and delete the file"
-            );
-        }
-        let initial = load_tokens(&path)?;
-        (AuthSource::TokenFile(path), initial)
-    };
-    let authentication = Arc::new(Authentication::new(initial));
     let app = application(&args, storage);
     let bootstrap = app.clone();
     tokio::task::spawn_blocking(move || bootstrap.migrate()).await??;
+    let initial = app.clone();
+    let username = args.admin_username.clone();
+    let data_dir = args.data_dir.clone();
+    let password = std::env::var("GL_ADMIN_PASSWORD").ok();
+    tokio::task::spawn_blocking(move || {
+        initialize_admin(&initial, &data_dir, &username, password.as_deref())
+    })
+    .await??;
     let backend = app.backend();
     let limits = Limits {
         max_concurrency: args.max_concurrency.max(1),
@@ -470,7 +332,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
         request_memory_bytes: args.request_memory_bytes,
         response_memory_bytes: args.response_memory_bytes,
     };
-    let service = Service::with_authentication(app, authentication.clone()).with_limits(limits);
+    let service = Service::new(app).with_limits(limits);
     // Bind both before reporting readiness. A failed listener leaves no half-started service.
     let http = tokio::net::TcpListener::bind(args.http).await?;
     let grpc = tokio::net::TcpListener::bind(args.grpc).await?;
@@ -486,38 +348,9 @@ async fn run(args: Args) -> Result<(), BoxError> {
         );
     }
     tokio::spawn(reload_loop(
-        source.clone(),
-        authentication.clone(),
         tls.clone(),
         Duration::from_secs(args.reload_interval_secs.max(1)),
     ));
-    if let AuthSource::JwksUrl {
-        url,
-        issuer,
-        audience,
-    } = source
-    {
-        let auth = authentication.clone();
-        let every = Duration::from_secs(args.jwks_refresh_secs.max(1));
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(every).await;
-                match geoledger_server::fetch_jwks(&http_client, &url)
-                    .await
-                    .map_err(BoxError::from)
-                    .and_then(|bytes| load_jwks(&bytes, &issuer, &audience))
-                {
-                    Ok(next) => {
-                        auth.replace(next);
-                        tracing::debug!("JWKS refreshed");
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "JWKS refresh failed; keeping previous keys")
-                    }
-                }
-            }
-        });
-    }
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<geoledger_rpc::v1::geo_ledger_server::GeoLedgerServer<Service>>()
@@ -655,19 +488,9 @@ fn fingerprint(path: &Path) -> Fingerprint {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.modified().ok()?, meta.len()))
 }
-/// Reload changed token/JWKS/TLS files on an interval and immediately on SIGHUP.
+/// Reload changed TLS files on an interval and immediately on SIGHUP.
 /// A file that fails validation never replaces the active configuration.
-async fn reload_loop(
-    source: AuthSource,
-    auth: Arc<Authentication>,
-    tls: Option<Arc<Tls>>,
-    every: Duration,
-) {
-    let auth_path = match &source {
-        AuthSource::TokenFile(p) => Some(p.clone()),
-        AuthSource::JwksFile { path, .. } => Some(path.clone()),
-        AuthSource::JwksUrl { .. } => None,
-    };
+async fn reload_loop(tls: Option<Arc<Tls>>, every: Duration) {
     let tls_paths: Vec<PathBuf> = tls
         .as_ref()
         .map(|t| {
@@ -682,7 +505,6 @@ async fn reload_loop(
             .collect()
         })
         .unwrap_or_default();
-    let mut auth_seen = auth_path.as_deref().map(fingerprint);
     let mut tls_seen: Vec<Fingerprint> = tls_paths.iter().map(|p| fingerprint(p)).collect();
     #[cfg(unix)]
     let mut hup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
@@ -700,30 +522,6 @@ async fn reload_loop(
             tokio::time::sleep(every).await;
             false
         };
-        if let Some(path) = &auth_path {
-            let now = fingerprint(path);
-            if forced || Some(now) != auth_seen {
-                auth_seen = Some(now);
-                let next = match &source {
-                    AuthSource::TokenFile(p) => load_tokens(p),
-                    AuthSource::JwksFile {
-                        path,
-                        issuer,
-                        audience,
-                    } => read(path).and_then(|b| load_jwks(&b, issuer, audience)),
-                    AuthSource::JwksUrl { .. } => Err("unreachable".into()),
-                };
-                match next {
-                    Ok(next) => {
-                        auth.replace(next);
-                        tracing::info!(path=%path.display(), "authentication reloaded");
-                    }
-                    Err(error) => {
-                        tracing::error!(path=%path.display(), %error, "authentication reload failed; keeping previous configuration")
-                    }
-                }
-            }
-        }
         if let Some(tls) = &tls {
             let now: Vec<Fingerprint> = tls_paths.iter().map(|p| fingerprint(p)).collect();
             if forced || now != tls_seen {
@@ -738,16 +536,6 @@ async fn reload_loop(
         }
     }
 }
-fn read(path: &Path) -> Result<Vec<u8>, BoxError> {
-    let mut v = Vec::new();
-    std::fs::File::open(path)?
-        .take(1024 * 1024 + 1)
-        .read_to_end(&mut v)?;
-    if v.len() > 1024 * 1024 {
-        return Err("authentication file too large".into());
-    }
-    Ok(v)
-}
 fn create_private(path: &Path, data: &[u8]) -> Result<(), BoxError> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -757,46 +545,49 @@ fn create_private(path: &Path, data: &[u8]) -> Result<(), BoxError> {
         opts.mode(0o600);
     }
     let mut file = opts.open(path)?;
-    file.write_all(data)?;
-    file.sync_all()?;
+    if let Err(error) = file.write_all(data).and_then(|()| file.sync_all()) {
+        let _ = std::fs::remove_file(path);
+        return Err(error.into());
+    }
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
     Ok(())
 }
-fn tokens(
-    path: &Path,
-    client: Option<&Path>,
-    expires_at: Option<&str>,
-    subjects: &[String],
-) -> Result<Vec<(String, String)>, BoxError> {
-    if path.exists() || client.is_some_and(Path::exists) {
-        return Err("refusing to overwrite an existing credential file".into());
+/// Write a unique, private recovery file before committing the random password.
+/// Only the database bootstrap winner retains its file; no existing path is overwritten.
+fn initialize_admin(
+    app: &Application,
+    dir: &Path,
+    username: &str,
+    password: Option<&str>,
+) -> Result<(), BoxError> {
+    if !app.bootstrap_needed()? {
+        return Ok(());
     }
-    let mut server = Vec::new();
-    let mut issued = Vec::new();
-    for subject in subjects {
-        let mut bytes = [0u8; 32];
-        getrandom::fill(&mut bytes).map_err(|_| "secure random unavailable")?;
-        let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        let mut entry = serde_json::json!({
-            "subject": subject,
-            "token_sha256": geoledger_server::sha256_hex(&token),
-        });
-        if let Some(t) = expires_at {
-            entry["expires_at"] = t.into();
+    if let Some(password) = password {
+        app.bootstrap_admin(username, password)?;
+        return Ok(());
+    }
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|_| "secure random unavailable")?;
+    let password: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let path = dir.join(format!("initial-admin-{}.json", uuid::Uuid::new_v4()));
+    let data = serde_json::to_vec(&serde_json::json!({"username":username,"password":password}))?;
+    create_private(&path, &data)?;
+    match app.bootstrap_admin(username, &password) {
+        Ok(true) => {
+            tracing::warn!(credentials = %path.display(), "initial administrator credentials created; change the password and remove this file")
         }
-        server.push(entry);
-        issued.push((subject.clone(), token));
+        Ok(false) => std::fs::remove_file(path)?,
+        Err(error) => {
+            // COMMIT may have succeeded remotely despite a lost acknowledgement.
+            tracing::warn!(credentials = %path.display(), "administrator initialization failed; retained private recovery file");
+            return Err(error.into());
+        }
     }
-    let data = serde_json::to_vec_pretty(&server)?;
-    Tokens::from_json(&data)?;
-    if let Some(client) = client {
-        let entries: Vec<_> = issued
-            .iter()
-            .map(|(subject, token)| serde_json::json!({"subject":subject,"token":token}))
-            .collect();
-        create_private(client, &serde_json::to_vec_pretty(&entries)?)?;
-    }
-    create_private(path, &data)?;
-    Ok(issued)
+    Ok(())
 }
 async fn shutdown() {
     #[cfg(unix)]
@@ -809,4 +600,102 @@ async fn shutdown() {
         }
     }
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fixture() -> Result<(tempfile::TempDir, Application), BoxError> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/auth-refactor-server-bootstrap");
+        std::fs::create_dir_all(&root)?;
+        let dir = tempfile::tempdir_in(root)?;
+        let app = Application::new(Storage::Sqlite(dir.path().join("db.sqlite3")));
+        app.migrate()?;
+        Ok((dir, app))
+    }
+    #[test]
+    fn explicit_password_is_idempotent_and_never_written() -> Result<(), BoxError> {
+        let (dir, app) = fixture()?;
+        initialize_admin(&app, dir.path(), "admin", Some("initial-test-password"))?;
+        initialize_admin(&app, dir.path(), "replacement", Some("different-password"))?;
+        assert!(
+            app.auth_operation(
+                None,
+                "login_password",
+                serde_json::json!({"username":"admin","password":"initial-test-password"})
+            )
+            .is_ok()
+        );
+        assert!(std::fs::read_dir(dir.path())?.all(|entry| {
+            entry.is_ok_and(|entry| {
+                !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("initial-admin-")
+            })
+        }));
+        Ok(())
+    }
+    #[test]
+    fn failed_bootstrap_retains_private_recovery_file() -> Result<(), BoxError> {
+        let (dir, app) = fixture()?;
+        assert!(initialize_admin(&app, dir.path(), "invalid username", None).is_err());
+        let files: Vec<_> = std::fs::read_dir(dir.path())?
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("initial-admin-")
+            })
+            .collect();
+        assert_eq!(files.len(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(files[0].metadata()?.permissions().mode() & 0o777, 0o600);
+        }
+        assert!(app.bootstrap_needed()?);
+        Ok(())
+    }
+    #[test]
+    fn concurrent_random_bootstrap_keeps_exactly_one_private_file() -> Result<(), BoxError> {
+        let (dir, app) = fixture()?;
+        std::thread::scope(|scope| -> Result<(), BoxError> {
+            let first = scope.spawn(|| initialize_admin(&app, dir.path(), "admin", None));
+            let second = scope.spawn(|| initialize_admin(&app, dir.path(), "admin", None));
+            first.join().map_err(|_| "thread panic")??;
+            second.join().map_err(|_| "thread panic")??;
+            Ok(())
+        })?;
+        let files: Vec<_> = std::fs::read_dir(dir.path())?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("initial-admin-")
+            })
+            .collect();
+        assert_eq!(files.len(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(files[0].metadata()?.permissions().mode() & 0o777, 0o600);
+        }
+        let credentials: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(files[0].path())?)?;
+        assert_eq!(
+            credentials["password"].as_str().ok_or("password")?.len(),
+            64
+        );
+        assert!(
+            app.auth_operation(None, "login_password", credentials)
+                .is_ok()
+        );
+        initialize_admin(&app, dir.path(), "admin", None)?;
+        Ok(())
+    }
 }

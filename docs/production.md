@@ -38,7 +38,7 @@ docker compose logs geoledger
 在容器内使用首次启动生成的私有管理员凭证验证业务连接（验证后把该文件交给运维人员并从卷中删除）：
 
 ```sh
-docker compose exec geoledger gl --token-file /data/admin-credentials.json info
+docker compose exec geoledger gl --api-key-file /run/secrets/geoledger-api-key info
 ```
 
 统一 `geoledger` 镜像基于固定 digest 的 Alpine 3.24，包含服务端、Web 控制台、`gl`、Node 22、CA 证书、OpenSSL 和 SpatiaLite，以 UID 10001 运行。控制台通过容器内回环地址访问 gRPC。启动器同时管理两个服务：任一服务意外退出时终止另一个并返回失败；SIGTERM 转发到两个服务，保留后端的优雅关闭过程。健康检查同时验证后端 `/ready` 和控制台 `/api/health`。构建环境与运行环境分别扫描，验证边界见 [发布验收](release.md)。
@@ -57,7 +57,7 @@ docker compose exec geoledger gl --token-file /data/admin-credentials.json info
 
 ```sh
 scripts/make-test-certs.sh deploy/tls        # 评估用私有 CA；生产放入同名的正式证书
-export GL_ADMIN_SUBJECTS=admin
+export GL_ADMIN_USERNAME=admin
 export GL_DB_PASSWORD=$(openssl rand -hex 32) GL_DB_APP_PASSWORD=$(openssl rand -hex 32) GL_WEB_SESSION_SECRET=$(openssl rand -base64 48)
 docker compose -f deploy/compose.production.yaml up -d --build
 ```
@@ -68,8 +68,8 @@ docker compose -f deploy/compose.production.yaml up -d --build
   - `ca.crt`：PostGIS 证书的签发 CA。
   - `gateway.crt`/`gateway.key`：覆盖三个域名的网关证书。
   - `postgis.crt`/`postgis.key`：SAN 为 `postgis` 的数据库证书。
-- **管理员凭证**：首次启动生成的管理员凭证在 `geoledger-data` 卷的 `/data/admin-credentials.json`，取出后从卷中删除。
-- **身份认证**：生产建议改用 JWT（`GL_JWKS_URL` 等），并设置 `GL_BOOTSTRAP_ADMIN=false`。
+- **管理员凭证**：首次随机密码写入数据卷 `initial-admin-<id>.json`（0600），日志提示路径。登录后必须改密。显式设置 `GL_ADMIN_PASSWORD` 时不生成明文文件。
+- **身份认证**：Console 使用用户名密码或 API Key 登录；SDK 使用 API Key。用户与 Session 在共享数据库管理。
 - **端口**：`GL_GATEWAY_BIND`、`GL_GATEWAY_HTTPS_PORT`、`GL_GATEWAY_HTTP_PORT` 用于调整网关发布的地址和端口。
 - **数据库角色**：新数据库由 `geoledger_admin` 初始化，服务使用独立的 `geoledger_app` 非超级用户。`GL_DB_PASSWORD` 与 `GL_DB_APP_PASSWORD` 分别配置两者密码。已有数据库由 DBA 创建运行角色，并只授予版本表 schema 和指定纳管表所需权限；业务表所有者角色的授予范围由 DBA 审核。初始化脚本只在新卷执行。
 - **备份**：PostGIS 按下文 [备份与恢复](#备份与恢复) 使用 `pg_dump` 或 WAL 归档。逻辑导出命令为 `docker compose -f deploy/compose.production.yaml exec geoledger geoledger-server export --output /data/export.jsonl`。
@@ -87,13 +87,7 @@ TLS 网关与 PostGIS 的既有独立部署演练已在 Docker Engine 29 上验�
 | GL_HTTP_LISTEN / --http | 127.0.0.1:7881 |
 | GL_GRPC_LISTEN / --grpc | 127.0.0.1:7882 |
 | GL_TLS_CERT / GL_TLS_KEY / GL_TLS_CLIENT_CA | 服务端 TLS 与 mTLS，见 [安全配置](security.md#传输加密) |
-| GL_TOKEN_FILE / --token-file | 默认数据目录 tokens.json（SHA-256 摘要格式） |
-| GL_BOOTSTRAP_ADMIN | 无令牌文件时生成初始 admin 凭证，默认 true |
-| GL_JWKS_FILE / --jwks-file | 可选受信任 JWKS 文件，变更后自动加载 |
-| GL_JWKS_URL / --jwks-url | 可选 HTTPS JWKS 地址，按 GL_JWKS_REFRESH_SECS（默认 300）刷新 |
-| GL_RELOAD_INTERVAL_SECS | 令牌、JWKS、证书文件检查间隔，默认 10；SIGHUP 立即加载 |
-| GL_JWT_ISSUER / --jwt-issuer | 固定 HTTPS issuer |
-| GL_JWT_AUDIENCE / --jwt-audience | 固定 audience |
+| GL_RELOAD_INTERVAL_SECS | TLS 证书文件检查间隔，默认 10；SIGHUP 立即加载 |
 | GL_HEALTH_LISTEN | 可选明文探针监听地址，只提供 /health 与 /ready |
 | GL_MAX_CONCURRENCY | HTTP 与 gRPC 共用执行槽，默认 20 |
 | GL_REQUEST_TIMEOUT_SECS | 单次操作期限上限，默认 30 |
@@ -106,21 +100,20 @@ TLS 网关与 PostGIS 的既有独立部署演练已在 Docker Engine 29 上验�
 | GL_TRUST_FORWARDED_FOR | 以 X-Forwarded-For 最右侧地址作为客户端 IP，仅在可信网关后开启，默认 false |
 | GL_SHUTDOWN_DRAIN_SECS | 收到停止信号后保持服务、/ready 返回 503 的秒数，默认 0 |
 | GL_SHUTDOWN_TIMEOUT_SECS | 关闭监听器后等待在途请求的上限，默认 30 |
-| GL_ADMIN_SUBJECTS / --admin-subjects | 平台管理员 subject，逗号分隔；可管理任意项目的成员、归档与删除，不获得数据读写权限 |
 | GL_PROJECT_CREATION / --project-creation | `anyone`（默认）或 `admins`：仅平台管理员可创建项目 |
 | GL_MAX_PROJECTS_PER_SUBJECT / --max-projects-per-subject | 每个身份拥有（owner 且未删除）的项目上限，默认 0 表示不限；管理员不受限 |
 | GL_DATA_TIMEOUT_SECS | backup、export、import、verify 命令的期限，默认 3600 |
 | RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
-启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 14；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
+启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 16；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
 
 根目录 [.env.example](../.env.example) 提供当前服务配置模板，列出服务端和 `gl` 的全部 `GL_*` 参数及默认值，[check-env.py](../scripts/check-env.py) 在 `check.sh` 中校验它与代码一致。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
 
 ## 身份与网络
 
-初次默认启动生成摘要格式的 `tokens.json` 与一次性的 `admin-credentials.json`；多人使用独立凭证与项目成员关系。静态凭证文件或 JWT 二选一。令牌支持过期时间、吊销与热加载，JWKS 支持文件热加载与 HTTPS 定时刷新，详见 [安全配置](security.md)。
+初次启动幂等创建数据库管理员；密码、API Key 与 Session 生命周期见 [安全配置](security.md)。
 
-公网访问使用服务端 TLS（`GL_TLS_CERT`/`GL_TLS_KEY`，可选 mTLS）或 TLS 网关：HTTP 转发到 HTTP 监听器；gRPC 网关保持 HTTP/2 并转发到 gRPC 监听器，参考 [nginx.conf](../deploy/gateway/nginx.conf) 与 [Caddyfile](../deploy/gateway/Caddyfile)。SDK 的 https 地址启用服务器证书验证；http 地址只用于回环主机，其他主机需要显式开启明文。凭证通过秘密管理注入；浏览器使用只含随机会话 ID 的加密 HttpOnly Cookie，凭证保存在 Web 服务端内存，代理通过过滤认证头和请求体日志保护凭证。
+公网访问使用服务端 TLS（`GL_TLS_CERT`/`GL_TLS_KEY`，可选 mTLS）或 TLS 网关：HTTP 转发到 HTTP 监听器；gRPC 网关保持 HTTP/2 并转发到 gRPC 监听器，参考 [nginx.conf](../deploy/gateway/nginx.conf) 与 [Caddyfile](../deploy/gateway/Caddyfile)。SDK 的 https 地址启用服务器证书验证；http 地址只用于回环主机，其他主机需要显式开启明文。凭证通过秘密管理注入；浏览器使用只含随机会话 ID 的加密 HttpOnly Cookie，数据库保存 Session 摘要和有效期，BFF 不保存登录密码或 API Key。代理通过过滤认证头和请求体日志保护凭证。
 
 PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装扩展后让服务账号创建应用表。默认 `sslmode=verify-full`，跨主机数据库连接校验证书链与主机名。每个实例用于业务的数据库连接名额由 `GL_DB_POOL_SIZE`（默认 20）约束；超时连接在确认 ROLLBACK 完成或原后端已消失之前仍占用名额。清理不确定时名额隔离并报警，避免用新连接无限替代仍在执行的旧会话。每个池最多额外建立一个串行恢复探测连接，用原 PID 和 backend_start 验证会话身份；连接故障排查应为该控制连接预留容量。数据库和网关连接预算按实例数计算。
 
@@ -165,11 +158,11 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 标签只使用固定的操作名与状态码集合，从不使用身份、项目、要素 ID 或请求 ID。建议告警：`internal_errors_total` 增速、`rate(busy_total)`、`db_pool_wait_timeouts_total` 增长、`/ready` 失败。
 
-[deploy/monitoring](../deploy/monitoring/prometheus-rules.yaml) 提供对应的 Prometheus 告警规则（实例不可达、内部错误、5xx 比例、繁忙比例、执行槽耗尽、p95 延迟、连接池等待超时、认证失败激增、排空卡住）及 `promtool test rules` 单元测试，[抓取示例](../deploy/monitoring/prometheus-scrape.example.yaml) 使用单独的监控令牌（不加入任何项目）。阈值按实测基线调整；磁盘使用率告警来自 node_exporter 等主机监控。
+[deploy/monitoring](../deploy/monitoring/prometheus-rules.yaml) 提供对应的 Prometheus 告警规则（实例不可达、内部错误、5xx 比例、繁忙比例、执行槽耗尽、p95 延迟、连接池等待超时、认证失败激增、排空卡住）及 `promtool test rules` 单元测试，[抓取示例](../deploy/monitoring/prometheus-scrape.example.yaml) 使用单独的监控 API Key（不加入任何项目）。阈值按实测基线调整；磁盘使用率告警来自 node_exporter 等主机监控。
 
 ### 存储格式
 
-当前存储格式为 14，包含项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
+当前存储格式为 16，包含独立的用户、密码、API Key 和 Session 表，保留项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
 
 - 同格式部署沿用原数据目录，启动后检查 `/ready`、项目列表与历史查询。
 - 存储格式变化时，使用独立的新数据库，通过当前 CLI 或 SDK 导入源业务要素。
@@ -179,7 +172,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 项目 owner 可列出成员（`list_members`）、修改角色、移除成员（`remove_member`，成员也可退出项目），但项目必须保留至少一名 owner。owner 可归档项目（`archive_project`）：归档后数据只读，成员管理、恢复与删除仍可执行。删除（`delete_project`）需提交与项目名称一致的 `confirm_name`，项目从所有列表与查询中隐藏，数据集、工作区、版本历史和发布收据被清除，保留项目删除标记、成员引用与不可变审计。纳管的原业务表及其当前数据保留并解除绑定。
 
-`GL_ADMIN_SUBJECTS` 指定的平台管理员可对任意项目执行上述成员与生命周期操作（审计记录其 subject），用于离职交接和孤儿项目处理，但不因此获得要素、历史或审计的读取权限。`GL_PROJECT_CREATION=admins` 与 `GL_MAX_PROJECTS_PER_SUBJECT` 限制项目创建，拒绝时返回 403。PostgreSQL 使用 subject 级事务 advisory lock 串行化创建配额检查；并发创建使用同一配额语义。
+数据库中的有效平台管理员可对任意项目执行上述成员与生命周期操作（审计记录其 subject），用于离职交接和孤儿项目处理，但不因此获得要素、历史或审计的读取权限。`GL_PROJECT_CREATION=admins` 与 `GL_MAX_PROJECTS_PER_SUBJECT` 限制项目创建，拒绝时返回 403。PostgreSQL 使用 subject 级事务 advisory lock 串行化创建配额检查；并发创建使用同一配额语义。
 
 ### 停止与发布确认
 
@@ -200,7 +193,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 **SQLite。** 按 RPO 定时执行 `backup`，把备份文件复制到另一台主机或对象存储，并保留多个版本。systemd 部署可使用 [geoledger-backup.service](../deploy/geoledger-backup.service) 与 [geoledger-backup.timer](../deploy/geoledger-backup.timer)：每小时写入带时间戳的新文件并校验，删除本机超过 `GL_BACKUP_KEEP_DAYS`（默认 14）天的副本；先执行 `install -d -o geoledger -g geoledger -m 0700 /var/backups/geoledger`，再 `systemctl enable --now geoledger-backup.timer`。RPO 等于备份间隔；恢复步骤：
 
 1. 停止服务，将原数据目录改名保留。
-2. 使用新的空数据目录执行 `geoledger-server --data-dir <新目录> restore --input <备份文件>`，并放回 `tokens.json` 等凭证文件（凭证不在数据库备份中）。
+2. 使用新的空数据目录执行 `geoledger-server --data-dir <新目录> restore --input <备份文件>`，恢复后核对数据库内的身份与凭证状态。
 3. 启动服务，检查 `/ready`、项目 HEAD、审计条数和最近的发布收据。
 
 RTO 主要是文件复制时间加一次启动，通常为分钟级。容器部署在运行中的容器内执行同样的命令，例如 `docker compose exec geoledger geoledger-server backup --output /data/backup.sqlite3`，再把文件复制出数据卷。
@@ -209,7 +202,7 @@ RTO 主要是文件复制时间加一次启动，通常为分钟级。容器部�
 
 **恢复演练。** [scripts/backup-drill.sh](../scripts/backup-drill.sh) 在一次性服务上完成：写入数据 → 服务运行中备份与导出 → 恢复到新目录并启动 → 校验 HEAD、审计和精确数字 → 用导出校验恢复结果 → 导入新库并校验；设置 `GL_DRILL_DATABASE_URL`（空 PostgreSQL 库）时同时导入 PostgreSQL。该脚本是 `scripts/check.sh` 的一部分，生产环境按季度在独立主机上用真实备份重复同样步骤并记录耗时，作为 RTO 的实测依据。
 
-凭证、JWKS 与 TLS 私钥独立加密备份；数据库与凭证文件的访问权限都应纳入恢复流程。
+初始化凭证文件与 TLS 私钥独立加密备份；数据库与凭证文件的访问权限都应纳入恢复流程。
 
 ### 数据增长与保留
 
@@ -242,20 +235,20 @@ SQLite 观察数据库文件与 WAL 文件大小。两种后端都为数据卷�
 ## 独立 Web 管理服务
 
 管理页面独立部署为 [Next.js 控制台](../web/README.md#生产运行)，由其 Node.js
-服务端调用 TS SDK。数据库仅由 GeoLedger 服务访问。Web 的公开入口使用 HTTPS，
-固定 `GL_WEB_ORIGIN`；随机 `GL_WEB_SESSION_SECRET` 只在运行时配置，多实例共享。会话保存在各实例内存，多实例需会话粘滞，重启后用户重新登录。
+服务端通过私有 HTTP transport 携带数据库 Session。数据库仅由 GeoLedger 服务访问。Web 的公开入口使用 HTTPS，
+固定 `GL_WEB_ORIGIN`；随机 `GL_WEB_SESSION_SECRET` 只在运行时配置，多实例共享。各实例连接同一身份数据库，每次请求验证 Session 与用户状态，重启 BFF 不会丢失数据库会话。
 反向代理设置请求体、连接数与登录速率限制。Web 和服务端的内部连接应限制在
 可信网络，跨网络使用 gRPC TLS。`compose.yaml` 通过一个 GeoLedger 容器启动业务服务和控制台。
 
 ### 业务表纳管部署
 
-将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，配置 `GL_ADMIN_SUBJECTS` 授权表纳管操作。使用格式 14 的独立初始化环境；部署前保存业务数据库备份。服务账号需要业务表增删改权限，以及表所有权或等效的所有者角色权限：纳管与解绑会创建、启用和删除触发器，仅授予 `TRIGGER` 权限不足。业务应用撤销对纳管表的直接写权限，不将保护触发器视为数据库授权边界。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。
+将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，通过数据库管理员用户授权表纳管操作。使用格式 16 的独立初始化环境；部署前保存业务数据库备份。服务账号需要业务表增删改权限，以及表所有权或等效的所有者角色权限：纳管与解绑会创建、启用和删除触发器，仅授予 `TRIGGER` 权限不足。业务应用撤销对纳管表的直接写权限，不将保护触发器视为数据库授权边界。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。
 
 ### 格式 13 的凭据部署
 
 两个开发分支曾分别以格式 12 引入不同表结构，合并版本统一为格式 13。任一格式 12 数据库都不能直接打开，也不提供自动升级；保留旧目录和备份，另建新库。
 
-本版本新增全局令牌存储，必须使用格式 14 的新数据库；保留格式 11/12 的数据库及其备份，不原地升级，不自动导入旧格式。平台管理员通过 `GL_ADMIN_SUBJECTS` 显式配置。控制台签发的令牌跨实例读取共享数据库，无正向认证缓存；到期与撤销在后续请求生效。完整备份恢复后，在对外服务前处理恢复旧撤销状态的风险，参见 [成员令牌安全说明](security.md#控制台签发成员令牌)。
+当前存储格式为 16。使用新数据库初始化，保留旧格式数据库及备份；服务清楚拒绝旧格式。完整备份恢复后，在对外服务前核对用户、API Key 和 Session 的撤销状态。
 
 ### 格式 13 的运行边界
 

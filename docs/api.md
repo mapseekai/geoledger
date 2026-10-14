@@ -7,7 +7,7 @@
 ## SDK 的公开接口
 
 Go、Rust、TypeScript / Node.js、Python 提供普通业务方法和工作区对象。
-用户配置服务地址与访问令牌，即可通过业务方法完成资源管理、编辑与发布；SDK 封装协议请求、认证和业务错误。
+用户配置服务地址与API Key，即可通过业务方法完成资源管理、编辑与发布；SDK 封装协议请求、认证和业务错误。
 内部统一使用 tonic 服务的 gRPC 协议，浏览器控制台使用 HTTP。
 
 典型流程：创建项目 → 创建数据集 → 创建工作区 → 保存 GeoJSON → 发布。
@@ -24,10 +24,10 @@ SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒；
 
 | 语言 | 明文选项 | 私有 CA |
 | --- | --- | --- |
-| Go | `DialWithOptions(endpoint, token, DialOptions{AllowInsecure: true})` | 系统信任库 |
-| Python | `Client(endpoint, token, allow_insecure=True)` | `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` |
-| Rust | `Client::connect_with(endpoint, token, ConnectOptions { allow_insecure: true, ..Default::default() })` | `ConnectOptions::ca_pem` |
-| TypeScript | `new Client(endpoint, token, timeoutMs, { allowInsecure: true })` | `NODE_EXTRA_CA_CERTS` 或系统信任库 |
+| Go | `DialWithOptions(endpoint, apiKey, DialOptions{AllowInsecure: true})` | 系统信任库 |
+| Python | `Client(endpoint, api_key, allow_insecure=True)` | `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` |
+| Rust | `Client::connect_with(endpoint, api_key, ConnectOptions { allow_insecure: true, ..Default::default() })` | `ConnectOptions::ca_pem` |
+| TypeScript | `new Client(endpoint, apiKey, timeoutMs, { allowInsecure: true })` | `NODE_EXTRA_CA_CERTS` 或系统信任库 |
 | CLI | `gl --allow-insecure` | `gl --ca-file ca.pem` |
 
 ## Python
@@ -40,7 +40,7 @@ python -m pip install ./sdk/python
 import os
 from geoledger import Client
 
-with Client("http://127.0.0.1:7882", os.environ["GL_TOKEN"]) as client:
+with Client("http://127.0.0.1:7882", os.environ["GL_API_KEY"]) as client:
     project = client.create_project("城市道路")
     dataset = client.create_dataset(project.id, "roads", "point")
     draft = client.create_workspace(project.id)
@@ -54,18 +54,18 @@ with Client("http://127.0.0.1:7882", os.environ["GL_TOKEN"]) as client:
     print(receipt["revision"], rows)
 ```
 
-在当前环境设置 `GL_TOKEN` 后运行此示例，输出发布修订及该修订的要素。业务资源使用不可变数据类；要素、差异和审计使用普通字典。完整流程见
+在当前环境设置 `GL_API_KEY` 后运行此示例，输出发布修订及该修订的要素。业务资源使用不可变数据类；要素、差异和审计使用普通字典。完整流程见
 [Python 示例](../sdk/python/tests/smoke.py)。
 
 ## Rust
 
-客户端 crate 为 [geoledger-client](../sdk/rust/Cargo.toml)，位于同一 Cargo 工作区。以下代码放在 Tokio 异步函数中，`endpoint` 和 `token` 为应用配置的服务地址与令牌。
+客户端 crate 为 [geoledger-client](../sdk/rust/Cargo.toml)，位于同一 Cargo 工作区。以下代码放在 Tokio 异步函数中，`endpoint` 和 `api_key` 为应用配置的服务地址与 API Key。
 
 ```rust,ignore
 use geoledger_client::Client;
 use serde_json::json;
 
-let client = Client::connect(endpoint, &token).await?;
+let client = Client::connect(endpoint, &api_key).await?;
 let project = client.create_project("城市道路").await?;
 let dataset = client.create_dataset(&project.id, "roads", "point").await?;
 let mut draft = client.create_workspace(&project.id).await?;
@@ -82,10 +82,10 @@ let receipt = draft.publish("新增道路").await?;
 
 ## Go
 
-模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.25+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`token` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
+模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.25+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`api_key` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
 
 ```go
-client, err := geoledger.Dial(endpoint, token)
+client, err := geoledger.Dial(endpoint, apiKey)
 if err != nil { return err }
 defer client.Close()
 project, err := client.CreateProject(ctx, "城市道路")
@@ -116,8 +116,8 @@ npm run build --prefix sdk/ts
 ```typescript
 import { Client } from "@geoledger/client";
 const endpoint = process.env.GL_ENDPOINT ?? "http://127.0.0.1:7882";
-const token = process.env.GL_TOKEN!;
-const client = new Client(endpoint, token);
+const apiKey = process.env.GL_API_KEY!;
+const client = new Client(endpoint, apiKey);
 try {
   const project = await client.createProject("城市道路");
   const dataset = await client.createDataset(project.id, "roads", "point");
@@ -139,9 +139,10 @@ try {
 
 ## 运行完整示例
 
-四个语言的可执行示例从私有 `GL_TOKEN_FILE` 读取测试身份，连接 `GL_ENDPOINT` 指定的服务。设置专用测试服务地址和凭证路径后执行：
+四个语言的可执行示例从私有 `GL_API_KEY_FILE` 读取测试身份，连接 `GL_ENDPOINT` 指定的服务。设置专用测试服务地址和凭证路径后执行：
 
 ```sh
+export GL_TEST_MEMBER_ID="$(cat "$GL_API_KEY_FILE.member-id")"
 cargo run --locked -p geoledger-client --example smoke
 python sdk/python/tests/smoke.py
 node sdk/ts/test/smoke.cjs
@@ -196,11 +197,11 @@ TS 使用 `stringifyJson`；恢复时用 `parseJson` 读取，并将 `expectedWo
 
 ```sh
 curl --fail-with-body http://127.0.0.1:7881/api/v1/create_project \
-  -H "Authorization: Bearer $GL_TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $GL_API_KEY" -H 'Content-Type: application/json' \
   --data '{"name":"roads"}'
 ```
 
-Web 控制台通过 Next.js 的 `/api/session` 管理登录和退出，通过 `/api/console` 调用经过校验的业务方法。应用直接使用 HTTP 时调用上面的 GeoLedger 服务端 API，使用自己的 Bearer 令牌。两条路径由同一业务应用层执行权限和事务语义。
+Web 控制台通过 Next.js 的 `/api/session` 管理登录和退出，通过 `/api/console` 调用经过校验的业务方法。应用直接使用 HTTP 时调用上面的 GeoLedger 服务端 API，使用自己的 Bearer API Key。两条路径由同一业务应用层执行权限和事务语义。
 
 业务服务 `GET /` 为 JSON 服务信息；管理界面由独立 Web 项目提供。`GET /health` 为存活检查；`GET /ready` 最多 2 秒检查存储；`GET /metrics` 要求同样的 Bearer 认证。默认同源，跨域授权需由部署网关明确配置。
 
@@ -208,7 +209,7 @@ Web 控制台通过 Next.js 的 `/api/session` 管理登录和退出，通过 `/
 
 [geoledger.proto](../proto/geoledger/v1/geoledger.proto) 是内部统一协议定义。
 生成代码位于 SDK 的私有 / internal 目录，公开入口仅提供业务接口。
-HTTP 与 RPC 仍调用同一个 Application；用户身份只来自服务端验证的令牌。
+HTTP 与 RPC 仍调用同一个 Application；用户身份只来自服务端验证的 API Key 或 Console 私有 Session。
 SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布流程完成。
 
 | 情况 | HTTP |
@@ -231,7 +232,7 @@ Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / ar
 
 当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-当前存储格式为 14，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+当前存储格式为 16，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
 
 `Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 返回当前服务的实际编码请求预算，默认 67,108,864 字节。单要素仍受所在请求和响应的总预算约束。
 
@@ -264,18 +265,11 @@ Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓�
 
 原表要求和发布事务见 [已有业务表](storage.md#已有业务表)。
 
-## 成员令牌管理
+## 身份认证
 
-`Info` 增加 `platform_admin` 和 `managed_tokens`（TS 为 `platformAdmin`/`managedTokens`）。受管令牌管理要求本地令牌模式和平台管理员身份；不授予项目成员权限。
+公开 SDK 和 gRPC 仅接受 `glk_` API Key，自动设置 Bearer 请求头。SDK 提供项目、数据集、工作区、发布和查询等业务操作。用户、密码、API Key 和 Session 管理由 Console 私有 HTTP transport 提供，详见 [安全配置](security.md)。
 
-| RPC / HTTP 操作 | 请求 | 结果 |
-|---|---|---|
-| `ListTokens` / `list_tokens` | `after`, `limit` | 按 ID 分页的元数据，不含摘要或明文 |
-| `IssueToken` / `issue_token` | `request_id`, `subject`, `label`, `expires_at` | `credential`, 可选 `token`, `replayed` |
-| `ReissueToken` / `reissue_token` | `request_id`, `token_id`, `label`, `expires_at` | 原子撤销旧令牌并签发，结果同上 |
-| `RevokeToken` / `revoke_token` | `token_id` | `ok`；重复撤销成功 |
-
-SDK 对应 `tokens`、`issue_token`、`reissue_token`、`revoke_token`；Go 使用大写驼峰，TS 使用小写驼峰。时间使用 RFC 3339，`expires_at` 必須晚于当前时间。签发重试保留原 UUID 和参数；`replayed=true` 时绝不返回明文，请撤销对应 ID 后创建新请求。CLI 可通过 `gl call issue_token ...` 等操作调用同一接口。安全和部署说明见 [成员令牌](security.md#控制台签发成员令牌)。
+`Info.platform_admin`（TS `platformAdmin`）来自数据库用户。项目成员的 `subject` 是稳定用户 UUID，用户名更改不影响成员关系。
 
 ### 冲突分页与结果确定性
 

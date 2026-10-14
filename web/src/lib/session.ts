@@ -1,34 +1,20 @@
 import "server-only";
+import { GeoLedgerError } from "@geoledger/client";
 import { cookies } from "next/headers";
 import { getIronSession } from "iron-session";
 import { configuration } from "./config";
-import { SessionStore } from "./session-store";
-import { clients } from "./clients";
+import { authRequest } from "./console-client";
 
-const ABSOLUTE_SECONDS = 8 * 60 * 60;
-function idleMinutes() {
-  const value = Number(process.env.GL_WEB_SESSION_IDLE_MINUTES ?? 60);
-  return Number.isFinite(value) && value >= 1 ? Math.min(value, 8 * 60) : 60;
-}
-// Survive module reloads in development; production runs one module instance.
-const holder = globalThis as typeof globalThis & {
-  __geoledgerSessions?: SessionStore;
-};
-function store() {
-  holder.__geoledgerSessions ??= new SessionStore({
-    absoluteMs: ABSOLUTE_SECONDS * 1000,
-    idleMs: idleMinutes() * 60 * 1000,
-    maxSessions: 10_000,
-  });
-  return holder.__geoledgerSessions;
-}
-/** Current console session. `token` is resolved from the server-side store. */
+/** The database is the only Session authority; the cookie holds no password or API Key. */
 export async function session() {
   const config = configuration();
-  const cookie = await getIronSession<{ sid?: string }>(await cookies(), {
+  const jar = await cookies();
+  if (jar.getAll("gl_session").length > 1)
+    throw new GeoLedgerError("unauthenticated", "会话凭证无效。");
+  const cookie = await getIronSession<{ sid?: string }>(jar, {
     password: config.password,
     cookieName: "gl_session",
-    ttl: ABSOLUTE_SECONDS,
+    ttl: 8 * 60 * 60,
     cookieOptions: {
       httpOnly: true,
       secure: config.secure,
@@ -36,20 +22,40 @@ export async function session() {
       path: "/",
     },
   });
-  const entry = store().get(cookie.sid);
   return {
-    token: entry?.token,
-    /** Start a new server-side session; any previous one for this cookie is revoked. */
-    async login(token: string) {
-      if (entry) clients().evict(entry.token);
-      store().revoke(cookie.sid);
-      cookie.sid = store().create(token);
+    sid: cookie.sid,
+    async login(sid: string) {
+      if (cookie.sid && cookie.sid !== sid) {
+        try {
+          await authRequest("logout", {}, cookie.sid);
+        } catch (error) {
+          if (!(
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "unauthenticated"
+          ))
+            throw error;
+        }
+      }
+      cookie.sid = sid;
       await cookie.save();
     },
-    /** Revoke the server-side session and clear the cookie. */
-    destroy() {
-      if (entry) clients().evict(entry.token);
-      store().revoke(cookie.sid);
+    async destroy() {
+      if (cookie.sid) {
+        try {
+          await authRequest("logout", {}, cookie.sid);
+        } catch (error) {
+          if (!(
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "unauthenticated"
+          ))
+            throw error;
+        }
+      }
+      cookie.destroy();
+    },
+    clear() {
       cookie.destroy();
     },
   };

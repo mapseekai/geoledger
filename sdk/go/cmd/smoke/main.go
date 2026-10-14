@@ -3,11 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	gl "github.com/mapseekai/geoledger/sdk/go"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -18,24 +18,15 @@ func main() {
 	}
 }
 func run() error {
-	raw, err := os.ReadFile(os.Getenv("GL_TOKEN_FILE"))
+	raw, err := os.ReadFile(os.Getenv("GL_API_KEY_FILE"))
 	if err != nil {
 		return err
-	}
-	var tokens []struct {
-		Token string `json:"token"`
-	}
-	if err = json.Unmarshal(raw, &tokens); err != nil {
-		return err
-	}
-	if len(tokens) == 0 {
-		return fmt.Errorf("empty token file")
 	}
 	endpoint := os.Getenv("GL_ENDPOINT")
 	if endpoint == "" {
 		endpoint = "http://127.0.0.1:7882"
 	}
-	client, err := gl.Dial(endpoint, tokens[0].Token)
+	client, err := gl.Dial(endpoint, strings.TrimSpace(string(raw)))
 	if err != nil {
 		return err
 	}
@@ -125,14 +116,14 @@ func run() error {
 	if !errors.As(err, &own) || own.Code != "conflict" {
 		return fmt.Errorf("wrong duplicate error: %v", err)
 	}
-	if err = client.SetMember(ctx, project.ID, "sdk-viewer", "viewer"); err != nil {
+	if err = client.SetMember(ctx, project.ID, os.Getenv("GL_TEST_MEMBER_ID"), "viewer"); err != nil {
 		return err
 	}
 	members, err := client.Members(ctx, project.ID, gl.Page{})
 	if err != nil || len(members) != 2 {
 		return fmt.Errorf("members: %v %v", members, err)
 	}
-	if err = client.RemoveMember(ctx, project.ID, "sdk-viewer"); err != nil {
+	if err = client.RemoveMember(ctx, project.ID, os.Getenv("GL_TEST_MEMBER_ID")); err != nil {
 		return err
 	}
 	if p, err := client.ArchiveProject(ctx, project.ID, true); err != nil || p.State != "archived" {

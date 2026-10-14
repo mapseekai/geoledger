@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${GL_ENDPOINT:?Use a disposable test service}"
-: "${GL_TOKEN_FILE:?Credential file required}"
+: "${GL_API_KEY_FILE:?Credential file required}"
+export GL_TEST_MEMBER_ID=${GL_TEST_MEMBER_ID:-$(cat "$GL_API_KEY_FILE.member-id")}
 PYTHONPATH="$PWD/sdk/python${PYTHONPATH:+:$PYTHONPATH}" "${PYTHON:-python3}" -m unittest discover -s sdk/python/tests -p 'test_*.py'
 PYTHONPATH="$PWD/sdk/python${PYTHONPATH:+:$PYTHONPATH}" "${PYTHON:-python3}" sdk/python/tests/smoke.py
 cargo run --locked -p geoledger-client --example smoke
