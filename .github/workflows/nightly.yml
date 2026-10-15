@@ -81,7 +81,7 @@ jobs:
           with (root/'fixture.jsonl').open('w') as output:
               for i in range(1,10001):
                   output.write(json.dumps({'type':'Feature','id':f'{i:012}','properties':{'attributes':{'value':i}},'geometry':{'type':'Point','coordinates':[120,30]}})+'\n')
-          (root/'fixture.meta.json').write_text(json.dumps({'features':10000,'dimension':2,'geometry_type':'point'}))
+          (root/'fixture.meta.json').write_text(json.dumps({'features':10000,'dimension':2,'geometry_type':'point','crs':'EPSG:4326'}))
           PYTHON
           for backend in sqlite postgis; do
             python3 scripts/benchmark_incremental.py --server target/release/geoledger-server --client target/release/examples/incremental --fixture "$RUNNER_TEMP/fixture.jsonl" --metadata "$RUNNER_TEMP/fixture.meta.json" --output "$RUNNER_TEMP/incremental-$backend" --backend "$backend" --rounds 10 --load-seconds 300 --load-workers 20

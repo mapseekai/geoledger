@@ -6,7 +6,7 @@ GeoLedger is a version control and collaborative editing service for spatial fea
 
 The repository contains the Rust server `geoledger-server`, the remote `gl` CLI, a web console, and SDKs for Rust, Go, TypeScript / Node.js, and Python. The server manages data in SQLite + SpatiaLite or PostGIS. HTTP and gRPC requests use the same application engine.
 
-The current source version is `0.3.0-alpha.3`, with storage format 16, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
+The current source version is `0.3.0-alpha.4`, with storage format 16, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
 
 ## Key Capabilities
 

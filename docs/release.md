@@ -10,7 +10,19 @@
 
 ## 候选版本与发布配置
 
-当前候选版本为 `0.3.0-alpha.3`，Python 包使用等价版本 `0.3.0a2`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.3`，将通过检查的提交作为候选 SHA。
+当前候选版本为 `0.3.0-alpha.4`，Python 包使用等价版本 `0.3.0a4`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.4`，将通过检查的提交作为候选 SHA。
+
+### 仅源码与 Docker Hub 的预发布
+
+[Source prerelease and Docker Hub](../.github/workflows/source-docker-release.yml) 是独立的手动入口，仅发布 GitHub prerelease 和 `docker.io/zwishing/geoledger:<版本>`，覆盖 Linux AMD64 / ARM64；不分发 npm/PyPI 包、Go 模块标签或独立二进制。完整 SDK 发布继续使用下文的既有流程。
+
+先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（完整 40 位提交 SHA）及 `release_tag`（例如 `v0.3.0-alpha.4`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
+
+发布顺序为同 SHA 完整 CI、[性能验收脚本](../scripts/release-performance.sh)、受检构建阶段和双架构运行镜像、不可变 digest 推送和签名、两架构原生拉取与 SDK 验收，最后才创建 tag 并公开 prerelease。性能检查保留 20 并发、300 秒和原 p95 门限，使用显式 CRS 的 10,000 条合成要素及一次性数据库。镜像验收检查源码 revision、服务版本、统一容器健康状态、重启后的 API Key 及 SDK 业务流程。
+
+工作流使用仓库 `GITHUB_TOKEN` 创建 tag，避免递归触发完整 SDK 流程。已有镜像标签指向不同 digest、已有公开 Release、候选 SHA 或验收证据不一致时停止；不会覆盖已有产物。中断后优先重跑同一次运行的失败 job，保留已通过的产物。镜像推送后若原生验收失败，GitHub prerelease 保持未公开；检查失败证据，不把镜像存在当作整个发布完成。
+
+格式 16 需要初始化新数据库；上一发布的格式 14 旧库、备份及旧版程序独立保留。新流程不执行业务部署或旧数据迁移。
 
 GitHub 的 `release` environment 配置 `NPM_TOKEN` secret，授予 `@geoledger/client` 的发布权限。PyPI 项目 `geoledger-client` 配置 Trusted Publisher：仓库 `mapseekai/geoledger`、工作流 `release.yml`、environment `release`；完成绑定后将该 environment 的 `PYPI_TRUSTED_PUBLISHING` variable 设置为 `true`。凭据由仓库与包管理员在平台设置中维护。预检验证配置存在，实际发布验证授权生效。
 

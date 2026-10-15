@@ -1,0 +1,170 @@
+name: Source prerelease and Docker Hub
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full candidate commit SHA on main
+        type: string
+        required: true
+      release_tag:
+        description: New prerelease tag, e.g. v0.3.0-alpha.4
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: release-refs/tags/${{ inputs.release_tag }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.identity.outputs.sha }}
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check existing Docker Hub configuration
+        env:
+          USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: test -n "$USERNAME" && test -n "$TOKEN"
+      - id: identity
+        name: Validate immutable source, prerelease and existing tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python3 scripts/source-release.py preflight --sha "$SOURCE_SHA" --tag "$RELEASE_TAG"
+  quality:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+    with:
+      source_sha: ${{ needs.validate.outputs.sha }}
+  performance:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - name: Install build and load tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite
+          rustup toolchain install 1.92.0 --profile minimal
+          curl -fsSL -o "$RUNNER_TEMP/k6.tgz" https://github.com/grafana/k6/releases/download/v1.3.0/k6-v1.3.0-linux-amd64.tar.gz
+          echo "84d26fc1f7bc03e02f2e016b3b1b20c032e05dfe461fca82de4e3a6ebe72ddbd  $RUNNER_TEMP/k6.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/k6.tgz" -C "$RUNNER_TEMP"
+          echo "K6=$RUNNER_TEMP/k6-v1.3.0-linux-amd64/k6" >> "$GITHUB_ENV"
+      - name: Build candidate and require original load thresholds
+        run: |
+          cargo +1.92.0 build --release --locked --bins --example incremental
+          bash scripts/release-performance.sh "$RUNNER_TEMP/performance"
+      - name: Collect non-secret performance evidence
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          import os, zipfile
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'performance'
+          names = ['load-postgis.json', 'load-postgis.log', 'load-postgis.exit']
+          for backend in ('sqlite', 'postgis'):
+              names += [f'incremental-{backend}/{name}' for name in ('result.json', 'incremental.json', 'soak.json', 'environment.json')]
+          with zipfile.ZipFile('performance.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in names:
+                  if (root / name).is_file(): archive.write(root / name, name)
+          PYTHON
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: source-release-performance
+          path: performance.zip
+          if-no-files-found: error
+  images:
+    needs: [validate, quality, performance]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/secure-images.yml
+    with:
+      source_sha: ${{ needs.validate.outputs.sha }}
+      version: ${{ needs.validate.outputs.version }}
+      namespace: docker.io/zwishing
+      immutable_tags: true
+    secrets:
+      registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      registry_password: ${{ secrets.DOCKERHUB_TOKEN }}
+  acceptance:
+    needs: [validate, images]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: image-inventory-geoledger
+          path: inventory
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Verify signature from the authorized workflow
+        run: |
+          image=$(python3 -c 'import json; print(json.load(open("inventory/geoledger-images.json"))["image"])')
+          cosign verify --certificate-identity https://github.com/mapseekai/geoledger/.github/workflows/source-docker-release.yml@refs/heads/main --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
+      - name: Pull digest and exercise native combined image
+        env:
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/sdk"
+          "$RUNNER_TEMP/sdk/bin/pip" install ./sdk/python
+          "$RUNNER_TEMP/sdk/bin/python" scripts/smoke-release-image.py --inventory inventory --sha "$SOURCE_SHA" --version "$VERSION" --arch "$ARCH" --output "acceptance-$ARCH.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-acceptance-${{ matrix.arch }}
+          path: acceptance-${{ matrix.arch }}.json
+          if-no-files-found: error
+  complete:
+    needs: [validate, quality, performance, images, acceptance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: image-*
+          merge-multiple: true
+          path: assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: source-release-performance
+          path: assets
+      - name: Publish source prerelease after all acceptance gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python3 scripts/source-release.py complete --sha "$SOURCE_SHA" --tag "$RELEASE_TAG" --assets assets

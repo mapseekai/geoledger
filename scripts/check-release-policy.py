@@ -19,6 +19,7 @@ def needs(job: str) -> set[str]:
 
 
 def check(files: dict[str, str]) -> None:
+    check_source_release(files)
     release, hub, images, ci = (jobs(files[n]) for n in ('release.yml', 'dockerhub.yml', 'secure-images.yml', 'ci.yml'))
     # A declared dependency is not a gate when the dependent job overrides
     # failure propagation, or a required quality job is allowed to be skipped.
@@ -147,6 +148,48 @@ def check_compiler_lock(lock: dict, modules: dict[str, bytes], versions: list[st
             raise ValueError('bundled compiler must be replaced before any compilation')
         if f'npm ci --ignore-scripts --prefix {package}' not in recipe:
             raise ValueError('dependency installation must not execute the unpatched bundled compiler')
+
+
+def check_source_release(files: dict[str, str]) -> None:
+    text = files['source-docker-release.yml']
+    graph = jobs(text)
+    barriers = {
+        'quality': {'validate'}, 'performance': {'validate'},
+        'images': {'validate', 'quality', 'performance'},
+        'acceptance': {'validate', 'images'},
+        'complete': {'validate', 'quality', 'performance', 'images', 'acceptance'},
+    }
+    for name, prerequisites in barriers.items():
+        job = graph[name]
+        if needs(job) != prerequisites or re.search(r'^    (if|continue-on-error):', job, re.M):
+            raise ValueError('source release gate bypass: ' + name)
+    for name in ('quality', 'images'):
+        if 'source_sha: ${{ needs.validate.outputs.sha }}' not in graph[name]:
+            raise ValueError('source release must use the selected SHA')
+    for name in ('performance', 'acceptance', 'complete'):
+        if 'ref: ${{ needs.validate.outputs.sha }}' not in graph[name]:
+            raise ValueError('source release checkout differs')
+    for required in ('./.github/workflows/ci.yml', 'bash scripts/release-performance.sh',
+                     './.github/workflows/secure-images.yml', 'namespace: docker.io/zwishing',
+                     'immutable_tags: true', 'arch: amd64', 'arch: arm64',
+                     'scripts/smoke-release-image.py', 'cosign verify --certificate-identity',
+                     'scripts/source-release.py complete', 'GH_TOKEN: ${{ github.token }}'):
+        if required not in text:
+            raise ValueError('missing source release protection: ' + required)
+    if 'workflow_dispatch:' not in text or re.search(r'^  (push|pull_request):', text, re.M):
+        raise ValueError('source prerelease must be explicitly dispatched')
+    if re.search(r'npm publish|pypi-publish|NPM_TOKEN|PYPI_TRUSTED_PUBLISHING', text):
+        raise ValueError('source/Docker scope must not publish SDKs')
+    for required in ('IMMUTABLE_TAGS: ${{ inputs.immutable_tags }}', 'args+=(--immutable-tags)'):
+        if required not in files['secure-images.yml']:
+            raise ValueError('immutable tag guard must reach the publisher')
+    for name in ('validate', 'acceptance', 'complete'):
+        if re.search(r'^        (if|continue-on-error):', graph[name], re.M):
+            raise ValueError('source release required steps must not be skipped')
+    for step in re.split(r'^      - ', graph['performance'], flags=re.M):
+        if 'cargo +1.92.0 build' in step or 'release-performance.sh' in step:
+            if re.search(r'^        (if|continue-on-error):', step, re.M):
+                raise ValueError('performance acceptance must not be skipped')
 
 
 def main() -> None:

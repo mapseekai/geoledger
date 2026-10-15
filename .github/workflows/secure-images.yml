@@ -12,6 +12,10 @@ on:
         description: ghcr.io/owner or docker.io/namespace
         required: true
         type: string
+      immutable_tags:
+        description: Refuse to replace an existing tag with different bytes
+        type: boolean
+        default: false
     secrets:
       registry_username:
         required: false
@@ -172,8 +176,10 @@ jobs:
           VERSION: ${{ inputs.version }}
           IMAGE: ${{ inputs.namespace }}/${{ matrix.name }}
           REGISTRY_AUTH_FILE: /home/runner/.docker/config.json
+          IMMUTABLE_TAGS: ${{ inputs.immutable_tags }}
         run: |
           args=(--tag "$IMAGE:$VERSION")
+          if [[ $IMMUTABLE_TAGS == true ]]; then args+=(--immutable-tags); fi
           if [[ $VERSION != *-* ]]; then args+=(--tag "$IMAGE:${VERSION%.*}"); fi
           python3 scripts/image-gate.py publish --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "combined" --inventory "$RUNNER_TEMP/${{ matrix.name }}-images.json" "${args[@]}"
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6

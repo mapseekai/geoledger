@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-cli"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "clap",
  "geoledger-client",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-client"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "geoledger-rpc",
  "prost",
@@ -773,14 +773,14 @@ dependencies = [
 
 [[package]]
 name = "geoledger-core"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "geoledger-engine"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "argon2",
  "bytes",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-rpc"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "prost",
  "serde",
@@ -819,7 +819,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-server"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "axum",
  "chrono",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "geoledger-spatialite"
-version = "0.3.0-alpha.3"
+version = "0.3.0-alpha.4"
 dependencies = [
  "parking_lot",
  "rusqlite",

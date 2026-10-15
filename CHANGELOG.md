@@ -4,6 +4,31 @@
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
+## [0.3.0-alpha.4] - 2026-10-15
+
+### Breaking
+
+- 存储格式为 16，替代上一发布版本的格式 14；需要初始化新数据库，不提供旧格式原地升级或旧备份导入。升级前独立保留旧数据库、备份及对应版本程序。
+- 身份认证统一为稳定用户、Argon2id 密码、个人 API Key 和数据库会话；CLI 与四语言 SDK 使用 API Key，不保留旧 token/JWT 认证兼容。控制台升级后重新登录。
+
+### Changed
+
+- 控制台统一使用 shadcn 组件，完善弹窗焦点恢复、未保存编辑保护、账户与冲突界面及手机布局。
+- SQLite 发布减少历史扫描；PostGIS 合并复用暂存表并刷新统计信息，补充事务隔离与查询工作量回归。
+- 重写中英文项目说明，统一运行示例与能力说明，保留独立验证记录。
+
+### Fixed
+
+- Windows CLI 条件编译消除未使用变量，同时保留 Unix 私有权限、设备号和 inode 检查。
+- 两个控制台浏览器套件共用开启沙箱的启动器，Ubuntu 24.04 CI 使用系统 Chrome。
+- rustls 更新至 0.23.46，修复 RUSTSEC-2026-0346 至 RUSTSEC-2026-0349。
+
+### Validation
+
+- 版本准备前的提交 `20060f5aa3c7a1f2892686d96c4518448c720511` 已通过 [完整 CI](https://github.com/mapseekai/geoledger/actions/runs/38699676301) 的 7 个 job；该结果不替代新候选提交的发布验收。
+- alpha.4 本地 release 二进制通过 20 并发、300 秒 PostGIS HTTP 负载，publish p95 为 514 毫秒；双后端各完成 180 组增量样本及 300 秒 soak，SQLite/PostGIS 分别完成 1,124/751 个循环且零错误，原阈值和完整性检查通过。该记录基于版本准备工作区，不替代最终提交的同 SHA 远端验收。
+- 增加仅源码 prerelease 与 Docker Hub 的独立手动流程，要求同 SHA CI、原阈值性能验证、双架构扫描、签名和原生 digest 拉取验收；既有完整 SDK 发布流程保持独立。最终镜像与公开 Release 以该流程实际结果为准。
+
 ## [0.3.0-alpha.3] - 2026-10-12
 
 ### Breaking

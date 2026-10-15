@@ -254,7 +254,17 @@ def verify(layout: Path, output: Path, sha: str, kind: str | None = None) -> dic
     return gate
 
 
-def publish(layout: Path, output: Path, sha: str, tags: list[str], destination: Path, kind: str | None = None) -> None:
+def require_immutable_tags(tags: list[str], digest: str) -> None:
+    for tag in tags:
+        result = subprocess.run(['skopeo', 'inspect', '--raw', 'docker://' + tag], capture_output=True, timeout=90)
+        if result.returncode == 0:
+            if 'sha256:' + hashlib.sha256(result.stdout).hexdigest() != digest:
+                raise ValueError('existing image tag identifies different bytes: ' + tag)
+        elif not re.search(r'(?i)\bmanifest unknown\b', result.stderr.decode(errors='replace')):
+            raise RuntimeError('could not establish image tag absence: ' + tag)
+
+
+def publish(layout: Path, output: Path, sha: str, tags: list[str], destination: Path, kind: str | None = None, immutable_tags: bool = False) -> None:
     gate = verify(layout, output, sha, kind)
     if gate['kind'] not in ('server', 'console', 'combined'):
         raise ValueError('build environments must never be published as application images')
@@ -263,6 +273,8 @@ def publish(layout: Path, output: Path, sha: str, tags: list[str], destination: 
     repos = {tag.rsplit(':', 1)[0] for tag in tags}
     if len(repos) != 1:
         raise ValueError('all tags must name the same image repository')
+    if immutable_tags:
+        require_immutable_tags(tags, gate['root'])
     digestfile = output / 'published-digest.txt'
     for tag in tags:
         subprocess.run(['skopeo', 'copy', '--all', '--preserve-digests', '--digestfile', str(digestfile),
@@ -284,6 +296,7 @@ def main() -> None:
     parser.add_argument('--platform', action='append')
     parser.add_argument('--tag', action='append', default=[])
     parser.add_argument('--inventory', type=Path)
+    parser.add_argument('--immutable-tags', action='store_true')
     args = parser.parse_args()
     if args.command == 'scan':
         scan(args.layout, args.output, args.kind, set(args.platform or DEFAULT_PLATFORMS), args.source_sha)
@@ -292,7 +305,7 @@ def main() -> None:
     else:
         if not args.inventory:
             parser.error('--inventory is required for publish')
-        publish(args.layout, args.output, args.source_sha, args.tag, args.inventory, args.kind)
+        publish(args.layout, args.output, args.source_sha, args.tag, args.inventory, args.kind, args.immutable_tags)
 
 
 if __name__ == '__main__':
