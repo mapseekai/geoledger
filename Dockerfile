@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Both services share musl; retain APK inventories for native dependency scans.
-FROM rust:1.98-alpine3.24@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS server-build
+FROM rust:1.99-alpine3.24@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 AS server-build
 RUN apk upgrade --no-cache && apk add --no-cache build-base cmake pkgconf openssl-dev protobuf-dev protobuf libspatialite
 # Dynamic CRT is required for SpatiaLite extension loading.
 ENV CARGO_BUILD_JOBS=2 RUSTFLAGS="-C target-feature=-crt-static" GL_SPATIALITE_EXTENSION=/usr/lib/mod_spatialite.so.8
