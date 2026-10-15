@@ -152,7 +152,7 @@ class SourceReleaseTests(unittest.TestCase):
                 policy.check_source_release(changed)
 
     def test_native_smoke_requires_both_sdk_runs_and_cleans_up_on_failure(self):
-        for fail in (False, True):
+        for fail in (False, 'sdk', 'empty-member', 'missing-member'):
             with self.subTest(fail=fail), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 record = {'kind': 'combined', 'source_sha': SHA,
@@ -160,37 +160,69 @@ class SourceReleaseTests(unittest.TestCase):
                           'platforms': ['linux/amd64', 'linux/arm64']}
                 (root / 'geoledger-images.json').write_text(json.dumps(record))
                 output = root / 'acceptance-amd64.json'
+                restarts = []
                 def docker(*command):
+                    if command[:2] == ('docker', 'restart'):
+                        restarts.append(command)
                     if command[:3] == ('docker', 'image', 'inspect'):
                         return json.dumps([{'Architecture': 'amd64', 'Os': 'linux', 'Config': {'Labels': {'org.opencontainers.image.revision': SHA}}}])
                     if command[:3] == ('docker', 'run', '--rm'):
                         return 'geoledger-server 0.3.0-alpha.4'
                     if command[:2] == ('docker', 'port'):
-                        return '127.0.0.1:17000'
+                        return '127.0.0.1:' + ('18000' if restarts else '17000')
                     if command[:2] == ('docker', 'inspect'):
                         return json.dumps([{'State': {'Running': True, 'Health': {'Status': 'healthy'}}}])
                     return ''
                 calls = []
+                sdk_environments = []
+                provisioned = []
+                def provision(base, data_dir, key_file):
+                    provisioned.append(base)
+                    smoke.private_file(key_file, 'disposable-test-key\n')
+                    if fail != 'missing-member':
+                        smoke.private_file(Path(str(key_file) + '.member-id'),
+                                           ' \n' if fail == 'empty-member' else ' disposable-member \n')
                 def execute(command, **kwargs):
                     calls.append(command)
-                    if fail and 'sdk/python/tests/smoke.py' in command:
-                        raise subprocess.CalledProcessError(1, command)
+                    if 'sdk/python/tests/smoke.py' in command:
+                        env = kwargs['env']
+                        sdk_environments.append(env)
+                        self.assertEqual(env['GL_TEST_MEMBER_ID'], 'disposable-member')
+                        self.assertEqual(env['GL_ENDPOINT'], 'http://127.0.0.1:' + ('18000' if len(sdk_environments) == 2 else '17000'))
+                        self.assertEqual(Path(env['GL_API_KEY_FILE']).read_text().strip(), 'disposable-test-key')
+                        self.assertEqual({key for key in env if key.startswith('GL_')},
+                                         {'GL_ENDPOINT', 'GL_API_KEY_FILE', 'GL_TEST_MEMBER_ID'})
+                        if fail == 'sdk':
+                            raise subprocess.CalledProcessError(1, command)
                 response = MagicMock()
                 response.__enter__.return_value.status = 200
+                ready_urls = []
+                def ready(url, **kwargs):
+                    ready_urls.append(url)
+                    return response
                 argv = ['smoke-release-image.py', '--inventory', str(root), '--sha', SHA,
                         '--version', '0.3.0-alpha.4', '--arch', 'amd64', '--output', str(output)]
                 with patch.object(smoke.sys, 'argv', argv), patch.object(smoke.platform, 'machine', return_value='x86_64'), \
-                     patch.object(smoke, 'run', side_effect=docker), patch.object(smoke, 'provision'), \
-                     patch.object(smoke.urllib.request, 'urlopen', return_value=response), \
+                     patch.object(smoke, 'run', side_effect=docker), patch.object(smoke, 'provision', side_effect=provision), \
+                     patch.dict(smoke.os.environ, {'GL_TEST_MEMBER_ID': 'foreign-member', 'GL_API_KEY': 'foreign-key'}), \
+                     patch.object(smoke.urllib.request, 'urlopen', side_effect=ready), \
                      patch.object(smoke.subprocess, 'run', side_effect=execute):
                     if fail:
-                        with self.assertRaises(subprocess.CalledProcessError): smoke.main()
+                        with self.assertRaises({'sdk': subprocess.CalledProcessError, 'empty-member': ValueError,
+                                                'missing-member': FileNotFoundError}[fail]): smoke.main()
                         self.assertFalse(output.exists())
                     else:
                         smoke.main()
                         self.assertTrue(json.loads(output.read_text())['passed'])
                         self.assertEqual(sum('sdk/python/tests/smoke.py' in call for call in calls), 2)
                 self.assertEqual(calls[-1][:3], ['docker', 'rm', '-fv'])
+                self.assertEqual(len(provisioned), 1)
+                self.assertEqual(len(sdk_environments), 2 if not fail else 1 if fail == 'sdk' else 0)
+                if not fail:
+                    self.assertEqual(len(restarts), 1)
+                    self.assertEqual(ready_urls, ['http://127.0.0.1:17000/ready', 'http://127.0.0.1:18000/ready'])
+                    for key in ('GL_TEST_MEMBER_ID', 'GL_API_KEY_FILE'):
+                        self.assertEqual(sdk_environments[0][key], sdk_environments[1][key])
 
 
 class RecoveryEvidenceTests(unittest.TestCase):

@@ -54,11 +54,12 @@ def main():
         try:
             run('docker', 'run', '--detach', '--name', name, '--env-file', str(root / 'container.env'),
                 '-p', '127.0.0.1::7881', '-p', '127.0.0.1::7882', image)
-            http = run('docker', 'port', name, '7881/tcp').rsplit(':', 1)[1]
-            grpc = run('docker', 'port', name, '7882/tcp').rsplit(':', 1)[1]
             for restart in (False, True):
                 if restart:
                     run('docker', 'restart', name)
+                # Docker can assign new ephemeral host ports on restart.
+                http = run('docker', 'port', name, '7881/tcp').rsplit(':', 1)[1]
+                grpc = run('docker', 'port', name, '7882/tcp').rsplit(':', 1)[1]
                 deadline = time.monotonic() + 120
                 while True:
                     status = json.loads(run('docker', 'inspect', name))[0]['State']
@@ -75,8 +76,12 @@ def main():
                         raise ValueError('backend is not ready')
                 if not restart:
                     provision(base, root, root / 'api-key')
+                member_id = (root / 'api-key.member-id').read_text().strip()
+                if not member_id:
+                    raise ValueError('disposable SDK member ID is empty')
                 env = {k: v for k, v in os.environ.items() if not k.startswith('GL_')}
-                env.update(GL_ENDPOINT='http://127.0.0.1:' + grpc, GL_API_KEY_FILE=str(root / 'api-key'))
+                env.update(GL_ENDPOINT='http://127.0.0.1:' + grpc, GL_API_KEY_FILE=str(root / 'api-key'),
+                           GL_TEST_MEMBER_ID=member_id)
                 subprocess.run([sys.executable, 'sdk/python/tests/smoke.py'], env=env, check=True, timeout=180)
         finally:
             subprocess.run(['docker', 'rm', '-fv', name], check=True, stdout=subprocess.DEVNULL)
