@@ -25,7 +25,7 @@ def check(files: dict[str, str]) -> None:
     # failure propagation, or a required quality job is allowed to be skipped.
     for graph, names in ((release, ('quality', 'credentials', 'binaries', 'images', 'github-release', 'sdks', 'complete')),
                          (hub, ('quality', 'images')),
-                         (images, ('build-scan', 'publish')),
+                         (images, ('build-scan', 'merge-scan', 'publish')),
                          (ci, ('source', 'linux', 'web', 'msrv', 'windows', 'supply-chain', 'postgis-release'))):
         for name in names:
             if re.search(r'^    if:', graph[name], re.M):
@@ -63,14 +63,32 @@ def check(files: dict[str, str]) -> None:
             raise ValueError('SDK retry verification and installed-package acceptance are required')
     if re.search(r'^        if:', sdk_steps, re.M):
         raise ValueError('SDK publication cannot silently skip a deliverable')
-    if needs(images['publish']) != {'build-scan'}:
+    if needs(images['merge-scan']) != {'build-scan'} or needs(images['publish']) != {'merge-scan'}:
         raise ValueError('registry writes must wait for all build/scan matrix entries')
     if re.search(r'push:\s*true', files['secure-images.yml']):
         raise ValueError('build must not push before the scan')
-    for required in ('image-gate.py scan', 'platforms: linux/amd64,linux/arm64', 'push: false', 'org.opencontainers.image.revision=${{ inputs.source_sha }}'):
+    for required in ('image-gate.py scan', 'platforms: linux/${{ matrix.arch }}', 'push: false', 'org.opencontainers.image.revision=${{ inputs.source_sha }}'):
         if required not in images['build-scan']:
             raise ValueError(f'missing image gate requirement: {required}')
     build_job = images['build-scan']
+    for required in ('runs-on: ${{ matrix.runner }}', 'arch: amd64\n            runner: ubuntu-24.04',
+                     'arch: arm64\n            runner: ubuntu-24.04-arm', 'name: Require native architecture',
+                     '--platform "$PLATFORM"', 'name: checked-oci-${{ matrix.name }}-${{ matrix.arch }}'):
+        if required not in build_job:
+            raise ValueError('missing native build requirement: ' + required)
+    if 'setup-qemu' in build_job:
+        raise ValueError('release compilation must run on native architectures')
+    merged = images['merge-scan']
+    for required in ('ref: ${{ inputs.source_sha }}', 'scripts/merge-oci.py',
+                     'scripts/image-gate.py scan', 'scripts/image-gate.py verify',
+                     'checked-oci-geoledger-amd64/layout', 'checked-oci-geoledger-arm64/layout'):
+        if required not in merged:
+            raise ValueError('missing merged-image gate: ' + required)
+    if '--platform' in merged:
+        raise ValueError('merged-image gate must require both architectures')
+    for step in re.split(r'^      - ', merged, flags=re.M):
+        if 'scripts/merge-oci.py' in step and re.search(r'^(?:        )?if:', step, re.M):
+            raise ValueError('merged-image gate must not be skipped')
     if 'kind: combined' not in build_job or 'name: [geoledger]' not in images['publish']:
         raise ValueError('release must publish the unified geoledger image')
     if 'driver: docker-container' not in build_job or not re.search(r'driver-opts: image=moby/buildkit@sha256:[0-9a-f]{64}', build_job):

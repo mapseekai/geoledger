@@ -25,7 +25,7 @@ permissions:
   contents: read
 jobs:
   build-scan:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 100
     strategy:
       fail-fast: false
@@ -34,6 +34,13 @@ jobs:
           - name: geoledger
             kind: combined
             file: Dockerfile
+            arch: amd64
+            runner: ubuntu-24.04
+          - name: geoledger
+            kind: combined
+            file: Dockerfile
+            arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -52,7 +59,15 @@ jobs:
           assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?', os.environ['VERSION'])
           assert re.fullmatch(r'(ghcr\.io|docker\.io)/[a-z0-9][a-z0-9_-]*', os.environ['NAMESPACE'])
           PYTHON
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+      - name: Require native architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          case "$EXPECTED_ARCH" in
+            amd64) test "$(uname -m)" = x86_64 ;;
+            arm64) test "$(uname -m)" = aarch64 ;;
+            *) exit 1 ;;
+          esac
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
           driver: docker-container
@@ -65,7 +80,7 @@ jobs:
           context: .
           file: ${{ matrix.file }}
           target: build
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: false
           labels: org.opencontainers.image.revision=${{ inputs.source_sha }}
           outputs: type=oci,dest=${{ runner.temp }}/build-stage.tar
@@ -76,10 +91,11 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           IMAGE_KIND: ${{ matrix.kind }}
+          PLATFORM: linux/${{ matrix.arch }}
         run: |
           mkdir -p "$RUNNER_TEMP/build-layout" "$RUNNER_TEMP/build-reports"
           tar -xf "$RUNNER_TEMP/build-stage.tar" -C "$RUNNER_TEMP/build-layout"
-          python3 scripts/image-gate.py scan --layout "$RUNNER_TEMP/build-layout" --output "$RUNNER_TEMP/build-reports" --source-sha "$SOURCE_SHA" --kind "$IMAGE_KIND-build"
+          python3 scripts/image-gate.py scan --layout "$RUNNER_TEMP/build-layout" --output "$RUNNER_TEMP/build-reports" --source-sha "$SOURCE_SHA" --kind "$IMAGE_KIND-build" --platform "$PLATFORM"
           python3 - <<'PYTHON'
           import json, os
           from pathlib import Path
@@ -92,7 +108,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: build-scan-${{ matrix.name }}
+          name: build-scan-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/build-reports
           if-no-files-found: ignore
           retention-days: 30
@@ -101,39 +117,77 @@ jobs:
         with:
           context: .
           file: ${{ matrix.file }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: false
           labels: org.opencontainers.image.revision=${{ inputs.source_sha }}
           build-contexts: ${{ steps.build-gate.outputs.context }}
           outputs: type=oci,dest=${{ runner.temp }}/image.tar
           sbom: true
           provenance: mode=max
-      - name: Scan exact manifests, require both architectures
+      - name: Scan exact native runtime manifest
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           IMAGE_KIND: ${{ matrix.kind }}
+          PLATFORM: linux/${{ matrix.arch }}
         run: |
           mkdir -p "$RUNNER_TEMP/checked/layout" "$RUNNER_TEMP/checked/reports"
           tar -xf "$RUNNER_TEMP/image.tar" -C "$RUNNER_TEMP/checked/layout"
-          python3 scripts/image-gate.py scan --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "$IMAGE_KIND"
+          python3 scripts/image-gate.py scan --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "$IMAGE_KIND" --platform "$PLATFORM"
       - name: Retain scan evidence even on failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: scan-${{ matrix.name }}
+          name: scan-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/checked/reports
           if-no-files-found: ignore
           retention-days: 30
       - name: Hand off only passed immutable artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: checked-oci-${{ matrix.name }}
+          name: checked-oci-${{ matrix.name }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/checked
+          if-no-files-found: error
+          retention-days: 1
+  merge-scan:
+    needs: build-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: checked-oci-geoledger-*
+          path: ${{ runner.temp }}/native
+      - name: Install pinned scanner
+        run: python3 scripts/install-trivy.py --destination "$RUNNER_TEMP/scanners"
+      - name: Merge immutable manifests and scan both architectures
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          python3 scripts/merge-oci.py --input "$RUNNER_TEMP/native/checked-oci-geoledger-amd64/layout" --input "$RUNNER_TEMP/native/checked-oci-geoledger-arm64/layout" --output "$RUNNER_TEMP/checked/layout" --source-sha "$SOURCE_SHA"
+          python3 scripts/image-gate.py scan --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind combined
+          python3 scripts/image-gate.py verify --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind combined
+      - name: Retain merged scan evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-geoledger
+          path: ${{ runner.temp }}/checked/reports
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Hand off only the passed complete image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: checked-oci-geoledger
           path: ${{ runner.temp }}/checked
           if-no-files-found: error
           retention-days: 1
   publish:
-    # Publishing waits for the complete build-stage and runtime scans.
-    needs: build-scan
+    # Publishing waits for both native scans and the complete merged-image gate.
+    needs: merge-scan
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:

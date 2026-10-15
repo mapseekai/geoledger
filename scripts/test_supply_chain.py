@@ -24,6 +24,7 @@ def load(name, filename):
 
 
 gate = load('gate', 'image-gate.py')
+merger = load('merger', 'merge-oci.py')
 policy = load('policy', 'check-release-policy.py')
 installer = load('installer', 'install-spatialite.py')
 SHA = 'a' * 40
@@ -59,6 +60,55 @@ def report():
     return {'SchemaVersion': 2, 'Metadata': {'OS': {'Family': 'debian'}},
             'Results': [{'Class': 'os-pkgs', 'Packages': [{'Name': 'libssl3'}, {'Name': 'libsqlite3-mod-spatialite'}], 'Vulnerabilities': []},
                         {'Class': 'lang-pkgs', 'Type': 'cargo', 'Packages': [{'Name': p['name'], 'Version': p['version']} for p in tomllib.loads((ROOT / 'Cargo.lock').read_text())['package']]}]}
+
+
+class MergeTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.inputs = [self.root / arch for arch in ('amd64', 'arm64')]
+        for layout in self.inputs:
+            fixture(layout, (layout.name,), attestation={
+                'schemaVersion': 2, 'config': {'os': 'unknown', 'architecture': 'unknown'},
+                'config_media': 'application/vnd.oci.image.config.v1+json',
+                'platform': {'os': 'unknown', 'architecture': 'unknown'},
+                'layers': ['application/vnd.in-toto+json']})
+        self.output = self.root / 'merged'
+
+    def test_preserves_manifests_attestations_and_every_blob(self):
+        expected = {}
+        for layout in self.inputs:
+            expected.update(gate.inventory(layout)[1])
+        merger.merge(self.inputs, self.output, SHA)
+        root, actual = gate.inventory(self.output)
+        self.assertEqual(actual, expected)
+        document = json.loads((self.output / 'blobs/sha256' / root[7:]).read_text())
+        self.assertEqual(len(document['manifests']), 4)
+        for layout in self.inputs:
+            for blob in (layout / 'blobs/sha256').iterdir():
+                self.assertEqual(blob.read_bytes(), (self.output / 'blobs/sha256' / blob.name).read_bytes())
+        self.assertFalse((self.output / 'gate.json').exists())
+
+    def test_missing_or_duplicate_architecture_rejected(self):
+        for inputs in (self.inputs[:1], [self.inputs[0], self.inputs[0]]):
+            with self.subTest(inputs=inputs), self.assertRaises(ValueError):
+                merger.merge(inputs, self.output, SHA)
+
+    def test_wrong_source_rejected(self):
+        with self.assertRaises(ValueError):
+            merger.merge(self.inputs, self.output, 'b' * 40)
+
+    def test_corrupt_blob_rejected(self):
+        root, _ = gate.inventory(self.inputs[0])
+        (self.inputs[0] / 'blobs/sha256' / root[7:]).write_text('{}')
+        with self.assertRaises(ValueError):
+            merger.merge(self.inputs, self.output, SHA)
+
+    def test_existing_output_rejected(self):
+        self.output.mkdir()
+        with self.assertRaises(FileExistsError):
+            merger.merge(self.inputs, self.output, SHA)
 
 
 class GateTests(unittest.TestCase):
@@ -222,6 +272,17 @@ class PolicyTests(unittest.TestCase):
     def setUp(self):
         self.files = {p.name: p.read_text() for p in (ROOT / '.github/workflows').glob('*.yml')}
     def test_current_graph(self): policy.check(self.files)
+    def test_native_and_merge_gates_cannot_be_removed(self):
+        changes = [('runner: ubuntu-24.04-arm', 'runner: ubuntu-24.04'),
+                   ('needs: merge-scan', 'needs: build-scan'),
+                   ('scripts/merge-oci.py', 'scripts/unrelated.py'),
+                   ('      - name: Merge immutable manifests and scan both architectures',
+                    '      - if: false\n        name: Merge immutable manifests and scan both architectures')]
+        for before, after in changes:
+            files = copy.deepcopy(self.files)
+            files['secure-images.yml'] = files['secure-images.yml'].replace(before, after)
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                policy.check(files)
     def test_removing_quality_blocks(self):
         for name in ('release.yml', 'dockerhub.yml'):
             files = copy.deepcopy(self.files)

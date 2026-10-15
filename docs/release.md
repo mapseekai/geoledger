@@ -6,7 +6,7 @@
 
 提交到源码的 Go、Python、TypeScript 协议绑定由 `grpcio-tools==1.78.0` 内置的同一 protoc 生成，Go 插件固定为 `protoc-gen-go v1.36.12`、`protoc-gen-go-grpc 1.5.1`，ts-proto 固定为 `2.13.0`。在 Python 虚拟环境安装工具，执行 `PYTHON=<虚拟环境解释器> scripts/generate-sdk.sh`。脚本在写入前核对版本；连续生成两次的文件摘要应一致，CI 检查生成结果与提交完全相同。
 
-容器构建与运行基础镜像使用固定 digest；构建工具来源、SHA256 与版本由 `.security` 锁文件管理。构建阶段与运行阶段分别扫描，Rust 扫描清单按包名和版本逐项覆盖 `Cargo.lock`，系统包及 npm、编译器清单一并校验。发布直接复制通过检查的 OCI blobs，核验 digest 后签名。Windows 原生依赖按校验和安装并运行真实存储启动测试。
+容器构建与运行基础镜像使用固定 digest；构建工具来源、SHA256 与版本由 `.security` 锁文件管理。AMD64 与 ARM64 分别在 `ubuntu-24.04`、`ubuntu-24.04-arm` 原生 runner 构建，不使用 QEMU 编译。每个架构的构建阶段与运行阶段分别扫描；合并时保留原始 image、SBOM 和 provenance blobs，再对完整双架构索引扫描并验收。Rust 扫描清单按包名和版本逐项覆盖 `Cargo.lock`，系统包及 npm、编译器清单一并校验。发布直接复制通过检查的 OCI blobs，核验 digest 后签名。Windows 原生依赖按校验和安装并运行真实存储启动测试。
 
 ## 候选版本与发布配置
 
