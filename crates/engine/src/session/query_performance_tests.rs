@@ -229,3 +229,50 @@ fn sqlite_sparse_bbox_above_page_cap_uses_candidates_in_scoped_history_and_draft
     }
     Ok(())
 }
+
+#[test]
+fn sqlite_publication_closes_only_changed_history_keys() -> Result<()> {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Storage::Sqlite(dir.path().join("close-history.db"));
+    let pool = Arc::new(postgres::Pool::default());
+    Client::open(&storage, &pool, Duration::from_secs(30))?.migrate()?;
+    let mut t = Client::open(&storage, &pool, Duration::from_secs(30))?.transaction(false)?;
+    t.batch_execute("INSERT INTO gl_projects(id,name) VALUES('p','p'); INSERT INTO gl_project_members(project,subject,role) VALUES('p','alice','owner'); INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('p','d','points','point'); INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('p','w','alice',0); INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES('p',1,'w','alice','seed'),('p',2,'w','alice','edit'); WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<5000) INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties) SELECT 'p','d',printf('%08d',n),1,'{}' FROM ids;")?;
+    t.begin_merge()?;
+    t.stage_merge("d", "00001000", &Some("{}".into()), &None)?;
+    t.flush_stage()?;
+    let steps = Arc::new(AtomicUsize::new(0));
+    let observed = steps.clone();
+    if let Backend::Sqlite(c) = &t.0.backend {
+        c.read()
+            .map_err(sqlite_error)?
+            .progress_handler(
+                1,
+                Some(move || {
+                    observed.fetch_add(1, Ordering::Relaxed);
+                    false
+                }),
+            )
+            .map_err(sqlite_error)?;
+    }
+    t.close_history("p", 2)?;
+    let work = steps.load(Ordering::Relaxed);
+    assert!(
+        work < 1000,
+        "closing one feature scanned unrelated history: {work}"
+    );
+    assert_eq!(
+        t.query_one("SELECT count(*) FROM gl_history WHERE valid_to=2", &[])?
+            .get::<_, i64>(0usize)?,
+        1
+    );
+    assert_eq!(
+        t.query_one(
+            "SELECT count(*) FROM gl_history WHERE feature_id='00001001' AND valid_to IS NULL",
+            &[]
+        )?
+        .get::<_, i64>(0usize)?,
+        1
+    );
+    Ok(())
+}

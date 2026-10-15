@@ -1462,7 +1462,12 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     fn begin_merge(&mut self) -> Result<()> {
         self.1.stage.clear();
         self.1.stage_bytes = 0;
-        self.batch_execute("DROP TABLE IF EXISTS gl_merge_stage; CREATE TEMP TABLE gl_merge_stage(dataset text, feature_id text, before_value text, after_value text, PRIMARY KEY(dataset,feature_id))")
+        // Pooled PostgreSQL sessions reuse the staging relation and its prepared plans.
+        // Transactional deletion keeps repeated merges and rollback isolated.
+        self.batch_execute(match self.0.backend {
+            Backend::Postgis(_) => "CREATE TEMP TABLE IF NOT EXISTS gl_merge_stage(dataset text, feature_id text, before_value text, after_value text, PRIMARY KEY(dataset,feature_id)) ON COMMIT DELETE ROWS; DELETE FROM gl_merge_stage",
+            Backend::Sqlite(_) => "DROP TABLE IF EXISTS gl_merge_stage; CREATE TEMP TABLE gl_merge_stage(dataset text, feature_id text, before_value text, after_value text, PRIMARY KEY(dataset,feature_id))",
+        })
     }
     fn merge_page(
         &mut self,
@@ -1526,8 +1531,22 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     }
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
         self.flush_stage()?;
+        if matches!(self.0.backend, Backend::Postgis(_)) {
+            // A reused temp table has no useful row estimate after commit clears it.
+            // Keep a small publication from scanning the project's entire history.
+            self.batch_execute("ANALYZE gl_merge_stage")?;
+        }
         self.sync_sources(project)?;
-        self.execute("UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL", &[&project, &revision])
+        // Drive SQLite's join from the changed keys, not every live row in the project.
+        let sql = match self.0.backend {
+            Backend::Sqlite(_) => {
+                "UPDATE gl_history SET valid_to=$2 WHERE rowid IN (SELECT h.rowid FROM gl_merge_stage m CROSS JOIN gl_history h INDEXED BY history_live ON h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL)"
+            }
+            Backend::Postgis(_) => {
+                "UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL"
+            }
+        };
+        self.execute(sql, &[&project, &revision])
     }
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
         self.flush_stage()?;

@@ -150,6 +150,8 @@ Inter 与 Newsreader 字体本地打包，中文衬线采用系统字体。[GeoL
 
 控件交互回归：`python3 scripts/test-console-shadcn.py --url http://localhost:13001 --api-key-file <临时凭据文件> --password-file <临时密码文件> --member-id <现有用户UUID> --chromium <浏览器路径>`。仅用于一次性测试服务，覆盖 Select 键盘操作及表单提交、Tabs 焦点与面板切换、Popover 关闭后的焦点恢复、冲突列表 Button 和手机布局。
 
+交互质量回归：`python3 scripts/test-console-ux.py --url http://localhost:13001 --api-key-file <临时凭据文件> --member-id <无密钥用户UUID> --chromium <浏览器路径> --output target/console-ux`。仅用于一次性测试服务，验证桌面/手机弹窗焦点、未保存编辑取消与放弃、成功保存、空列表、地图标题和手机密钥布局。可追加 `--axe <axe-core/axe.min.js 路径>` 执行完整页面无障碍扫描。
+
 实际大文件验证：`python3 scripts/test-console-large-file.py --url http://localhost:13001 --api-key-file <临时凭据文件> --chromium <浏览器路径> --geojson <GeoJSON 文件路径> --report /tmp/geoledger-large-file-report.json`。仅用于一次性测试服务；会创建项目及面数据集、通过浏览器导入整份文件、逐批加载全部地图要素、验证搜索与选择、发布并分页查询，逐个比对原文件的几何与属性。报告记录文件大小、各阶段耗时、请求状态和拓扑警告数量，截图与报告放在同一位置。
 
 大文件统计回归：`python3 scripts/test-console-summary.py --url http://localhost:13001 --api-key-file <临时凭据文件> --chromium <浏览器路径> --fixture-report /tmp/geoledger-large-file-report.json --report /tmp/geoledger-summary-report.json`。复用大文件测试创建的隔离数据，验证工作区和历史统计数量、响应体积、耗时及真实页面展示，并检查没有读取要素明细。

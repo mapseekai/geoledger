@@ -1,4 +1,6 @@
 "use client";
+import { Field } from "./ui/field";
+import { FieldLabel } from "./ui/field";
 import {
   ApiError,
   call,
@@ -45,7 +47,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "./ui/collapsible";
-import { Label } from "./ui/label";
 import { Skeleton } from "./ui/skeleton";
 import { Textarea } from "./ui/textarea";
 
@@ -373,8 +374,8 @@ export function PublishDialog({
               </CollapsibleContent>
             </Collapsible>
           )}
-          <div className="field">
-            <Label htmlFor="publish-message">版本说明</Label>
+          <Field>
+            <FieldLabel htmlFor="publish-message">版本说明</FieldLabel>
             <Textarea
               id="publish-message"
               required
@@ -392,7 +393,7 @@ export function PublishDialog({
               }}
               placeholder="例如：更新道路边界与分类"
             />
-          </div>
+          </Field>
           {pending && (
             <Notice tone="warning" icon={<TriangleAlert aria-hidden="true" />}>
               {matches

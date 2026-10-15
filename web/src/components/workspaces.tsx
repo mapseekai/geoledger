@@ -1,4 +1,5 @@
 "use client";
+import { DropdownMenuGroup } from "./ui/dropdown-menu";
 import {
   call,
   type Changes,
@@ -304,34 +305,36 @@ export function Workspaces({
             </DropdownMenuTrigger>
           </Tip>
           <DropdownMenuContent align="end" className="menu">
-            <DropdownMenuItem
-              onSelect={() => setResolve({ workspace, mode: "resolve" })}
-            >
-              <GitMerge />
-              {editable ? "解决冲突" : "查看冲突"}
-            </DropdownMenuItem>
-            {editable && (
-              <DropdownMenuItem onSelect={() => setSyncing(workspace)}>
-                <RefreshCcw />
-                更新工作区
+            <DropdownMenuGroup>
+              <DropdownMenuItem
+                onSelect={() => setResolve({ workspace, mode: "resolve" })}
+              >
+                <GitMerge />
+                {editable ? "解决冲突" : "查看冲突"}
               </DropdownMenuItem>
-            )}
-            <DropdownMenuItem onSelect={() => copyText(workspace.id)}>
-              <Copy />
-              复制标识
-            </DropdownMenuItem>
-            {editable && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={() => setDiscard(workspace)}
-                >
-                  <Trash2 />
-                  丢弃工作区
+              {editable && (
+                <DropdownMenuItem onSelect={() => setSyncing(workspace)}>
+                  <RefreshCcw />
+                  更新工作区
                 </DropdownMenuItem>
-              </>
-            )}
+              )}
+              <DropdownMenuItem onSelect={() => copyText(workspace.id)}>
+                <Copy />
+                复制标识
+              </DropdownMenuItem>
+              {editable && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={() => setDiscard(workspace)}
+                  >
+                    <Trash2 />
+                    丢弃工作区
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

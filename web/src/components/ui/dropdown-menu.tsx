@@ -11,6 +11,14 @@ function DropdownMenu({
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
 }
 
+function DropdownMenuGroup({
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) {
+  return (
+    <DropdownMenuPrimitive.Group data-slot="dropdown-menu-group" {...props} />
+  );
+}
+
 function DropdownMenuTrigger({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
@@ -129,6 +137,7 @@ function DropdownMenuRadioItem({
 }
 
 export {
+  DropdownMenuGroup,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,

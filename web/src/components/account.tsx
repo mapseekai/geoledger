@@ -1,4 +1,8 @@
 "use client";
+import { FieldGroup } from "./ui/field";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
+import { Field } from "./ui/field";
+import { FieldLabel } from "./ui/field";
 import { useRouter } from "next/navigation";
 import { keyExpiryInput, keyExpiryChange } from "@/lib/api-key-expiry";
 import { useEffect, useState, type FormEvent } from "react";
@@ -18,7 +22,8 @@ import {
   TableHeader,
   TableRow,
 } from "./ui/table";
-import { ErrorBox, Modal } from "./common";
+import { Empty, ErrorBox, IdText, Modal } from "./common";
+import { useUnsavedChanges } from "./unsaved-changes";
 import { Panel, PanelTitle, useAction, time } from "./resource-shared";
 
 function auth<T>(action: string, input: Record<string, unknown> = {}) {
@@ -32,8 +37,8 @@ function PasswordField({
   name?: string;
 }) {
   return (
-    <div className="field">
-      <Label htmlFor={name}>{label}</Label>
+    <Field>
+      <FieldLabel htmlFor={name}>{label}</FieldLabel>
       <PasswordInput
         id={name}
         name={name}
@@ -45,7 +50,7 @@ function PasswordField({
         minimum={name === "current_password" ? 1 : 12}
       />
       <small>UTF-8 {name === "current_password" ? 1 : 12}–1024 字节</small>
-    </div>
+    </Field>
   );
 }
 export function AccountPanel({
@@ -63,6 +68,8 @@ function ProfilePanel({ user, password }: { user: User; password: boolean }) {
   const action = useAction();
   const router = useRouter();
   const [profile, setProfile] = useState(user);
+  const [dirty, setDirty] = useState(false);
+  const unsaved = useUnsavedChanges(dirty);
   const [message, setMessage] = useState("");
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -77,6 +84,8 @@ function ProfilePanel({ user, password }: { user: User; password: boolean }) {
           current_password: data.get("current_password"),
           new_password: data.get("new_password"),
         });
+        unsaved.markSaved();
+        setDirty(false);
         form.reset();
         window.location.replace("/projects");
       } else {
@@ -87,6 +96,8 @@ function ProfilePanel({ user, password }: { user: User; password: boolean }) {
           current_password: data.get("current_password"),
         });
         setProfile(updated);
+        unsaved.markSaved();
+        setDirty(false);
         form.reset();
         setMessage("个人资料已更新。");
         router.refresh();
@@ -94,66 +105,85 @@ function ProfilePanel({ user, password }: { user: User; password: boolean }) {
     });
   };
   return (
-    <Panel
-      toolbar={
-        <PanelTitle
-          title={password ? "修改密码" : "个人资料"}
-          description={
-            user.must_change_password
-              ? "请先修改初始或重置密码，才能继续使用控制台。"
-              : "账户身份由固定用户 ID 标识，修改用户名不会改变项目权限。"
-          }
-        />
-      }
-    >
-      <form className="card-form" onSubmit={submit}>
-        {!password && (
-          <>
-            <div className="field">
-              <Label htmlFor="user-id">用户 ID</Label>
-              <Input id="user-id" value={user.id} readOnly />
+    <>
+      <Panel
+        className="account-profile"
+        toolbar={
+          <PanelTitle
+            title={password ? "修改密码" : "个人资料"}
+            description={
+              user.must_change_password
+                ? "请先修改初始或重置密码，才能继续使用控制台。"
+                : password
+                  ? "使用至少 12 字节的新密码，修改后其他会话将失效。"
+                  : "账户身份由固定用户 ID 标识，修改用户名不会改变项目权限。"
+            }
+          />
+        }
+      >
+        <form
+          className="card-form"
+          onChange={() => setDirty(true)}
+          onSubmit={submit}
+        >
+          <FieldGroup>
+            {!password && (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="user-id">用户 ID</FieldLabel>
+                  <Input id="user-id" value={user.id} readOnly />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="username">用户名</FieldLabel>
+                  <Input
+                    id="username"
+                    name="username"
+                    value={profile.username}
+                    onChange={(event) =>
+                      setProfile({ ...profile, username: event.target.value })
+                    }
+                    required
+                    maxLength={64}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="display_name">显示名称</FieldLabel>
+                  <Input
+                    id="display_name"
+                    name="display_name"
+                    value={profile.display_name}
+                    onChange={(event) =>
+                      setProfile({
+                        ...profile,
+                        display_name: event.target.value,
+                      })
+                    }
+                    maxLength={256}
+                  />
+                </Field>
+              </>
+            )}
+            <PasswordField />
+            {password && (
+              <>
+                <PasswordField label="新密码" name="new_password" />
+                <PasswordField label="确认新密码" name="confirm_password" />
+              </>
+            )}
+            <ErrorBox message={action.error} />
+            <p role="status" className={message ? undefined : "sr-only"}>
+              {message}
+            </p>
+            <div className="form-actions">
+              <Button type="submit" disabled={action.busy}>
+                {action.busy ? "保存中…" : "保存"}
+              </Button>
             </div>
-            <div className="field">
-              <Label htmlFor="username">用户名</Label>
-              <Input
-                id="username"
-                name="username"
-                value={profile.username}
-                onChange={(event) =>
-                  setProfile({ ...profile, username: event.target.value })
-                }
-                required
-                maxLength={64}
-              />
-            </div>
-            <div className="field">
-              <Label htmlFor="display_name">显示名称</Label>
-              <Input
-                id="display_name"
-                name="display_name"
-                value={profile.display_name}
-                onChange={(event) =>
-                  setProfile({ ...profile, display_name: event.target.value })
-                }
-                maxLength={256}
-              />
-            </div>
-          </>
-        )}
-        <PasswordField />
-        {password && (
-          <>
-            <PasswordField label="新密码" name="new_password" />
-            <PasswordField label="确认新密码" name="confirm_password" />
-          </>
-        )}
-        <ErrorBox message={action.error} />
-        <p role="status">{message}</p>
-        <Button type="submit" disabled={action.busy}>
-          {action.busy ? "保存中…" : "保存"}
-        </Button>
-      </form>
-    </Panel>
+          </FieldGroup>
+        </form>
+      </Panel>
+      {unsaved.confirmation}
+    </>
   );
 }
 type UserEdit = {
@@ -261,21 +291,26 @@ function UsersPanel() {
         }
       >
         <div className="panel-toolbar">
+          <ToggleGroup
+            type="single"
+            value={status || "all"}
+            aria-label="用户状态"
+            onValueChange={(value) => {
+              if (value) {
+                setStatus(value === "all" ? "" : value);
+                setAfter(undefined);
+              }
+            }}
+          >
+            {["all", "active", "disabled", "deleted"].map((value, i) => (
+              <ToggleGroupItem key={value} value={value}>
+                {["全部", "启用", "禁用", "已删除"][i]}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
           <Button variant="outline" onClick={refresh}>
             刷新
           </Button>
-          {["", "active", "disabled", "deleted"].map((v, i) => (
-            <Button
-              key={v}
-              variant={status === v ? "secondary" : "ghost"}
-              onClick={() => {
-                setStatus(v);
-                setAfter(undefined);
-              }}
-            >
-              {["全部", "启用", "禁用", "已删除"][i]}
-            </Button>
-          ))}
         </div>
         <ErrorBox message={loadError} />
         {loading && <p role="status">加载中…</p>}
@@ -289,6 +324,15 @@ function UsersPanel() {
             </TableRow>
           </TableHeader>
           <TableBody>
+            {!loading && !loadError && rows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={4}>
+                  <Empty title={status ? "没有匹配的用户" : "暂无用户"}>
+                    可切换状态筛选或新增用户。
+                  </Empty>
+                </TableCell>
+              </TableRow>
+            )}
             {rows.map((u) => (
               <TableRow key={u.id}>
                 <TableCell>
@@ -364,53 +408,55 @@ function UsersPanel() {
       {edit && (
         <Modal title={title} busy={write.busy} close={() => setEdit(undefined)}>
           <form className="card-form" onSubmit={submit}>
-            <p>
-              {edit.user?.username}
-              {["delete", "disable"].includes(edit.kind)
-                ? "：确认此操作将立即终止该用户访问，历史审计仍保留。"
-                : ""}
-            </p>
-            {["create", "edit"].includes(edit.kind) && (
-              <>
-                <div className="field">
-                  <Label htmlFor="username">用户名</Label>
-                  <Input
-                    id="username"
-                    name="username"
-                    defaultValue={edit.user?.username}
-                    required
-                    maxLength={64}
-                  />
-                </div>
-                <div className="field">
-                  <Label htmlFor="display_name">显示名称</Label>
-                  <Input
-                    id="display_name"
-                    name="display_name"
-                    defaultValue={edit.user?.display_name}
-                    maxLength={256}
-                  />
-                </div>
-                <Label>
-                  <Checkbox
-                    name="is_admin"
-                    defaultChecked={edit.user?.is_admin}
-                  />
-                  平台管理员
-                </Label>
-              </>
-            )}
-            {["create", "reset"].includes(edit.kind) && (
-              <PasswordField
-                label="临时密码（用户首次登录必须修改）"
-                name="new_password"
-              />
-            )}
-            <PasswordField label="你的当前密码" />
-            <ErrorBox message={write.error} />
-            <Button type="submit" disabled={write.busy}>
-              确认{title}
-            </Button>
+            <FieldGroup>
+              <p>
+                {edit.user?.username}
+                {["delete", "disable"].includes(edit.kind)
+                  ? "：确认此操作将立即终止该用户访问，历史审计仍保留。"
+                  : ""}
+              </p>
+              {["create", "edit"].includes(edit.kind) && (
+                <>
+                  <Field>
+                    <FieldLabel htmlFor="username">用户名</FieldLabel>
+                    <Input
+                      id="username"
+                      name="username"
+                      defaultValue={edit.user?.username}
+                      required
+                      maxLength={64}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="display_name">显示名称</FieldLabel>
+                    <Input
+                      id="display_name"
+                      name="display_name"
+                      defaultValue={edit.user?.display_name}
+                      maxLength={256}
+                    />
+                  </Field>
+                  <Label>
+                    <Checkbox
+                      name="is_admin"
+                      defaultChecked={edit.user?.is_admin}
+                    />
+                    平台管理员
+                  </Label>
+                </>
+              )}
+              {["create", "reset"].includes(edit.kind) && (
+                <PasswordField
+                  label="临时密码（用户首次登录必须修改）"
+                  name="new_password"
+                />
+              )}
+              <PasswordField label="你的当前密码" />
+              <ErrorBox message={write.error} />
+              <Button type="submit" disabled={write.busy}>
+                确认{title}
+              </Button>
+            </FieldGroup>
           </form>
         </Modal>
       )}
@@ -514,19 +560,22 @@ function KeysPanel({ user }: { user: User }) {
         <div className="panel-toolbar">
           {user.is_admin && (
             <form
+              className="account-key-lookup"
               onSubmit={(e) => {
                 e.preventDefault();
                 setOwner(String(new FormData(e.currentTarget).get("user_id")));
                 setAfter(undefined);
               }}
             >
-              <Label htmlFor="key-owner">用户 ID</Label>
-              <Input
-                id="key-owner"
-                name="user_id"
-                defaultValue={owner}
-                required
-              />
+              <Field>
+                <FieldLabel htmlFor="key-owner">用户 ID</FieldLabel>
+                <Input
+                  id="key-owner"
+                  name="user_id"
+                  defaultValue={owner}
+                  required
+                />
+              </Field>
               <Button variant="outline" type="submit">
                 查看用户密钥
               </Button>
@@ -538,71 +587,82 @@ function KeysPanel({ user }: { user: User }) {
         </div>
         <ErrorBox message={loadError} />
         {loading && <p role="status">加载中…</p>}
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>名称 / 前缀</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>用户 / 创建时间</TableHead>
-              <TableHead>有效期</TableHead>
-              <TableHead>最近使用</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((k) => (
-              <TableRow key={k.id}>
-                <TableCell>
-                  {k.name}
-                  <p className="mono">{k.key_prefix}…</p>
-                  <small>{k.id}</small>
-                </TableCell>
-                <TableCell>
-                  {k.revoked_at
-                    ? "已撤销"
-                    : k.expires_at && Date.parse(k.expires_at) <= Date.now()
-                      ? "已过期"
-                      : "有效"}
-                  {k.revoked_at && <p>{time(k.revoked_at)}</p>}
-                </TableCell>
-                <TableCell>
-                  <span className="mono">{k.user_id}</span>
-                  <p>{time(k.created_at)}</p>
-                </TableCell>
-                <TableCell>
-                  {k.expires_at ? time(k.expires_at) : "无到期时间"}
-                </TableCell>
-                <TableCell>
-                  {k.last_used_at ? time(k.last_used_at) : "尚未使用"}
-                </TableCell>
-                <TableCell>
-                  {!k.revoked_at && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        onClick={() => setEdit({ kind: "edit", key: k })}
-                      >
-                        编辑
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        onClick={() => setEdit({ kind: "revoke", key: k })}
-                      >
-                        撤销
-                      </Button>
-                    </>
-                  )}
-                  <Button
-                    variant="ghost"
-                    onClick={() => setEdit({ kind: "delete", key: k })}
-                  >
-                    删除
-                  </Button>
-                </TableCell>
+        <div className="account-keys-table">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>名称 / 前缀</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>用户 / 创建时间</TableHead>
+                <TableHead>有效期</TableHead>
+                <TableHead>最近使用</TableHead>
+                <TableHead>操作</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {!loading && !loadError && rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6}>
+                    <Empty title="暂无 API Key">
+                      该用户还没有密钥，可创建密钥后使用。
+                    </Empty>
+                  </TableCell>
+                </TableRow>
+              )}
+              {rows.map((k) => (
+                <TableRow key={k.id}>
+                  <TableCell data-label="名称 / 前缀">
+                    {k.name}
+                    <p className="mono">{k.key_prefix}…</p>
+                    <IdText value={k.id} />
+                  </TableCell>
+                  <TableCell data-label="状态">
+                    {k.revoked_at
+                      ? "已撤销"
+                      : k.expires_at && Date.parse(k.expires_at) <= Date.now()
+                        ? "已过期"
+                        : "有效"}
+                    {k.revoked_at && <p>{time(k.revoked_at)}</p>}
+                  </TableCell>
+                  <TableCell data-label="用户 / 创建时间">
+                    <IdText value={k.user_id} />
+                    <p>{time(k.created_at)}</p>
+                  </TableCell>
+                  <TableCell data-label="有效期">
+                    {k.expires_at ? time(k.expires_at) : "无到期时间"}
+                  </TableCell>
+                  <TableCell data-label="最近使用">
+                    {k.last_used_at ? time(k.last_used_at) : "尚未使用"}
+                  </TableCell>
+                  <TableCell data-label="操作">
+                    {!k.revoked_at && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          onClick={() => setEdit({ kind: "edit", key: k })}
+                        >
+                          编辑
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => setEdit({ kind: "revoke", key: k })}
+                        >
+                          撤销
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      variant="ghost"
+                      onClick={() => setEdit({ kind: "delete", key: k })}
+                    >
+                      删除
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
         <div className="panel-toolbar">
           <Button
             variant="outline"
@@ -623,43 +683,45 @@ function KeysPanel({ user }: { user: User }) {
       {edit && (
         <Modal title={title} busy={write.busy} close={() => setEdit(undefined)}>
           <form className="card-form" onSubmit={submit}>
-            <p>
-              {edit.key?.name}
-              {["revoke", "delete"].includes(edit.kind)
-                ? "：确认立即停止此密钥及由它创建的控制台会话访问。"
-                : ""}
-            </p>
-            {["create", "edit"].includes(edit.kind) && (
-              <>
-                <div className="field">
-                  <Label htmlFor="name">名称</Label>
-                  <Input
-                    id="name"
-                    name="name"
-                    defaultValue={edit.key?.name}
-                    required
-                    maxLength={256}
-                  />
-                </div>
-                <div className="field">
-                  <Label htmlFor="expires_at">
-                    到期时间（UTC，留空为无到期时间）
-                  </Label>
-                  <Input
-                    id="expires_at"
-                    name="expires_at"
-                    type="datetime-local"
-                    step="1"
-                    defaultValue={keyExpiryInput(edit.key?.expires_at)}
-                  />
-                </div>
-              </>
-            )}
-            <PasswordField />
-            <ErrorBox message={write.error} />
-            <Button type="submit" disabled={write.busy}>
-              确认{title}
-            </Button>
+            <FieldGroup>
+              <p>
+                {edit.key?.name}
+                {["revoke", "delete"].includes(edit.kind)
+                  ? "：确认立即停止此密钥及由它创建的控制台会话访问。"
+                  : ""}
+              </p>
+              {["create", "edit"].includes(edit.kind) && (
+                <>
+                  <Field>
+                    <FieldLabel htmlFor="name">名称</FieldLabel>
+                    <Input
+                      id="name"
+                      name="name"
+                      defaultValue={edit.key?.name}
+                      required
+                      maxLength={256}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="expires_at">
+                      到期时间（UTC，留空为无到期时间）
+                    </FieldLabel>
+                    <Input
+                      id="expires_at"
+                      name="expires_at"
+                      type="datetime-local"
+                      step="1"
+                      defaultValue={keyExpiryInput(edit.key?.expires_at)}
+                    />
+                  </Field>
+                </>
+              )}
+              <PasswordField />
+              <ErrorBox message={write.error} />
+              <Button type="submit" disabled={write.busy}>
+                确认{title}
+              </Button>
+            </FieldGroup>
           </form>
         </Modal>
       )}

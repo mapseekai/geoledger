@@ -1,4 +1,5 @@
 "use client";
+import { DropdownMenuGroup } from "./ui/dropdown-menu";
 import type {
   ExpressionSpecification,
   FilterSpecification,
@@ -494,20 +495,22 @@ export function MapView({
               container={root}
               className="menu basemap-menu"
             >
-              <DropdownMenuRadioGroup
-                value={basemap}
-                onValueChange={(id) => choose(id as BasemapId)}
-              >
-                {options.map(([id, label]) => (
-                  <DropdownMenuRadioItem key={id} value={id}>
-                    <span
-                      className={`basemap-swatch is-${id}`}
-                      aria-hidden="true"
-                    />
-                    {label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
+              <DropdownMenuGroup>
+                <DropdownMenuRadioGroup
+                  value={basemap}
+                  onValueChange={(id) => choose(id as BasemapId)}
+                >
+                  {options.map(([id, label]) => (
+                    <DropdownMenuRadioItem key={id} value={id}>
+                      <span
+                        className={`basemap-swatch is-${id}`}
+                        aria-hidden="true"
+                      />
+                      {label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

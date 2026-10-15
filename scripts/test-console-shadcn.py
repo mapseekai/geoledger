@@ -28,7 +28,7 @@ with sync_playwright() as p:
         del responses[:-20]
     page.on('response',observe_response)
     page.goto(args.url+'/login')
-    page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_role('tab', name='API Key 登录', exact=True).click()
     page.get_by_label('API Key',exact=True).fill(api_key)
     page.get_by_role('button',name='进入控制台').click()
     page.wait_for_url('**/projects')

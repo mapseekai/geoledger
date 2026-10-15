@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the separate Next.js console against a disposable GeoLedger service."""
+import re
 import argparse
 import json
 from pathlib import Path
@@ -31,10 +32,10 @@ with sync_playwright() as p:
     page.goto(origin+'/projects')
     page.wait_for_url('**/login')
     page.screenshot(path=str(shots/'next-login.png'), full_page=True)
-    page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_role('tab', name='API Key 登录', exact=True).click()
     page.get_by_label('API Key',exact=True).fill('invalid-test-token')
     page.get_by_role('button',name='进入控制台').click()
-    expect(page.get_by_role('alert')).to_be_visible()
+    expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_be_visible()
     page.get_by_label('API Key',exact=True).fill(token)
     page.get_by_role('button',name='进入控制台').click()
     page.wait_for_url('**/projects')
@@ -71,11 +72,11 @@ with sync_playwright() as p:
     page.screenshot(path=str(shots/'dataset-upload-mode.png'),full_page=True)
     upload.set_input_files({'name':'null.geojson','mimeType':'application/geo+json','buffer':json.dumps({'type':'Feature','properties':{},'geometry':None}).encode()})
     page.get_by_role('button',name='创建',exact=True).click()
-    expect(page.get_by_role('alert')).to_contain_text('至少包含一个有坐标要素')
+    expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_contain_text('至少包含一个有坐标要素')
     assert command({'action':'datasets','project':project})==[]
     upload.set_input_files({'name':'invalid.geojson','mimeType':'application/geo+json','buffer':b'{bad'})
     page.get_by_role('button',name='创建',exact=True).click()
-    expect(page.get_by_role('alert')).to_contain_text('有效的 JSON')
+    expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_contain_text('有效的 JSON')
     features=[{'type':'Feature','id':f'upload-{i:04d}','properties':{'name':f'Imported {i}','padding':'a'*9000},'geometry':{'type':'Point','coordinates':[104+i/1000,35]}} for i in range(130)]
     features[0]['id']=18446744073709551615
     features[0]['properties']['exact']=18446744073709551615
@@ -106,10 +107,10 @@ with sync_playwright() as p:
         route.continue_()
     page.route('**/api/console',intercept)
     page.get_by_role('button',name='创建',exact=True).click()
-    expect(page.get_by_role('alert')).to_be_visible(timeout=30000)
+    expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_be_visible(timeout=30000)
     expect(page.get_by_role('status')).to_contain_text('已导入 '+str(len(saves[0]['edits'])))
     page.get_by_role('button',name='继续导入',exact=True).click()
-    expect(page.get_by_role('alert')).to_be_visible(timeout=30000)
+    expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_be_visible(timeout=30000)
     assert committed[0]
     page.get_by_role('button',name='继续导入',exact=True).click()
     expect(page.get_by_role('dialog')).to_have_count(0,timeout=60000)
@@ -172,9 +173,9 @@ with sync_playwright() as p:
         route.continue_()
     page.route('**/api/console',concurrent)
     page.get_by_role('button',name='创建',exact=True).click()
-    expect(page.get_by_role('alert')).to_be_visible(timeout=30000)
+    expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_be_visible(timeout=30000)
     page.get_by_role('button',name='继续导入',exact=True).click()
-    expect(page.get_by_role('alert')).to_contain_text('其他修改')
+    expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_contain_text('其他修改')
     assert len(conflicting)==1,'recovery must not overwrite concurrent edits'
     attempted=conflicting[0]
     retained=command({'action':'features','project':project,'dataset':attempted['edits'][0]['dataset'],'workspace':attempted['workspace'],'featureId':attempted['edits'][0]['featureId']})

@@ -1,4 +1,5 @@
 "use client";
+import { Card } from "./ui/card";
 import { cn } from "@/lib/utils";
 import { call, send, type Info, type Project } from "@/lib/browser-api";
 import {
@@ -186,11 +187,7 @@ export function Console({
   const sidebar = (sheet: boolean) => (
     <>
       <div className="sidebar-header">
-        <Link
-          href={`/projects${navigationQuery}`}
-          aria-label="GeoLedger 项目"
-          className="sidebar-brand"
-        >
+        <Link href={`/projects${navigationQuery}`} className="sidebar-brand">
           <Brand caption="管理控制台" />
         </Link>
         {sheet && (
@@ -381,13 +378,13 @@ export function Console({
           ) : section === "service" ? (
             !error && <ServiceInfo info={info} />
           ) : projectId === undefined && resolved ? (
-            <section className="panel">
+            <Card className="panel">
               <Empty icon={FolderOpen} title="先选择一个项目">
                 <Link href={`/projects${navigationQuery}`}>
                   前往项目列表 <ArrowRight className="inline size-4" />
                 </Link>
               </Empty>
-            </section>
+            </Card>
           ) : !project ? (
             !error && <Loading />
           ) : (
@@ -422,7 +419,7 @@ export function Console({
 }
 function ProjectContext({ project }: { project: Project }) {
   return (
-    <section className="context-card" aria-label="当前项目">
+    <Card className="context-card" aria-label="当前项目">
       <div className="context-main">
         <span className="context-avatar" aria-hidden="true">
           {project.name.slice(0, 1).toUpperCase()}
@@ -446,6 +443,6 @@ function ProjectContext({ project }: { project: Project }) {
           </dd>
         </div>
       </dl>
-    </section>
+    </Card>
   );
 }

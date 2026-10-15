@@ -121,12 +121,6 @@ label {
   color: var(--text-2);
   margin: 16px 0 6px;
 }
-.field + .field {
-  margin-top: 16px;
-}
-.field > label {
-  margin-top: 0;
-}
 [data-slot="select-trigger"] {
   height: 38px !important;
   min-width: 260px;
@@ -442,8 +436,8 @@ label {
 .notice p {
   margin-top: 4px;
 }
-.panel > .alert,
-.panel > .notice {
+.panel > [data-slot="card-content"] > .alert,
+.panel > [data-slot="card-content"] > .notice {
   margin: 16px 20px 0;
 }
 .card-form > .alert,
@@ -906,8 +900,13 @@ label {
   box-shadow: var(--shadow-xs);
 }
 .panel {
+  padding: 0;
+  gap: 0;
   overflow: hidden;
   min-width: 0;
+}
+.panel-content {
+  padding: 0;
 }
 .panel-toolbar {
   display: flex;
@@ -929,12 +928,12 @@ label {
   align-items: center;
   gap: 8px;
 }
-.panel-title strong {
+.panel-title [data-slot="card-title"] {
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
 }
-.panel-title > span {
+.panel-title > [data-slot="card-description"] {
   font-size: 12.5px;
   color: var(--text-muted);
   margin-top: 1px;
@@ -1024,8 +1023,24 @@ label {
 .access-layout > .panel {
   min-width: 0;
 }
-.access-layout > .panel > .card-form {
+.access-layout > .panel > [data-slot="card-content"] > .card-form {
   max-width: 680px;
+}
+/* Keep account fields readable on wide screens and query controls grouped. */
+.account-profile {
+  max-width: 760px;
+}
+.account-key-lookup {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  flex: 0 1 620px;
+  min-width: 0;
+}
+.account-key-lookup > [data-slot="field"] {
+  flex: 1 1 320px;
+  min-width: 0;
 }
 .card-form {
   padding: 20px;
@@ -1496,28 +1511,6 @@ label {
   font-weight: 650;
   letter-spacing: -0.3px;
 }
-.password-field {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.password-field .field-icon {
-  position: absolute;
-  left: 12px;
-  width: 16px;
-  height: 16px;
-  color: #98a2b3;
-  pointer-events: none;
-}
-.password-field input {
-  height: 42px;
-  padding-left: 38px;
-  padding-right: 44px;
-}
-.password-field [data-slot="button"] {
-  position: absolute;
-  right: 5px;
-}
 .login-submit {
   width: 100%;
   height: 42px !important;
@@ -1675,8 +1668,8 @@ label {
   .search input {
     width: 100%;
   }
-  .panel > .alert,
-  .panel > .notice {
+  .panel > [data-slot="card-content"] > .alert,
+  .panel > [data-slot="card-content"] > .notice {
     margin: 14px 16px 0;
   }
   [data-slot="table-head"],
@@ -3309,6 +3302,7 @@ label {
   font-size: 12px;
 }
 .diff-table td {
+  white-space: normal;
   font-variant-numeric: tabular-nums;
 }
 .diff-table .is-old {
@@ -3474,4 +3468,66 @@ label {
 }
 .change-detail > [data-slot="button"] {
   justify-self: start;
+}
+
+.panel .card-form {
+  padding: 0;
+}
+
+/* Keep key metadata and actions readable without horizontal scrolling on phones. */
+.account-keys-table [data-slot="table"] {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+.account-keys-table [data-slot="table-cell"] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.account-keys-table .id-text {
+  max-width: 100%;
+  align-items: flex-start;
+}
+.account-keys-table .id-text .mono {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1024px) {
+  .account-keys-table [data-slot="table"] {
+    width: 100%;
+    min-width: 0;
+    table-layout: fixed;
+  }
+  .account-keys-table [data-slot="table-header"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .account-keys-table [data-slot="table-row"] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px 16px;
+    gap: 12px;
+  }
+  .account-keys-table [data-slot="table-cell"] {
+    display: block;
+    height: auto;
+    padding: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+  .account-keys-table [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-bottom: 3px;
+  }
+  .account-keys-table .id-text {
+    max-width: 100%;
+  }
 }

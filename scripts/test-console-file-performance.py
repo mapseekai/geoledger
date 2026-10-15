@@ -59,7 +59,7 @@ with sync_playwright() as playwright:
     try:
         token = Path(a.api_key_file).read_text().strip()
         page.goto(a.url + "/login")
-        page.get_by_role("button", name="API Key", exact=True).click()
+        page.get_by_role("tab", name="API Key 登录", exact=True).click()
         page.get_by_label("API Key", exact=True).fill(token)
         page.get_by_role("button", name="进入控制台").click()
         page.wait_for_url("**/projects")

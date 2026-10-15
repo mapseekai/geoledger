@@ -26,7 +26,7 @@ with sync_playwright() as playwright:
         assert result['status']==200, (body['action'],result)
         return result['data']
     page.goto(args.url+'/login')
-    page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_role('tab', name='API Key 登录', exact=True).click()
     page.get_by_label('API Key',exact=True).fill(token)
     page.get_by_role('button',name='进入控制台').click()
     page.wait_for_url('**/projects')

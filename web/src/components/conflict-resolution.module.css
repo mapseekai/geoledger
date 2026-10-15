@@ -1,6 +1,12 @@
 .dialog {
   height: min(860px, 92dvh);
 }
+.compact {
+  height: min(620px, 92dvh);
+}
+.compare:has(> .tableWrap:only-child) {
+  grid-template-columns: minmax(0, 1fr);
+}
 .body {
   padding: 0 !important;
   display: flex;
@@ -230,6 +236,8 @@
   background: #ecfdf3;
 }
 .cellButton {
+  height: auto;
+  white-space: normal;
   width: 100%;
   min-height: 26px;
   display: flex;

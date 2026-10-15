@@ -1,4 +1,11 @@
 "use client";
+import { DropdownMenuGroup } from "./ui/dropdown-menu";
+import { Table } from "./ui/table";
+import { TableHeader } from "./ui/table";
+import { TableRow } from "./ui/table";
+import { TableHead } from "./ui/table";
+import { TableBody } from "./ui/table";
+import { TableCell } from "./ui/table";
 
 import {
   ApiError,
@@ -420,7 +427,16 @@ export function Resolution({
       size="xl"
       busy={busy}
       close={close}
-      className={styles.dialog}
+      className={cn(styles.dialog, {
+        [styles.compact]:
+          items.length <= 3 &&
+          !items.some(
+            (item) =>
+              item.base?.geometry ||
+              item.current?.geometry ||
+              item.draft?.geometry,
+          ),
+      })}
       bodyClassName={styles.body}
       meta={
         <>
@@ -555,20 +571,22 @@ export function Resolution({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="menu">
-                        <DropdownMenuItem onSelect={() => bulk("draft")}>
-                          全部保留我的
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => bulk("current")}>
-                          全部采用已发布
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          variant="destructive"
-                          disabled={!resolvedCount}
-                          onSelect={() => bulk(undefined)}
-                        >
-                          清除全部选择
-                        </DropdownMenuItem>
+                        <DropdownMenuGroup>
+                          <DropdownMenuItem onSelect={() => bulk("draft")}>
+                            全部保留我的
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => bulk("current")}>
+                            全部采用已发布
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            variant="destructive"
+                            disabled={!resolvedCount}
+                            onSelect={() => bulk(undefined)}
+                          >
+                            清除全部选择
+                          </DropdownMenuItem>
+                        </DropdownMenuGroup>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
@@ -836,39 +854,39 @@ function ConflictDetail({
       ) : (
         <div className={styles.compare}>
           <div className={styles.tableWrap}>
-            <table className={cn("diff-table", styles.table)}>
-              <thead>
-                <tr>
-                  <th scope="col">字段</th>
+            <Table className={cn("diff-table", styles.table)}>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">字段</TableHead>
                   {columns.map((column) => (
-                    <th
+                    <TableHead
                       scope="col"
                       key={column.side}
                       data-side={column.side}
                       className={styles[`col_${column.side}`]}
                     >
                       {column.label}
-                    </th>
+                    </TableHead>
                   ))}
-                  <th scope="col" className={styles.col_result}>
+                  <TableHead scope="col" className={styles.col_result}>
                     结果
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {shown.map((row) => {
                   const picked = fieldChoice(row);
                   const value = resultValue(row);
                   const geometry = row.key === "\0geometry";
                   return (
-                    <tr
+                    <TableRow
                       key={row.key}
                       className={cn(
                         row.conflict && styles.rowConflict,
                         !row.conflict && row.changed && styles.rowChanged,
                       )}
                     >
-                      <th scope="row">
+                      <TableHead scope="row">
                         {row.conflict && (
                           <GitMerge
                             className={styles.rowIcon}
@@ -876,7 +894,7 @@ function ConflictDetail({
                           />
                         )}
                         {row.label}
-                      </th>
+                      </TableHead>
                       {columns.map(({ side }) => {
                         const slot = row[side];
                         const sideFeature = conflict[side];
@@ -895,7 +913,7 @@ function ConflictDetail({
                         );
                         const selectable = row.conflict && !readOnly && !whole;
                         return (
-                          <td
+                          <TableCell
                             key={side}
                             data-side={side}
                             className={cn(
@@ -904,7 +922,8 @@ function ConflictDetail({
                             )}
                           >
                             {selectable ? (
-                              <button
+                              <Button
+                                variant="ghost"
                                 type="button"
                                 className={styles.cellButton}
                                 aria-pressed={picked === side}
@@ -916,14 +935,14 @@ function ConflictDetail({
                                 {picked === side && (
                                   <Check aria-hidden="true" />
                                 )}
-                              </button>
+                              </Button>
                             ) : (
                               text
                             )}
-                          </td>
+                          </TableCell>
                         );
                       })}
-                      <td className={styles.resultCell}>
+                      <TableCell className={styles.resultCell}>
                         {result === null ? (
                           <span className="value-missing">已删除</span>
                         ) : value === undefined ? (
@@ -937,12 +956,12 @@ function ConflictDetail({
                         ) : (
                           <span className="value-missing">—</span>
                         )}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
             {(hidden > 0 || showAll) && (
               <Button
                 variant="ghost"
@@ -956,32 +975,38 @@ function ConflictDetail({
               </Button>
             )}
           </div>
-          <GeometryPreview
-            className={styles.preview}
-            layers={[
-              {
-                id: "base",
-                label: `基线`,
-                geometry: conflict.base?.geometry,
-                present: !!conflict.base,
-                tone: "base",
-              },
-              {
-                id: "current",
-                label: `已发布`,
-                geometry: conflict.current?.geometry,
-                present: !!conflict.current,
-                tone: "current",
-              },
-              {
-                id: "draft",
-                label: "我的",
-                geometry: conflict.draft?.geometry,
-                present: !!conflict.draft,
-                tone: "draft",
-              },
-            ]}
-          />
+          {!!(
+            conflict.base?.geometry ||
+            conflict.current?.geometry ||
+            conflict.draft?.geometry
+          ) && (
+            <GeometryPreview
+              className={styles.preview}
+              layers={[
+                {
+                  id: "base",
+                  label: `基线`,
+                  geometry: conflict.base?.geometry,
+                  present: !!conflict.base,
+                  tone: "base",
+                },
+                {
+                  id: "current",
+                  label: `已发布`,
+                  geometry: conflict.current?.geometry,
+                  present: !!conflict.current,
+                  tone: "current",
+                },
+                {
+                  id: "draft",
+                  label: "我的",
+                  geometry: conflict.draft?.geometry,
+                  present: !!conflict.draft,
+                  tone: "draft",
+                },
+              ]}
+            />
+          )}
         </div>
       )}
       {!readOnly && !editing && (

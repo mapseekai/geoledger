@@ -276,3 +276,124 @@ fn postgis_hot_spatial_queries_pipeline_preserves_statement_budgets() -> TestRes
     );
     Ok(())
 }
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn postgis_hot_spatial_queries_merge_stage_reuses_relation_and_clears_transaction_rows()
+-> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut admin = ::postgres::Client::connect(&dsn, ::postgres::NoTls)?;
+    let database: String = admin.query_one("SELECT current_database()", &[])?.get(0);
+    assert_eq!(database, "geoledger_test");
+    let storage = Storage::Postgis(dsn);
+    let pool = Arc::new(postgres::Pool::new(crate::StorageOptions {
+        pool_size: 1,
+        ..Default::default()
+    }));
+    let timeout = Duration::from_secs(30);
+    let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+    t.begin_merge()?;
+    let relation: String = t
+        .query_one("SELECT 'pg_temp.gl_merge_stage'::regclass::oid::text", &[])?
+        .get(0usize)?;
+    t.stage_merge("d", "old", &None, &Some("{}".into()))?;
+    t.flush_stage()?;
+    t.commit()?;
+    let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+    t.begin_merge()?;
+    assert_eq!(
+        t.query_one("SELECT 'pg_temp.gl_merge_stage'::regclass::oid::text", &[])?
+            .get::<_, String>(0usize)?,
+        relation
+    );
+    assert_eq!(
+        t.query_one("SELECT count(*) FROM gl_merge_stage", &[])?
+            .get::<_, i64>(0usize)?,
+        0
+    );
+    t.stage_merge("d", "rollback", &None, &Some("{}".into()))?;
+    t.flush_stage()?;
+    drop(t);
+    let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+    t.begin_merge()?;
+    assert_eq!(
+        t.query_one("SELECT count(*) FROM gl_merge_stage", &[])?
+            .get::<_, i64>(0usize)?,
+        0
+    );
+    t.stage_merge("d", "pending", &None, &Some("{}".into()))?;
+    t.begin_merge()?;
+    t.flush_stage()?;
+    assert_eq!(
+        t.query_one("SELECT count(*) FROM gl_merge_stage", &[])?
+            .get::<_, i64>(0usize)?,
+        0
+    );
+    t.commit()?;
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn postgis_hot_spatial_queries_publication_looks_up_changed_history() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut admin = ::postgres::Client::connect(&dsn, ::postgres::NoTls)?;
+    let database: String = admin.query_one("SELECT current_database()", &[])?.get(0);
+    assert_eq!(database, "geoledger_test");
+    let storage = Storage::Postgis(dsn);
+    let pool = Arc::new(postgres::Pool::default());
+    let timeout = Duration::from_secs(30);
+    Client::open(&storage, &pool, timeout)?.migrate()?;
+    let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+    let project = uuid::Uuid::new_v4().to_string();
+    t.execute(
+        "INSERT INTO gl_projects(id,name) VALUES($1,'plan')",
+        &[&project],
+    )?;
+    t.execute(
+        "INSERT INTO gl_project_members(project,subject,role) VALUES($1,'alice','owner')",
+        &[&project],
+    )?;
+    t.execute(
+        "INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES($1,'d','points','point')",
+        &[&project],
+    )?;
+    t.execute(
+        "INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES($1,'w','alice',0)",
+        &[&project],
+    )?;
+    t.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,1,'w','alice','seed'),($1,2,'w','alice','edit')", &[&project])?;
+    t.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties) SELECT $1,'d',lpad(n::text,8,'0'),1,'{}' FROM generate_series(1,10000) n", &[&project])?;
+    t.batch_execute("ANALYZE gl_history")?;
+    t.begin_merge()?;
+    t.stage_merge("d", "00000001", &Some("{}".into()), &None)?;
+    t.close_history(&project, 2)?;
+    let sql: String = t.query_one("SELECT statement FROM pg_prepared_statements WHERE statement LIKE 'UPDATE gl_history%SET valid_to%'", &[])?.get(0usize)?;
+    let plan = t
+        .query(
+            &format!("EXPLAIN (ANALYZE, COSTS OFF) {sql}"),
+            &[&project, &2_i64],
+        )?
+        .iter()
+        .map(|r| r.get::<_, String>(0usize))
+        .collect::<Result<Vec<_>>>()?
+        .join("\n");
+    assert!(
+        plan.contains("Index Scan using history_live"),
+        "publication lost live-key lookup: {plan}"
+    );
+    assert!(
+        !plan.contains("Seq Scan on gl_history"),
+        "small publication scanned history: {plan}"
+    );
+    assert_eq!(
+        t.query_one(
+            "SELECT count(*) FROM gl_history WHERE project=$1 AND valid_to=2",
+            &[&project]
+        )?
+        .get::<_, i64>(0usize)?,
+        1
+    );
+    eprintln!("{plan}");
+    Ok(())
+}

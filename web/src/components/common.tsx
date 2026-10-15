@@ -1,4 +1,12 @@
 "use client";
+import {
+  Empty as EmptyRoot,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyContent,
+} from "./ui/empty";
 import { count, fullTime, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -54,14 +62,16 @@ export function Empty({
   action?: ReactNode;
 }) {
   return (
-    <div className="empty">
-      <span className="empty-icon">
-        <Icon />
-      </span>
-      <h3>{title}</h3>
-      {children && <p>{children}</p>}
-      {action && <div className="empty-action">{action}</div>}
-    </div>
+    <EmptyRoot>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Icon />
+        </EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        {children && <EmptyDescription>{children}</EmptyDescription>}
+      </EmptyHeader>
+      {action && <EmptyContent>{action}</EmptyContent>}
+    </EmptyRoot>
   );
 }
 export function Loading({ rows = 5 }: { rows?: number }) {
@@ -152,6 +162,26 @@ export function Tip({
     </Tooltip>
   );
 }
+function useRestoreFocus(
+  onCloseAutoFocus?: ComponentProps<typeof DialogContent>["onCloseAutoFocus"],
+) {
+  const [opener] = useState(() =>
+    typeof document !== "undefined" &&
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
+  );
+  const restoreFocus: NonNullable<
+    ComponentProps<typeof DialogContent>["onCloseAutoFocus"]
+  > = (event) => {
+    onCloseAutoFocus?.(event);
+    if (!event.defaultPrevented && opener?.isConnected) {
+      event.preventDefault();
+      opener.focus();
+    }
+  };
+  return restoreFocus;
+}
 /** Destructive confirmation; stays open while the action runs. */
 export function Confirm({
   title,
@@ -170,6 +200,7 @@ export function Confirm({
   confirm: () => void;
   close: () => void;
 }) {
+  const restoreFocus = useRestoreFocus();
   return (
     <AlertDialog
       open
@@ -178,6 +209,7 @@ export function Confirm({
       }}
     >
       <AlertDialogContent
+        onCloseAutoFocus={restoreFocus}
         className="gl-dialog is-sm is-alert"
         aria-describedby={description ? undefined : undefined}
       >
@@ -249,6 +281,7 @@ export function Modal({
   bodyClassName?: string;
   onCloseAutoFocus?: ComponentProps<typeof DialogContent>["onCloseAutoFocus"];
 }) {
+  const restoreFocus = useRestoreFocus(onCloseAutoFocus);
   // Dialogs only mount after user interaction, so reading the viewport is safe.
   const [phone, setPhone] = useState(phoneQuery);
   useEffect(() => {
@@ -289,7 +322,7 @@ export function Modal({
       <Sheet open onOpenChange={onOpenChange}>
         <SheetContent
           side="bottom"
-          onCloseAutoFocus={onCloseAutoFocus}
+          onCloseAutoFocus={restoreFocus}
           className={cn(frame, "is-sheet")}
           aria-describedby={undefined}
           onOpenAutoFocus={focusFrame}
@@ -310,7 +343,7 @@ export function Modal({
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
-        onCloseAutoFocus={onCloseAutoFocus}
+        onCloseAutoFocus={restoreFocus}
         className={frame}
         aria-describedby={undefined}
         onOpenAutoFocus={focusFrame}

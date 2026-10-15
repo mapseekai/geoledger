@@ -78,7 +78,8 @@ with sync_playwright() as playwright:
         if rows:
             expect(page.get_by_role('row').filter(has_text=rows[0]['id'])).to_be_visible()
         else:
-            expect(page.get_by_role('row')).to_have_count(1)
+            expect(page.locator('[data-slot=empty]')).to_be_visible()
+            expect(page.locator('tbody tr:not(:has([data-slot=empty]))')).to_have_count(0)
         return rows
 
     def find_user_row(user_id):
@@ -95,7 +96,7 @@ with sync_playwright() as playwright:
         raise AssertionError('User pagination did not terminate')
 
     def filter_users(status):
-        return user_page(page.locator('.panel-toolbar').get_by_role('button', name=status, exact=True))
+        return user_page(page.get_by_role('radiogroup', name='用户状态').get_by_role('radio', name=status, exact=True))
 
     phase = 'login password UTF-8 bounds'
     page.goto(args.url + '/login')
@@ -199,7 +200,7 @@ with sync_playwright() as playwright:
     expect(other.get_by_role('dialog')).to_have_count(0)
     key_context = browser.new_context(); keypage = key_context.new_page()
     keypage.goto(args.url + '/login')
-    keypage.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    keypage.get_by_role('tab', name='API Key 登录', exact=True).click()
     keypage.get_by_label('API Key', exact=True).fill(key)
     keypage.get_by_role('button', name='进入控制台', exact=True).click()
     keypage.wait_for_url('**/projects')
@@ -280,7 +281,7 @@ with sync_playwright() as playwright:
         response = loaded.value
         assert response.status == 200
         rows = response.json()
-        expect(page.locator('tbody tr')).to_have_count(len(rows))
+        expect(page.locator('tbody tr:not(:has([data-slot=empty]))')).to_have_count(len(rows))
         for row in rows:
             expect(page.locator('tbody tr').filter(has_text=row['id'])).to_be_visible()
         return rows
@@ -336,7 +337,7 @@ with sync_playwright() as playwright:
                 held[0][0].fulfill(response=held[0][1])
             page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
             assert page.locator('tbody').inner_text() == expected_text, 'Old refresh overwrote current query'
-            expect(page.locator('tbody tr')).to_have_count(len(fresh))
+            expect(page.locator('tbody tr:not(:has([data-slot=empty]))')).to_have_count(len(fresh))
         finally:
             page.unroute('**/api/auth', intercept)
 
@@ -356,8 +357,8 @@ with sync_playwright() as playwright:
 
     phase = 'late old-status and old-page manual refresh'
     list_page('list_users', lambda: page.goto(args.url + '/users'))
-    late_refresh('list_users', lambda: page.locator('.panel-toolbar').get_by_role('button', name='已删除', exact=True).click())
-    list_page('list_users', lambda: page.locator('.panel-toolbar').get_by_role('button', name='全部', exact=True).click())
+    late_refresh('list_users', lambda: page.get_by_role('radiogroup', name='用户状态').get_by_role('radio', name='已删除', exact=True).click())
+    list_page('list_users', lambda: page.get_by_role('radiogroup', name='用户状态').get_by_role('radio', name='全部', exact=True).click())
     # A refresh clears rows, so Next is correctly disabled while it is pending.
     # Start on page two, then return Home while that page's refresh is held.
     list_page('list_users', page.get_by_role('button', name='下一页', exact=True).click)
@@ -368,7 +369,7 @@ with sync_playwright() as playwright:
     fixture_row = find_user_row(sorted(fixture_users)[0])
     fixture_row.get_by_role('button', name='编辑', exact=True).click()
     page.get_by_role('dialog').get_by_label('显示名称', exact=True).fill('pagination fixture edited')
-    late_refresh('list_users', lambda: page.locator('.panel-toolbar').get_by_role('button', name='已删除', exact=True).click(), lambda: confirm(page, '确认编辑用户', admin['password']))
+    late_refresh('list_users', lambda: page.get_by_role('radiogroup', name='用户状态').get_by_role('radio', name='已删除', exact=True).click(), lambda: confirm(page, '确认编辑用户', admin['password']))
     completed.append('late-post-write-status-response')
 
     phase = 'csrf, logout and fixation'

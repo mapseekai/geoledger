@@ -33,7 +33,7 @@ with sync_playwright() as p:
     page.goto(origin+'/projects')
     page.wait_for_url('**/login')
     page.screenshot(path=str(shots/'next-login.png'), full_page=True)
-    page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_role('tab', name='API Key 登录', exact=True).click()
     page.get_by_label('API Key',exact=True).fill('invalid-test-token')
     page.get_by_role('button',name='进入控制台').click()
     expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_be_visible()
@@ -138,7 +138,7 @@ with sync_playwright() as p:
     page.get_by_role('dialog').get_by_role('button',name='重试原发布',exact=True).click()
     page.wait_for_url('**/login?expired=1')
     assert page.evaluate('sessionStorage.getItem("gl.publication")') is not None
-    page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.get_by_role('tab', name='API Key 登录', exact=True).click()
     page.get_by_label('API Key',exact=True).fill(api_key)
     page.get_by_role('button',name='进入控制台').click()
     page.wait_for_url('**/projects')

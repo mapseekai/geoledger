@@ -1,4 +1,5 @@
 "use client";
+import { Card } from "./ui/card";
 import { toast } from "sonner";
 import { call, type Dataset, type Info, type Project } from "@/lib/browser-api";
 import {
@@ -250,7 +251,7 @@ function Stat({
   hint?: string;
 }) {
   return (
-    <div className="stat-card">
+    <Card className="stat-card">
       <div className="stat-card-head">
         <span>{label}</span>
         <span className="stat-icon" aria-hidden="true">
@@ -259,7 +260,7 @@ function Stat({
       </div>
       <strong className="stat-value">{value}</strong>
       {hint && <small>{hint}</small>}
-    </div>
+    </Card>
   );
 }
 export function Datasets({

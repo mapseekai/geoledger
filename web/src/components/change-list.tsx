@@ -1,4 +1,10 @@
 "use client";
+import { Table } from "./ui/table";
+import { TableHeader } from "./ui/table";
+import { TableRow } from "./ui/table";
+import { TableHead } from "./ui/table";
+import { TableBody } from "./ui/table";
+import { TableCell } from "./ui/table";
 import {
   diffRows,
   featureName,
@@ -210,20 +216,24 @@ function ChangeDetail({
   return (
     <div className="change-detail">
       <div className="change-detail-grid">
-        <table className="diff-table">
-          <thead>
-            <tr>
-              <th scope="col">字段</th>
-              {change.kind !== "added" && <th scope="col">{beforeLabel}</th>}
-              {change.kind !== "deleted" && <th scope="col">{afterLabel}</th>}
-            </tr>
-          </thead>
-          <tbody>
+        <Table className="diff-table">
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">字段</TableHead>
+              {change.kind !== "added" && (
+                <TableHead scope="col">{beforeLabel}</TableHead>
+              )}
+              {change.kind !== "deleted" && (
+                <TableHead scope="col">{afterLabel}</TableHead>
+              )}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((row) => (
-              <tr key={row.key}>
-                <th scope="row">{row.label}</th>
+              <TableRow key={row.key}>
+                <TableHead scope="row">{row.label}</TableHead>
                 {change.kind !== "added" && (
-                  <td
+                  <TableCell
                     className={cn({
                       "is-old": row.changed && change.kind === "modified",
                     })}
@@ -233,10 +243,10 @@ function ChangeDetail({
                     ) : (
                       <span className="value-missing">—</span>
                     )}
-                  </td>
+                  </TableCell>
                 )}
                 {change.kind !== "deleted" && (
-                  <td
+                  <TableCell
                     className={cn({
                       "is-new": row.changed && change.kind === "modified",
                     })}
@@ -246,12 +256,12 @@ function ChangeDetail({
                     ) : (
                       <span className="value-missing">—</span>
                     )}
-                  </td>
+                  </TableCell>
                 )}
-              </tr>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         <GeometryPreview
           className="is-compact"
           layers={[

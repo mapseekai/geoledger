@@ -10,7 +10,7 @@ with sync_playwright() as pw:
     browser=pw.chromium.launch(headless=True,executable_path=a.chromium)
     context=browser.new_context(viewport={'width':1440,'height':960});page=context.new_page();errors=[]
     page.on('pageerror',lambda error:errors.append(str(error)))
-    page.goto(a.url+'/login');page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+    page.goto(a.url+'/login');page.get_by_role('tab', name='API Key 登录', exact=True).click()
     page.get_by_label('API Key',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
     def call(body):
         response=context.request.post(a.url+'/api/console',data=body,headers={'Origin':a.url})
@@ -28,6 +28,8 @@ with sync_playwright() as pw:
     expect(page.locator('.map-canvas canvas')).to_be_visible(timeout=30000)
     expect(page.locator('.feature-row')).to_have_count(1,timeout=30000)
     page.get_by_role('button',name='新建工作区',exact=True).click()
+    expect(page.get_by_role('combobox',name='数据来源',exact=True)).to_have_attribute('data-value',re.compile(r'.+'))
+    expect(page.locator('.map-progress')).to_have_count(0)
     page.locator('.feature-row').first.click();page.get_by_role('button',name='编辑',exact=True).click()
     feature={'type':'Feature','properties':{'name':'Edited in GeoLedger'},'geometry':{'type':'LineString','coordinates':[[104,35],[106,37]]}}
     page.get_by_label('GeoJSON',exact=True).fill(json.dumps(feature))

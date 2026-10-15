@@ -45,7 +45,7 @@ with sync_playwright() as playwright:
     except Exception:pass
    checkpoint()
  page.on('requestfinished',lambda request: response(request.response()) if request.response() else None)
- page.goto(a.url+'/login');page.get_by_role('button', name='使用 API Key 登录', exact=True).click()
+ page.goto(a.url+'/login');page.get_by_role('tab', name='API Key 登录', exact=True).click()
  page.get_by_label('API Key',exact=True).fill(token);page.get_by_role('button',name='进入控制台').click();page.wait_for_url('**/projects')
  def call(body):
   r=page.evaluate('''async body=>{const t=performance.now();const r=await fetch('/api/console',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {status:r.status,data:await r.text(),ms:performance.now()-t}}''',body)

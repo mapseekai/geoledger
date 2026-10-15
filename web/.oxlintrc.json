@@ -185,7 +185,7 @@
           },
           {
             "pattern": "^Table$",
-            "allow": ["layout", "summary-table"]
+            "allow": ["layout", "summary-table", "diff-table"]
           },
           {
             "pattern": "^TableCaption$",
@@ -202,7 +202,9 @@
               "message-cell",
               "mono",
               "muted",
-              "num"
+              "num",
+              "is-old",
+              "is-new"
             ]
           },
           {
@@ -220,6 +222,25 @@
           {
             "pattern": "^ToggleGroup$",
             "allow": ["layout", "filter-group"]
+          },
+          {
+            "pattern": "^Card$",
+            "allow": [
+              "layout",
+              "panel",
+              "account-profile",
+              "stat-card",
+              "context-card",
+              "login-card"
+            ]
+          },
+          {
+            "pattern": "^CardHeader$",
+            "allow": ["layout", "panel-toolbar"]
+          },
+          {
+            "pattern": "^CardContent$",
+            "allow": ["layout", "panel-content"]
           }
         ]
       }

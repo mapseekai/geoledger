@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+  readdirSync,
+  readFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { createElement } from "react";
@@ -53,4 +59,23 @@ test("design policy accepts supported styles and still rejects violations", () =
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// Primitives belong in ui/, so business components share the same accessible controls.
+test("business UI uses shared primitives instead of raw controls", () => {
+  const raw =
+    /<(button|input|select|textarea|label|table|thead|tbody|tr|th|td|dialog|details|summary|progress|hr)(?=[\s/>])/g;
+  assert.match('<button type="button">', raw);
+  assert.doesNotMatch('<Button type="button">', raw);
+  const scan = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "ui") scan(path);
+      } else if (entry.name.endsWith(".tsx")) {
+        assert.doesNotMatch(readFileSync(path, "utf8"), raw, path);
+      }
+    }
+  };
+  scan(join(process.cwd(), "src"));
 });

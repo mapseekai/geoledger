@@ -60,6 +60,7 @@ import {
   type ReactNode,
 } from "react";
 import { Confirm, ErrorBox, Modal, Notice, Tip, useMedia } from "./common";
+import { useUnsavedChanges } from "./unsaved-changes";
 import { PublishDialog } from "./publish-dialog";
 import { toast } from "sonner";
 import { MapView, kindColors, type MapHandle } from "./map-view";
@@ -218,6 +219,7 @@ export function FeatureExplorer({
   );
   return (
     <section className="gis-workspace" aria-label={`${dataset.name} 地图`}>
+      <h1 className="sr-only">{dataset.name} 地图工作台</h1>
       <FeatureWorkspace
         key={`${dataset.id}:${workspace}`}
         project={project}
@@ -1489,6 +1491,9 @@ export function FeatureEditor({
   save: (features: ImportedFeature[], version?: string) => Promise<string>;
 }) {
   const task = useAction();
+  const [dirty, setDirty] = useState(false);
+  const unsaved = useUnsavedChanges(dirty);
+  const dismiss = () => unsaved.guard(close);
   const [saved, setSaved] = useState(0);
   const cursor = useRef<{
     rows?: ImportedFeature[];
@@ -1508,104 +1513,109 @@ export function FeatureEditor({
     toast.success(
       rows.length > 1 ? `已保存 ${rows.length} 个要素` : "已保存到工作区",
     );
+    unsaved.markSaved();
     close();
   }
   return (
-    <Modal
-      title={feature === "new" ? "添加要素" : "编辑要素"}
-      size="lg"
-      busy={task.busy}
-      close={close}
-    >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          const form = new FormData(e.currentTarget);
-          const id =
-            feature === "new" ? String(form.get("id")).trim() : feature.id;
-          void task.run(() =>
-            (async () => {
-              const raw = featureText(String(form.get("geojson")), id);
-              assertGeometryType(JSON.parse(raw).geometry, geometryType);
-              assertCoordinateDimension(
-                JSON.parse(raw).geometry,
-                coordinateDimension,
-              );
-              await submit([{ id, raw }]);
-            })(),
-          );
-        }}
+    <>
+      <Modal
+        title={feature === "new" ? "添加要素" : "编辑要素"}
+        size="lg"
+        busy={task.busy}
+        close={dismiss}
       >
-        <fieldset disabled={task.busy}>
-          <Label htmlFor="feature-id">要素标识</Label>
-          <Input
-            id="feature-id"
-            name="id"
-            required
-            maxLength={256}
-            defaultValue={feature === "new" ? "" : feature.id}
-            readOnly={feature !== "new"}
-          />
-          <Label htmlFor="geojson">GeoJSON</Label>
-          <Textarea
-            className="code-editor"
-            id="geojson"
-            name="geojson"
-            required
-            rows={14}
-            spellCheck={false}
-            defaultValue={
-              feature === "new"
-                ? JSON.stringify(
-                    {
-                      type: "Feature",
-                      properties: {},
-                      geometry: {
-                        point: { type: "Point", coordinates: [104, 35] },
-                        line: {
-                          type: "LineString",
-                          coordinates: [
-                            [104, 35],
-                            [105, 36],
-                          ],
-                        },
-                        polygon: {
-                          type: "Polygon",
-                          coordinates: [
-                            [
+        <form
+          onChange={() => setDirty(true)}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const form = new FormData(e.currentTarget);
+            const id =
+              feature === "new" ? String(form.get("id")).trim() : feature.id;
+            void task.run(() =>
+              (async () => {
+                const raw = featureText(String(form.get("geojson")), id);
+                assertGeometryType(JSON.parse(raw).geometry, geometryType);
+                assertCoordinateDimension(
+                  JSON.parse(raw).geometry,
+                  coordinateDimension,
+                );
+                await submit([{ id, raw }]);
+              })(),
+            );
+          }}
+        >
+          <fieldset disabled={task.busy}>
+            <Label htmlFor="feature-id">要素标识</Label>
+            <Input
+              id="feature-id"
+              name="id"
+              required
+              maxLength={256}
+              defaultValue={feature === "new" ? "" : feature.id}
+              readOnly={feature !== "new"}
+            />
+            <Label htmlFor="geojson">GeoJSON</Label>
+            <Textarea
+              className="code-editor"
+              id="geojson"
+              name="geojson"
+              required
+              rows={14}
+              spellCheck={false}
+              defaultValue={
+                feature === "new"
+                  ? JSON.stringify(
+                      {
+                        type: "Feature",
+                        properties: {},
+                        geometry: {
+                          point: { type: "Point", coordinates: [104, 35] },
+                          line: {
+                            type: "LineString",
+                            coordinates: [
                               [104, 35],
-                              [105, 35],
                               [105, 36],
-                              [104, 35],
                             ],
-                          ],
-                        },
-                      }[geometryType],
-                    },
-                    null,
-                    2,
-                  )
-                : pretty(feature.geojson)
-            }
-          />
-        </fieldset>
-        {saved > 0 && <p role="status">已保存 {saved} 个要素</p>}
-        <ErrorBox message={task.error} />
-        <div className="form-actions">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={close}
-            disabled={task.busy}
-          >
-            取消
-          </Button>
-          <Button type="submit" disabled={task.busy}>
-            {task.busy ? "正在保存…" : "保存到工作区"}
-          </Button>
-        </div>
-      </form>
-    </Modal>
+                          },
+                          polygon: {
+                            type: "Polygon",
+                            coordinates: [
+                              [
+                                [104, 35],
+                                [105, 35],
+                                [105, 36],
+                                [104, 35],
+                              ],
+                            ],
+                          },
+                        }[geometryType],
+                      },
+                      null,
+                      2,
+                    )
+                  : pretty(feature.geojson)
+              }
+            />
+          </fieldset>
+          {saved > 0 && <p role="status">已保存 {saved} 个要素</p>}
+          <ErrorBox message={task.error} />
+          <div className="form-actions">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={dismiss}
+              disabled={task.busy}
+            >
+              取消
+            </Button>
+            <Button type="submit" disabled={task.busy}>
+              {task.busy ? "正在保存…" : "保存到工作区"}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+      {unsaved.confirmation}
+    </>
   );
 }
 export { PublishDialog };

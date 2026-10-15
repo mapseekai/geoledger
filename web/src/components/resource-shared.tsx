@@ -1,11 +1,18 @@
 "use client";
+import { FieldGroup, Field, FieldLabel } from "./ui/field";
+import {
+  Card,
+  CardHeader,
+  CardContent,
+  CardTitle,
+  CardDescription,
+} from "./ui/card";
 import { cn } from "@/lib/utils";
 import { useState, type ReactNode } from "react";
 import { ErrorBox, Modal } from "./common";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Label } from "./ui/label";
 const labels: Record<string, string> = {
   owner: "所有者",
   editor: "编辑者",
@@ -46,10 +53,10 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section className={className ? `panel ${className}` : "panel"}>
-      {toolbar && <div className="panel-toolbar">{toolbar}</div>}
-      {children}
-    </section>
+    <Card className={cn("panel", className)}>
+      {toolbar && <CardHeader className="panel-toolbar">{toolbar}</CardHeader>}
+      <CardContent className="panel-content">{children}</CardContent>
+    </Card>
   );
 }
 /** Card title block used at the start of a panel toolbar. */
@@ -65,10 +72,10 @@ export function PanelTitle({
   return (
     <div className="panel-title">
       <div className="panel-title-row">
-        <strong>{title}</strong>
+        <CardTitle>{title}</CardTitle>
         {children}
       </div>
-      {description && <span>{description}</span>}
+      {description && <CardDescription>{description}</CardDescription>}
     </div>
   );
 }
@@ -138,32 +145,36 @@ export function NameDialog({
           });
         }}
       >
-        <Label htmlFor="name">
-          {confirmName === undefined ? "名称" : "输入名称确认删除"}
-        </Label>
-        <Input
-          id="name"
-          name="name"
-          defaultValue={initialName}
-          autoFocus
-          required
-          maxLength={256}
-        />
-        {children}
-        <ErrorBox message={task.error} />
-        <div className="form-actions">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={close}
-            disabled={task.busy}
-          >
-            取消
-          </Button>
-          <Button type="submit" disabled={task.busy}>
-            {task.busy ? "正在处理…" : actionLabel}
-          </Button>
-        </div>
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="name">
+              {confirmName === undefined ? "名称" : "输入名称确认删除"}
+            </FieldLabel>
+            <Input
+              id="name"
+              name="name"
+              defaultValue={initialName}
+              autoFocus
+              required
+              maxLength={256}
+            />
+          </Field>
+          {children}
+          <ErrorBox message={task.error} />
+          <div className="form-actions">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={close}
+              disabled={task.busy}
+            >
+              取消
+            </Button>
+            <Button type="submit" disabled={task.busy}>
+              {task.busy ? "正在处理…" : actionLabel}
+            </Button>
+          </div>
+        </FieldGroup>
       </form>
     </Modal>
   );
