@@ -99,10 +99,10 @@ fn read_api_key(
                 return Err("API Key file must be a regular file".into());
             }
             let file = std::fs::File::open(&path)?;
-            let opened = file.metadata()?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
+                let opened = file.metadata()?;
                 if opened.mode() & 0o077 != 0
                     || metadata.dev() != opened.dev()
                     || metadata.ino() != opened.ino()

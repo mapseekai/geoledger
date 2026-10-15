@@ -62,7 +62,7 @@ def main() -> int:
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT
     ).decode().split("\0")
     tracked = {name for name in indexed if name and (ROOT / name).is_file()}
-    documents = [ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "SECURITY.md", ROOT / "CHANGELOG.md", *sorted((ROOT / "docs").rglob("*.md"))]
+    documents = [*sorted(ROOT.glob("README*.md")), ROOT / "AGENTS.md", ROOT / "SECURITY.md", ROOT / "CHANGELOG.md", *sorted((ROOT / "docs").rglob("*.md"))]
     version_match = re.search(r"pub const FORMAT_VERSION: i32 = (\d+);", (ROOT / "crates/engine/src/lib.rs").read_text())
     if version_match is None:
         raise ValueError("engine storage format declaration is missing")

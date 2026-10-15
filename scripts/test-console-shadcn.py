@@ -3,10 +3,11 @@
 import argparse, json, uuid
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
+from browser_test_support import add_browser_arguments, launch_browser
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--url', default='http://localhost:13001')
 parser.add_argument('--api-key-file',required=True)
-parser.add_argument('--chromium')
+add_browser_arguments(parser)
 parser.add_argument('--password-file',required=True)
 parser.add_argument('--member-id',required=True,help='Existing stable user UUID in the disposable fixture')
 parser.add_argument('--output',default='target/auth-refactor-shadcn')
@@ -15,7 +16,7 @@ api_key=Path(args.api_key_file).read_text().strip()
 password=Path(args.password_file).read_text().strip()
 output=Path(args.output);output.mkdir(parents=True,exist_ok=True)
 with sync_playwright() as p:
-    browser=p.chromium.launch(headless=True,executable_path=args.chromium,chromium_sandbox=True, args=['--disable-dev-shm-usage'])
+    browser=launch_browser(p, args)
     page=browser.new_page(viewport={'width':1440,'height':1000})
     errors=[]
     page.on('pageerror',lambda error:errors.append(str(error)))

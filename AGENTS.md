@@ -25,6 +25,24 @@ protoc, the pinned Go plugins, grpcio-tools and ts-proto; see docs/development.m
 Opt-in PostGIS tests use GL_TEST_DATABASE_URL and require database geoledger_test.
 Keep fixtures in disposable test environments. Capacity tests are explicit opt-in.
 
+Scope platform-specific imports, bindings and checks with matching cfg attributes.
+Keep Unix credential-file permission and device/inode checks intact; fix Windows
+warnings without weakening lints. Run native platform checks where available and
+distinguish Linux, cross-compilation and native Windows evidence.
+
+The two console CI browser suites use scripts/browser_test_support.py and keep
+Chromium sandboxing enabled. Ubuntu 24.04 CI uses the installed Chrome channel
+with its existing AppArmor support. Do not disable browser sandboxing or change
+system security restrictions to make tests pass; report an environment blocker.
+
+For dependency security fixes, prefer compatible targeted lockfile updates and
+run scripts/audit.sh plus the affected TLS/SDK regressions. Account for Rust,
+npm, Go and Python audits even when an earlier scanner stops the script. Record
+commands, toolchains, advisory sources and pass/fail/skip/block status explicitly;
+an alternate database snapshot is distinct from the live audit endpoint.
+Keep validation reports separate from product claims. Keep README.md and
+README.en.md aligned, with capabilities and examples grounded in current source.
+
 Target the current storage and protocol only: no legacy readers, command aliases,
 or upgrades from old storage formats. Initialize fresh databases directly at the
 current format. Structural storage changes require a new format version.

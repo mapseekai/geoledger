@@ -127,7 +127,11 @@ jobs:
           rustup toolchain install 1.92.0 --profile minimal
           cargo +1.92.0 build --locked -p geoledger-server
           python3 -m pip install playwright
-          python3 -m playwright install --with-deps chromium
+          python3 -m playwright install-deps chromium
+          # Ubuntu's existing AppArmor profile permits sandboxed Chrome at this
+          # system path, unlike Playwright's downloaded Chromium cache binaries.
+          test -x /opt/google/chrome/chrome
+          /opt/google/chrome/chrome --version
       - name: Browser to Next.js to private Session transport
         env:
           GL_WEB_ORIGIN: http://127.0.0.1:3000
@@ -145,9 +149,8 @@ jobs:
             sleep .2
           done
           python3 scripts/auth_test_support.py --base http://127.0.0.1:7895 --data-dir "$RUNNER_TEMP/console-data" --output "$RUNNER_TEMP/console-data/api-key"
-          python3 scripts/test-console.py --url http://127.0.0.1:3000 --api-key-file "$RUNNER_TEMP/console-data/api-key"
-          chromium=$(python3 -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')
-          python3 scripts/test-console-shadcn.py --url http://127.0.0.1:3000 --api-key-file "$RUNNER_TEMP/console-data/api-key" --password-file "$RUNNER_TEMP/console-data/api-key.password" --member-id "$(cat "$RUNNER_TEMP/console-data/api-key.member-id")" --chromium "$chromium"
+          python3 scripts/test-console.py --url http://127.0.0.1:3000 --api-key-file "$RUNNER_TEMP/console-data/api-key" --browser-channel chrome
+          python3 scripts/test-console-shadcn.py --url http://127.0.0.1:3000 --api-key-file "$RUNNER_TEMP/console-data/api-key" --password-file "$RUNNER_TEMP/console-data/api-key.password" --member-id "$(cat "$RUNNER_TEMP/console-data/api-key.member-id")" --browser-channel chrome
   msrv:
     needs: source
     runs-on: ubuntu-24.04

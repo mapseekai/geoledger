@@ -154,6 +154,10 @@ python3 scripts/test-console.py \
 ```
 
 也可用 `--chromium /usr/bin/chromium` 指定已安装浏览器。
+`test-console.py` 和 `test-console-shadcn.py` 共用开启沙箱的启动配置，
+也支持 `--browser-channel chrome`（与 `--chromium` 互斥）。Ubuntu 24.04 CI
+使用 runner 预装的 Chrome stable，其系统安装路径已有 AppArmor 配置允许沙箱所需的
+用户命名空间；不关闭浏览器沙箱或修改系统安全限制。本地运行也需要支持浏览器沙箱的环境。
 测试会写入新项目，验证登录、CSRF、精确数字、断线后原请求重试、分页、
 撤销、权限、审计、退出与手机布局。只对隔离测试服务运行。
 前端检查独立于 Rust 的 `check.sh`，CI 单独安装依赖并执行 Web 检查。

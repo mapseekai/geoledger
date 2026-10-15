@@ -1,23 +1,25 @@
 # GeoLedger
 
-面向空间要素的版本管理与协作编辑服务。
+[中文](README.md) · [English](README.en.md)
 
-GeoLedger 使用项目、数据集和工作区组织管理空间数据。用户在各自的工作区中编辑要素，通过差异审阅、属性级三方合并和发布形成共享修订，并通过历史查询、提交撤销、成员权限与审计记录管理数据变化。
+GeoLedger 是空间要素的版本管理与协作编辑服务。团队用项目组织数据集，在各自的工作区中编辑 GeoJSON 要素，审阅差异、解决冲突，再发布为共享修订。历史查询、提交撤销、成员角色和审计记录贯穿这套工作流。
 
-项目提供 Rust 服务端、远程 `gl` 命令行工具、Web 管理控制台，以及 Go、Rust、TypeScript / Node.js 和 Python SDK。存储后端包括 SQLite + SpatiaLite 与 PostGIS，各入口通过统一业务服务执行数据管理和版本操作。
+仓库包含 Rust 服务端 `geoledger-server`、远程命令行工具 `gl`、Web 控制台，以及 Rust、Go、TypeScript / Node.js 和 Python SDK。服务端管理 SQLite + SpatiaLite 或 PostGIS 中的数据，HTTP 与 gRPC 入口调用同一个业务引擎。
+
+当前源码版本为 `0.3.0-alpha.3`，存储格式为 16，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。
 
 ## 核心能力
 
-| 能力 | 说明 |
+| 能力 | 使用方式 |
 |---|---|
-| 空间数据管理 | 按点、线、面类型组织数据集，配置二维或三维坐标；通过 GeoJSON 编辑和导入要素。 |
-| 坐标系管理 | 数据集保存 EPSG 标识或自定义 CRS 定义，默认使用 `EPSG:4326`；导入、存储和发布保留源坐标。 |
-| 工作区协作 | 每个用户维护独立草稿，一个工作区可以包含多个数据集的变更；提供分批保存、差异查看、基准更新和发布。 |
-| 合并与版本管理 | 对属性执行三方合并，提供冲突字段审阅与解决；发布生成共享修订，并保存发布回执和审计记录。 |
-| 历史查询与撤销 | 按修订读取要素，查询提交详情；将指定提交的反向变更保存为工作区，再发布为新修订。 |
-| PostGIS 业务表纳管 | 接入已有业务表并建立初始版本；发布事务同步修改源表，同时保留源表坐标系。 |
-| GIS 管理界面 | 提供地图、图层树、要素搜索、属性表和 GeoJSON 查看编辑，支持工作区、版本历史、成员权限与审计管理。 |
-| 身份与访问管理 | 管理用户、项目成员角色、API Key 和数据库 Session，配置 TLS 与 mTLS 传输。 |
+| 数据集与坐标系 | 按点、线、面组织要素，设置二维或三维坐标以及 EPSG 标识或自定义 CRS；默认坐标系为 `EPSG:4326`。保存与发布保留源坐标和 GeoJSON 数值。 |
+| 工作区与差异审阅 | 一个工作区可编辑多个数据集，分批保存新增、修改和删除，并查看要素差异及数据集变更统计。草稿版本用于并发编辑校验。 |
+| 三方合并与发布 | 比较基础修订、当前共享修订和草稿，合并独立属性修改，按字段审阅冲突。发布在同一事务中写入要素、历史、修订、回执和审计。 |
+| 发布结果恢复 | SDK 保留发布请求 ID 和原始请求内容；连接中断后通过原请求重试确认结果。控制台提供发布恢复流程。 |
+| 查询与撤销 | 按修订、要素 ID、空间范围和分页游标查询；为指定提交生成反向变更工作区，经审阅后发布为新修订。 |
+| PostGIS 表纳管 | 将已有业务表接入数据集并建立初始版本，发布事务同步原表，保留源表坐标系。 |
+| GIS 控制台 | 地图、图层树、要素搜索、属性表、GeoJSON 编辑与上传、工作区版本图、冲突审阅和手机布局。地图预览按需转换到 WGS 84。 |
+| 身份与访问 | 用户管理、项目成员角色、个人 API Key、数据库会话，以及 HTTP/gRPC 的 TLS 与 mTLS 配置。 |
 
 ## 获取代码
 
@@ -26,150 +28,133 @@ git clone https://github.com/mapseekai/geoledger.git
 cd geoledger
 ```
 
-以下命令均从仓库根目录执行。
+下文的 shell 命令从仓库根目录执行。
 
 ## 环境准备
 
-| 使用场景 | 环境与工具 |
+| 场景 | 工具与依赖 |
 |---|---|
-| 服务端与 CLI 构建 | Rust 1.88+、Cargo、protoc、C 工具链和 CMake。Linux/macOS 同时准备 pkg-config 与 OpenSSL 开发库。 |
-| SQLite 运行环境 | SpatiaLite 原生扩展及其运行依赖。可通过 `GL_SPATIALITE_EXTENSION` 指定扩展路径；项目容器镜像包含该扩展。 |
-| Web 控制台与 TypeScript SDK | Node.js 22 与 npm。 |
-| Python SDK | Python 3.10+。 |
-| 仓库检查 | Python 3、Bash、rustfmt 和 Clippy。 |
-| 容器部署 | Docker 与 Docker Compose。 |
-| PostGIS 部署 | 已启用 PostGIS 扩展的 PostgreSQL 数据库，以及对应服务账号。 |
+| Rust 构建 | Rust 1.88+、Cargo、protoc、C 工具链和 CMake；Linux/macOS 还需 pkg-config 与 OpenSSL 开发库。CI 的常规 Rust 检查使用 1.92.0。 |
+| SQLite 服务 | SpatiaLite 原生扩展及其依赖；`GL_SPATIALITE_EXTENSION` 可指定扩展路径。仓库 Dockerfile 包含对应运行环境。 |
+| PostGIS 服务 | 启用 PostGIS 扩展的 PostgreSQL 数据库及服务账号。 |
+| Web 与 TypeScript SDK | Node.js 22 与 npm。 |
+| Go SDK | Go 1.27.2+，见 [go.mod](sdk/go/go.mod)。 |
+| Python SDK | Python 3.10+，见 [pyproject.toml](sdk/python/pyproject.toml)。 |
+| 仓库检查 | Python 3.11+、Bash、rustfmt、Clippy；浏览器验证使用 Python Playwright 和可启用沙箱的 Chromium/Chrome。 |
+| 容器运行 | Docker、Docker Compose，以及用于生成会话密钥的 OpenSSL。 |
 
-各操作系统的工具准备步骤见[快速开始](docs/getting-started.md#环境准备)。Go SDK 的工具链版本以 `sdk/go/go.mod` 为准。
-
-Rust 依赖由 `Cargo.lock` 固定，Web 与 TypeScript SDK 依赖由各自的 `package-lock.json` 固定。构建时使用 `cargo --locked`，安装前端依赖时使用 `npm ci`。
+Linux、macOS 和 Windows 的准备步骤见[快速开始](docs/getting-started.md#环境准备)。Rust 使用 `Cargo.lock`，Web 与 TypeScript SDK 使用各自的 `package-lock.json`；对应安装命令为 `cargo --locked` 与 `npm ci`。
 
 ## 主要配置
 
-服务端配置模板位于 `.env.example`，控制台配置模板位于 `web/.env.example`。服务端同时提供命令行参数和环境变量配置。
+服务端选项见 `.env.example` 与 `geoledger-server --help`，控制台选项见 `web/.env.example`。将所需服务端变量载入进程环境；Compose 使用 `.env` 进行变量替换，Next.js 读取 `web/.env.local`。
 
-| 配置项 | 默认值或设置方式 | 用途 |
+| 变量 | 默认值或设置方式 | 用途 |
 |---|---|---|
-| `GL_STORAGE` | `sqlite` | 选择 `sqlite` 或 `postgis` 存储后端。 |
-| `GL_DATA_DIR` | `./geoledger-data` | 服务端数据与身份配置目录。 |
-| `GL_HTTP_LISTEN` | `127.0.0.1:7881` | HTTP 接口监听地址。 |
-| `GL_GRPC_LISTEN` | `127.0.0.1:7882` | gRPC 接口监听地址。 |
-| `GL_DATABASE_URL` | 按数据库部署设置 | PostGIS 连接信息。 |
-| `GL_SPATIALITE_EXTENSION` | 按运行时安装路径设置 | SpatiaLite 原生扩展路径。 |
-| `GL_WEB_ENDPOINT` | `http://127.0.0.1:7881` | 控制台私有 HTTP 服务地址。 |
-| `GL_WEB_ORIGIN` | `http://localhost:3000` | 控制台的浏览器访问地址。 |
-| `GL_WEB_SESSION_SECRET` | 设置至少 32 字符的随机密钥 | 控制台会话配置。 |
+| `GL_STORAGE` | `sqlite` | 选择 `sqlite` 或 `postgis`。 |
+| `GL_DATA_DIR` | `./geoledger-data` | 服务端数据目录。 |
+| `GL_HTTP_LISTEN` | `127.0.0.1:7881` | HTTP 监听地址。 |
+| `GL_GRPC_LISTEN` | `127.0.0.1:7882` | gRPC 监听地址。 |
+| `GL_DATABASE_URL` | PostGIS 部署时设置 | 数据库连接及 TLS 参数。 |
+| `GL_SPATIALITE_EXTENSION` | 按安装路径设置 | SpatiaLite 扩展文件。 |
+| `GL_ADMIN_USERNAME` | `admin` | 初始化管理员名称。 |
+| `GL_ADMIN_PASSWORD` | 可在初始化前设置 | 初始密码；省略时生成随机密码并写入私有文件。 |
+| `GL_WEB_ENDPOINT` | `http://127.0.0.1:7881` | 控制台连接的私有 HTTP 服务。 |
+| `GL_WEB_ORIGIN` | `http://localhost:3000` | 浏览器实际访问的完整 origin。 |
+| `GL_WEB_SESSION_SECRET` | 至少 32 字符的随机值 | 加密控制台会话 Cookie。 |
+| `GL_ENDPOINT` | `http://127.0.0.1:7882` | `gl` 连接的 gRPC 服务。 |
 
-`gl` 通过 `GL_ENDPOINT` 配置服务地址，通过 `GL_API_KEY` 或 `--api-key-file` 配置 API Key。首次管理员登录 Console 并修改初始密码后，可创建个人 API Key 并保存到权限 0600 的纯文本文件。
-
-完整配置见[生产运行](docs/production.md)和[安全配置](docs/security.md)。
+CLI 凭据可选择 `GL_API_KEY` 或私有文件 `GL_API_KEY_FILE` / `--api-key-file`。TLS 证书、私有 CA、请求预算、限流和停机参数见[安全配置](docs/security.md)与[生产运行](docs/production.md)。
 
 ## 快速开始
 
 ### 容器启动
 
-生成会话密钥并启动服务：
-
 ```sh
 export GL_WEB_SESSION_SECRET="$(openssl rand -base64 48)"
 docker compose up --build -d
+curl --fail http://127.0.0.1:7881/ready
 ```
 
-Compose 启动包含业务服务与 Web 控制台的统一镜像，并将数据持久化到 `geoledger-data` 命名卷。
+[compose.yaml](compose.yaml) 构建并启动包含服务端、CLI 和控制台的镜像，将数据保存在 `geoledger-data` 命名卷的 `/data` 中。就绪检查成功时返回 `{"ok":true}`。
 
-| 入口 | 地址 |
+| 入口 | 本地地址 |
 |---|---|
 | Web 控制台 | `http://localhost:3000` |
 | HTTP API | `http://127.0.0.1:7881` |
 | gRPC | `http://127.0.0.1:7882` |
 
-检查服务状态：
+首次启动时，随机管理员凭据保存在 `/data/initial-admin-<id>.json`。在自己的终端中读取该初始化文件：
 
 ```sh
-curl --fail http://127.0.0.1:7881/ready
-docker compose exec geoledger gl --api-key-file /run/secrets/geoledger-api-key info
+docker compose exec geoledger sh -c 'cat /data/initial-admin-*.json'
 ```
 
-就绪检查返回 `{"ok":true}`。首次启动随机生成的管理员密码位于日志提示的数据卷 `initial-admin-<id>.json` 文件；使用用户名和密码登录 Console，修改初始密码，再创建 API Key。上面的 CLI 命令要求先将 Key 保存到指定的私有文件。
+使用其中的用户名和密码登录控制台，完成初始密码修改。在“API Key”页面创建个人密钥，保存在自己的私有凭据文件中，供 CLI 或 SDK 使用。
 
-### 本地服务启动
+### 本地服务与控制台
 
-准备好 SQLite 的 SpatiaLite 运行环境后，构建并启动服务端：
+准备好 SpatiaLite 后，构建二进制并在独立终端启动服务端：
 
 ```sh
 cargo build --locked --bins
 ./target/debug/geoledger-server --data-dir ./geoledger-data
 ```
 
-保持服务端运行，在另一个终端验证连接：
-
-```sh
-curl --fail http://127.0.0.1:7881/ready
-./target/debug/gl --api-key-file ./api-key info
-./target/debug/gl --api-key-file ./api-key projects
-```
-
-服务端首次启动会创建 SQLite 数据库和初始管理员；随机初始密码文件路径仅在日志提示。新数据库使用存储格式 16；`gl info` 展示服务版本、存储后端和接口配置。
-
-### Web 本地开发
-
-先构建 TypeScript SDK，再安装控制台依赖：
+服务端创建 SQLite 数据库及初始管理员，并在日志中给出私有初始化凭据文件的路径。保持服务运行，在另一个终端准备控制台：
 
 ```sh
 npm ci --prefix sdk/ts
 npm --prefix sdk/ts run build
 npm ci --prefix web
-```
-
-创建本地配置并生成会话密钥：
-
-```sh
 cp web/.env.example web/.env.local
 openssl rand -base64 48
 ```
 
-将生成的随机值填入 `web/.env.local` 的 `GL_WEB_SESSION_SECRET`，保持 `GL_WEB_ORIGIN` 与浏览器实际访问地址一致，然后启动开发服务：
+把生成的随机值填入 `web/.env.local` 的 `GL_WEB_SESSION_SECRET`，按上表设置服务地址和浏览器 origin，然后运行：
 
 ```sh
 npm --prefix web run dev
 ```
 
-访问 `http://localhost:3000`，使用用户名密码或 API Key 登录。控制台提供项目、数据集、工作区、版本历史、成员权限、审计和服务信息页面。
+访问 `http://localhost:3000`，用初始管理员凭据登录并修改密码，随后创建 API Key。将 Key 保存为 `./api-key` 纯文本文件；在 Unix 上设置私有权限后验证 CLI：
+
+```sh
+chmod 600 ./api-key
+curl --fail http://127.0.0.1:7881/ready
+./target/debug/gl --api-key-file ./api-key info
+./target/debug/gl --api-key-file ./api-key projects
+```
+
+`info` 输出协议、存储后端和请求规格。详细启动步骤见[快速开始](docs/getting-started.md)，界面操作见[控制台教程](docs/console.md)。
 
 ## 协作工作流
 
-```text
-创建项目与数据集 → 创建工作区 → 保存要素 → 检查差异 → 发布修订 → 查询历史
-```
+1. **组织数据。** 创建项目和数据集，选择几何类型、坐标维度与 CRS。要素通过稳定的字符串 ID 标识。
+2. **编辑草稿。** 创建工作区，保存完整 GeoJSON Feature 或显式删除操作。查询草稿时读取基础修订与工作区增量。
+3. **审阅差异。** 查看 `diff` 和变更统计。共享版本推进时，通过 `base`、`current`、`draft` 对比审阅冲突，提交解决结果并更新基准。
+4. **发布修订。** 发布请求携带工作区版本和请求 ID。事务提交后返回回执；重试沿用同一请求 ID 与请求内容。
+5. **读取历史。** 按修订查询数据与提交详情。共享数据分页沿用首屏修订，空间范围使用数据集 CRS。
+6. **撤销提交。** `restore` 将指定提交的反向变更写入新工作区，审阅后发布新的共享修订。
 
-**组织数据。** 项目组织成员、数据集与共享版本。创建数据集时设置几何类型、坐标维度和坐标系；要素使用稳定的字符串 ID 标识，以属性和几何描述业务内容。
-
-**编辑草稿。** 工作区读取基础修订与自身增量。用户通过完整 GeoJSON Feature 保存新增或修改，通过删除操作记录删除意图。分批保存可将多个数据集的变更组织到同一个工作区。
-
-**审阅和合并。** `Diff` 展示草稿差异。发布时，系统将基础版本、当前共享版本和草稿进行三方比较，对不同属性的修改执行自动合并。冲突审阅展示 `base`、`current`、`draft` 和相关字段，用户提交最终结果后，通过 `Rebase` 更新工作区基准。
-
-**发布共享版本。** `Publish` 在同一事务中写入正式要素、历史记录、项目 HEAD、发布回执和审计。SDK 工作区对象维护草稿版本，并为发布生成和保留请求 ID；使用相同请求 ID 与请求内容重试时，可获取已保存的发布结果。
-
-**查询与撤销。** 要素可按修订、要素 ID 或空间范围读取，空间范围采用数据集坐标系。读取共享数据的后续分页时沿用首屏修订。`Restore` 为指定提交创建反向变更工作区，审阅并发布后形成新修订，同时保留原提交及审计记录。
-
-详细操作见[使用指南](docs/user-guide.md)和[管理控制台](docs/console.md)。
+数据模型和合并规则见[使用指南](docs/user-guide.md)，分页和重试契约见 [API 与 SDK](docs/api.md)。
 
 ## API 与 SDK
 
-HTTP API、gRPC、CLI 和四语言 SDK 共用业务服务。Web 控制台通过 HTTP 接收浏览器操作，其 Node.js 服务端通过私有 Session HTTP transport 调用 GeoLedger。
+HTTP 业务接口位于 `/api/v1`，四语言 SDK 与 CLI 通过 `geoledger.v1` gRPC 协议接入。SDK 使用用户 API Key，工作区对象维护草稿版本和待确认的发布请求。
 
-| 接入方式 | 仓库位置 | 用途 |
-|---|---|---|
-| Rust SDK | `sdk/rust` | Rust 异步应用集成。 |
-| Go SDK | `sdk/go` | 使用标准 `context.Context` 的业务调用。 |
-| TypeScript / Node.js SDK | `sdk/ts` | Node.js 应用与服务端集成。 |
-| Python SDK | `sdk/python` | 数据处理脚本与 Python 应用集成。 |
-| CLI | `crates/cli` | 查询资源、执行版本操作和脚本化调用。 |
-| 协议定义 | `proto` | gRPC 服务与消息定义。 |
+| 接入方式 | 源码与接口 |
+|---|---|
+| Rust | [sdk/rust](sdk/rust)，异步业务客户端。 |
+| Go | [sdk/go](sdk/go)，带 `context.Context` 的业务调用。 |
+| TypeScript / Node.js | [sdk/ts](sdk/ts)，Promise 接口与精确 JSON 处理。 |
+| Python | [sdk/python](sdk/python)，业务对象与上下文管理器。 |
+| CLI | [crates/cli](crates/cli)，`info`、`projects`、`members`、`history` 和通用 `call`。 |
+| gRPC 协议 | [geoledger.proto](proto/geoledger/v1/geoledger.proto)。 |
 
 ### Python 示例
 
-在开发环境安装 SDK：
+安装仓库中的 SDK，并使用前文创建的 `./api-key` 文件：
 
 ```sh
 python3 -m venv .venv
@@ -177,75 +162,71 @@ python3 -m venv .venv
 python -m pip install ./sdk/python
 ```
 
-在环境变量 `GL_API_KEY` 中配置用户 API Key。以下示例创建监测点项目与数据集，保存一个要素，发布后读取对应修订：
+以下代码创建数据集、保存监测点、发布并读回该修订：
 
 ```python
-import os
+from pathlib import Path
 
 from geoledger import Client
 
-with Client("http://127.0.0.1:7882", os.environ["GL_API_KEY"]) as client:
-    project = client.create_project("监测点管理")
+api_key = Path("api-key").read_text().strip()
+with Client("http://127.0.0.1:7882", api_key) as client:
+    project = client.create_project("Monitoring")
     dataset = client.create_dataset(
-        project.id,
-        "monitoring_points",
-        "point",
-        coordinate_dimension=2,
-        crs="EPSG:4326",
+        project.id, "stations", "point",
+        coordinate_dimension=2, crs="EPSG:4326",
     )
     workspace = client.create_workspace(project.id)
-
     workspace.save(dataset.id, {
         "type": "Feature",
         "id": "station-001",
-        "properties": {"name": "一号监测点", "status": "active"},
+        "properties": {"name": "Station 1", "sequence": 9007199254740993},
         "geometry": {"type": "Point", "coordinates": [120.15, 30.27]},
     })
-
     print(workspace.diff())
-    receipt = workspace.publish("新增一号监测点")
+    receipt = workspace.publish("Add station-001")
     snapshot = client.features(
-        project.id,
-        dataset.id,
-        revision=receipt["revision"],
+        project.id, dataset.id, revision=receipt["revision"],
     )
     print(receipt["revision"], snapshot)
 ```
 
-完整接口、各语言示例、分页与发布重试说明见 [API 与 SDK](docs/api.md)。
+结果包含发布修订和要素集合，`sequence` 保留整数值。各语言安装方式、认证、业务错误和发布恢复示例见 [API 与 SDK](docs/api.md)。
 
 ## 项目架构
 
+```text
+Browser -> Next.js BFF -> private Session HTTP -> engine Application
+HTTP API / gRPC -> server adapters -----------> engine Application
+CLI / SDKs -> gRPC ---------------------------> engine Application
+                                                      |
+                                     StorageBackend / RepositoryTransaction
+                                                      |
+                                      SQLite + SpatiaLite / PostGIS
+```
+
+浏览器会话使用加密 HttpOnly Cookie 中的随机 Session ID，身份与有效期由数据库管理。业务引擎通过存储事务接口执行权限检查、草稿编辑与版本发布。
+
 | 路径 | 职责 |
 |---|---|
-| `crates/core` | 核心数据结构与合并逻辑。 |
-| `crates/engine` | 工作区、要素查询、版本发布、权限与存储事务。 |
-| `crates/spatialite` | SpatiaLite 原生运行时集成。 |
-| `crates/server` | 服务启动、HTTP 接口、认证、运行配置与运维命令。 |
-| `crates/rpc` | gRPC 协议适配。 |
-| `crates/cli` | 远程 `gl` 命令行入口。 |
-| `sdk` | Go、Rust、TypeScript 和 Python 客户端。 |
-| `web` | Web 管理控制台及浏览器接口。 |
-| `docs`、`deploy`、`scripts` | 使用文档、部署配置与工程验证脚本。 |
+| `crates/core` | 数据模型与三方合并。 |
+| `crates/engine` | 身份、授权、工作区、历史、发布及存储适配。 |
+| `crates/spatialite` | SpatiaLite 原生连接与几何运行时。 |
+| `crates/server`、`crates/rpc` | HTTP/gRPC、TLS、服务配置与数据运维命令。 |
+| `crates/cli`、`sdk` | 远程命令行及四语言客户端。 |
+| `web` | Next.js 控制台、浏览器接口和地图工作台。 |
+| `deploy`、`scripts` | 部署模板、验证脚本与发布门禁。 |
 
-业务引擎通过存储接口组织事务。SQLite 后端结合 SpatiaLite 原生几何与 RTree 索引，PostGIS 后端使用原生 `geometry` 列与 GiST 索引。两种后端沿用相同的项目、工作区、版本与成员协作流程。
+SQLite 使用 WAL、SpatiaLite 几何和 RTree 空间索引；PostGIS 使用 `geometry` 列和 GiST 索引。存储事务边界与后端一致性要求见[存储扩展](docs/storage.md)。
 
-存储分层与后端接口见[存储扩展](docs/storage.md)。
-
-## 构建、测试与部署
-
-### 构建与检查
-
-构建生产二进制并执行仓库检查：
+## 构建与验证
 
 ```sh
 cargo build --release --locked --bins
 ./scripts/check.sh
 ```
 
-产物位于 `target/release/geoledger-server` 与 `target/release/gl`，Windows 二进制使用 `.exe` 扩展名。
-
-`check.sh` 包含文档与配置一致性检查、Rust 格式检查、Clippy、工作区测试和备份演练。配置 `GL_TEST_DATABASE_URL` 后，脚本执行对应的 PostGIS 集成验证。CI 还配置了双后端 SDK 往返验证、生成代码一致性检查及 Web 验证。
+产物位于 `target/release/geoledger-server` 与 `target/release/gl`，Windows 使用 `.exe` 后缀。`check.sh` 执行文档与配置检查、rustfmt、Clippy、引擎与工作区测试、备份恢复演练；设置 `GL_TEST_DATABASE_URL` 可启用隔离 `geoledger_test` 数据库上的 PostGIS 用例。
 
 Web 检查与生产构建：
 
@@ -257,27 +238,24 @@ npm --prefix web run format:check
 npm --prefix web run build
 ```
 
-验证流程见[开发指南](docs/development.md)和[发布验收](docs/release.md)。
+[开发指南](docs/development.md) 提供四语言 SDK 联调和真实浏览器验证命令。控制台 CI 的两个浏览器套件共用沙箱配置，Ubuntu 24.04 runner 使用系统 Chrome。依赖门禁 `./scripts/audit.sh` 检查 Rust、npm、Go 和 Python 公告。
 
-### 生产部署
+本次工作区修复的实测结果、执行环境及待补验证项单独记录在 [2026-10-15 验证记录](docs/ci-validation-2026-10-15.md)。
 
-统一容器镜像包含服务端、CLI、Web 控制台及 SpatiaLite 运行依赖，以非 root 用户运行，并提供健康检查和退出信号处理。业务数据通过 `/data` 持久化。
+## 部署与运行维护
 
-PostGIS 部署通过 `GL_STORAGE=postgis` 与 `GL_DATABASE_URL` 配置数据库连接，也可在已设置连接环境变量后运行：
+[Dockerfile](Dockerfile) 将业务服务、CLI、Next.js standalone 控制台及 SpatiaLite 运行依赖放入统一镜像，以 UID 10001 运行。Compose 持久化 `/data`，容器入口统一处理服务生命周期和健康检查。
 
-```sh
-./target/release/geoledger-server --storage postgis --data-dir ./geoledger-data
-```
+PostGIS 部署设置 `GL_STORAGE=postgis`、`GL_DATABASE_URL` 和服务账号。连接配置默认校验证书与主机名，可使用私有 CA；现有业务表通过 SDK 的 `track_table` / `trackTable` / `TrackTable` 接入。部署模板、systemd 和 HTTPS 网关见[生产运行](docs/production.md)。
 
-服务端提供 TLS、mTLS、数据库用户、API Key 和 Session 认证。控制台通过 HTTPS 入口和服务端会话管理浏览器访问。部署时统一配置各组件的发布版本、服务地址、身份凭据和数据持久化。
+| 运维接口 | 行为 |
+|---|---|
+| `/health` | 返回进程健康状态和服务版本。 |
+| `/ready` | 检查服务接单状态、可用执行容量和存储结构。 |
+| `/metrics` | 向已认证用户提供 Prometheus 指标。 |
+| JSON 日志 | 通过 `RUST_LOG` 设置日志级别，记录请求与运行诊断。 |
 
-容器、systemd、数据库账号与 HTTPS 配置见[生产运行](docs/production.md)。
-
-## 运行维护
-
-`/health` 提供健康检查，`/ready` 提供就绪检查。服务端输出结构化 JSON 日志，日志级别通过 `RUST_LOG` 配置。
-
-数据运维命令包括 SQLite 在线备份与恢复，以及逻辑导出、导入和校验。备份与导出使用新的目标文件路径，恢复面向新的数据目录，逻辑导入写入新建或空数据库。
+数据运维包括 SQLite 在线备份、恢复，以及逻辑导出、导入和校验。下列命令使用新的输出文件：
 
 ```sh
 ./target/release/geoledger-server --data-dir ./geoledger-data \
@@ -290,29 +268,28 @@ PostGIS 部署通过 `GL_STORAGE=postgis` 与 `GL_DATABASE_URL` 配置数据库�
   verify --input ./geoledger-export.jsonl --file-only
 ```
 
-逻辑导出包含结构信息、表级摘要与校验信息，可配合 `import` 和 `verify` 完成业务数据搬迁与校验。备份、恢复及身份配置保存流程见[生产运行](docs/production.md)，身份管理与传输配置见[安全配置](docs/security.md)。
+恢复使用新的数据目录；逻辑导入写入新建或空数据库，并校验文件结构、表级摘要与完整性校验和。操作步骤与身份数据保存方式见[生产运行](docs/production.md)。
 
 ## 贡献
 
-通过 [GitHub Issues](https://github.com/mapseekai/geoledger/issues) 提交问题或需求，说明使用版本、操作步骤与期望结果。提交 Pull Request 时描述变更内容和验证范围，并按照 [AGENTS.md](AGENTS.md) 与[开发指南](docs/development.md)完成对应检查。
+通过 [GitHub Issues](https://github.com/mapseekai/geoledger/issues) 提供版本、复现步骤和期望结果。提交变更前阅读 [AGENTS.md](AGENTS.md)，按[开发指南](docs/development.md)执行相关检查，并说明实际验证范围。
 
-安全相关反馈通过 [SECURITY.md](SECURITY.md) 中的私密渠道提交。版本变化记录于 [CHANGELOG.md](CHANGELOG.md)。
+漏洞反馈使用 [SECURITY.md](SECURITY.md) 中的私密报告渠道。版本变更与兼容性说明见 [CHANGELOG.md](CHANGELOG.md) 和[当前版本契约](docs/api.md#当前版本契约)。
 
 ## 文档导航
 
 | 文档 | 内容 |
 |---|---|
-| [快速开始](docs/getting-started.md) | 环境准备、服务启动、CLI 与 SDK 接入。 |
-| [使用指南](docs/user-guide.md) | 数据模型、工作区编辑、合并发布、历史与撤销。 |
-| [管理控制台](docs/console.md) | 页面导航、地图工作台与协作操作。 |
-| [API 与 SDK](docs/api.md) | HTTP、四语言 SDK、分页与发布恢复。 |
-| [存储扩展](docs/storage.md) | 存储分层、事务接口与后端验证。 |
-| [生产运行](docs/production.md) | 部署、持久化、数据库配置与备份恢复。 |
-| [安全配置](docs/security.md) | TLS、密码、API Key 与数据库 Session。 |
-| [开发指南](docs/development.md) | 构建、SDK 生成、测试与贡献流程。 |
-| [发布验收](docs/release.md) | 交付检查、恢复演练与负载验证。 |
-| [变更记录](CHANGELOG.md) | 版本更新与功能变化。 |
+| [快速开始](docs/getting-started.md) | 平台准备、服务启动与客户端接入。 |
+| [使用指南](docs/user-guide.md) | 数据模型、协作、合并、历史与撤销。 |
+| [控制台教程](docs/console.md) | 地图工作台、资源管理与用户操作。 |
+| [API 与 SDK](docs/api.md) | 接口、四语言示例、分页与重试。 |
+| [存储扩展](docs/storage.md) | 后端接口、事务语义与一致性测试。 |
+| [生产运行](docs/production.md) | 部署、数据库连接与备份恢复。 |
+| [安全配置](docs/security.md) | TLS、密码、API Key 和会话。 |
+| [开发指南](docs/development.md) | 构建、代码生成与测试。 |
+| [发布验收](docs/release.md) | 发布门禁、恢复演练与负载验证。 |
 
 ## 许可证
 
-GeoLedger 采用 [MIT 许可证](LICENSE)。
+GeoLedger 使用 [MIT 许可证](LICENSE)。控制台组件、字体等第三方许可见 [Web 第三方说明](web/THIRD_PARTY_NOTICES.md)。
