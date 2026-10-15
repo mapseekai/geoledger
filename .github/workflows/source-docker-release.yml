@@ -114,6 +114,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
+      - name: Use fresh anonymous Docker configuration
+        run: |
+          mkdir "$RUNNER_TEMP/anonymous-docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/anonymous-docker" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.sha }}
@@ -126,7 +130,7 @@ jobs:
       - name: Verify signature from the authorized workflow
         run: |
           image=$(python3 -c 'import json; print(json.load(open("inventory/geoledger-images.json"))["image"])')
-          cosign verify --certificate-identity https://github.com/mapseekai/geoledger/.github/workflows/source-docker-release.yml@refs/heads/main --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
+          cosign verify --certificate-identity https://github.com/mapseekai/geoledger/.github/workflows/secure-images.yml@refs/heads/main --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
       - name: Pull digest and exercise native combined image
         env:
           SOURCE_SHA: ${{ needs.validate.outputs.sha }}

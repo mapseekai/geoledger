@@ -1,0 +1,123 @@
+name: Recover alpha.4 source prerelease
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release-refs/tags/v0.3.0-alpha.4
+  cancel-in-progress: false
+env:
+  SOURCE_SHA: 6dccccd5ebc655f520a08c374823cc1389651f81
+  RELEASE_TAG: v0.3.0-alpha.4
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 6dccccd5ebc655f520a08c374823cc1389651f81
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify original gates and immutable artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/recover-source-release.py prepare --assets assets
+      - name: Check candidate and existing release tags
+        working-directory: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ../scripts/source-release.py preflight --sha "$SOURCE_SHA" --tag "$RELEASE_TAG"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: recovered-source-evidence
+          path: assets
+          if-no-files-found: error
+  acceptance:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Use fresh anonymous Docker configuration
+        run: |
+          mkdir "$RUNNER_TEMP/anonymous-docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/anonymous-docker" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 6dccccd5ebc655f520a08c374823cc1389651f81
+          path: candidate
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: recovered-source-evidence
+          path: assets
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Verify signature from the authorized workflow
+        run: |
+          image=$(python3 -c 'import json; print(json.load(open("assets/geoledger-images.json"))["image"])')
+          cosign verify --certificate-identity https://github.com/mapseekai/geoledger/.github/workflows/secure-images.yml@refs/heads/main --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
+      - name: Pull digest and exercise native combined image
+        working-directory: candidate
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/sdk"
+          "$RUNNER_TEMP/sdk/bin/pip" install ./sdk/python
+          "$RUNNER_TEMP/sdk/bin/python" ../scripts/smoke-release-image.py --inventory ../assets --sha "$SOURCE_SHA" --version "${RELEASE_TAG#v}" --arch "$ARCH" --output "../acceptance-$ARCH.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-acceptance-${{ matrix.arch }}
+          path: acceptance-${{ matrix.arch }}.json
+          if-no-files-found: error
+  complete:
+    needs: [validate, acceptance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 6dccccd5ebc655f520a08c374823cc1389651f81
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: recovered-source-evidence
+          path: assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: image-acceptance-*
+          merge-multiple: true
+          path: assets
+      - name: Recheck immutable registry tag
+        run: python3 scripts/recover-source-release.py verify --assets assets
+      - name: Complete the original source prerelease after native acceptance
+        working-directory: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ../scripts/source-release.py complete --sha "$SOURCE_SHA" --tag "$RELEASE_TAG" --assets ../assets

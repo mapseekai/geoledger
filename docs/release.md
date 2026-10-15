@@ -22,6 +22,16 @@
 
 工作流使用仓库 `GITHUB_TOKEN` 创建 tag，避免递归触发完整 SDK 流程。已有镜像标签指向不同 digest、已有公开 Release、候选 SHA 或验收证据不一致时停止；不会覆盖已有产物。中断后优先重跑同一次运行的失败 job，保留已通过的产物。镜像推送后若原生验收失败，GitHub prerelease 保持未公开；检查失败证据，不把镜像存在当作整个发布完成。
 
+签名由被调用的 `secure-images.yml` 产生。验收精确要求证书身份 `https://github.com/mapseekai/geoledger/.github/workflows/secure-images.yml@refs/heads/main` 和 issuer `https://token.actions.githubusercontent.com`；调用方工作流名称不能代替签名方身份。
+
+### alpha.4 已发布镜像的受控恢复
+
+运行 `38732087093` 的同 SHA CI、性能、两架构原生构建、扫描、Docker Hub 推送和签名已成功，验收因预期签名身份写成调用方而失败。镜像源码候选仍为 `6dccccd5ebc655f520a08c374823cc1389651f81`，保留标签 `0.3.0-alpha.4` 对应的 `sha256:15474870959a39598366f6fb455044e7e5bcd06b222c71e2dd60f54646dd1b3b`。
+
+在 main 手动启动 [Recover alpha.4 source prerelease](../.github/workflows/source-release-recovery.yml)，无需输入参数。该一次性入口核对原运行全部前置 job、固定 artifact ID 和归档 SHA256、来源 SHA 及当前 registry 标签。使用全新的匿名 Docker 配置，在 AMD64 / ARM64 原生 runner 验证精确签名身份并按 digest 拉取，执行健康、版本、源码 revision、重启前后 SDK smoke。两边均成功后再次核对标签，只创建指向原候选的 Git tag 和 GitHub prerelease，附上原性能证据、镜像清单、恢复记录及新 smoke 结果。
+
+恢复流程不重新构建、推送或签名镜像，不发布 SDK，也不使用 registry 凭据。修复流程的 main 提交与镜像源码 SHA 分开记录。不要为这次恢复重跑旧运行（它仍使用错误的预期身份），也不要启动正常构建流程试图覆盖已发布标签。原产物过期、校验不一致或已有公开 Release 时停止，重新评估恢复方案。
+
 格式 16 需要初始化新数据库；上一发布的格式 14 旧库、备份及旧版程序独立保留。新流程不执行业务部署或旧数据迁移。
 
 GitHub 的 `release` environment 配置 `NPM_TOKEN` secret，授予 `@geoledger/client` 的发布权限。PyPI 项目 `geoledger-client` 配置 Trusted Publisher：仓库 `mapseekai/geoledger`、工作流 `release.yml`、environment `release`；完成绑定后将该 environment 的 `PYPI_TRUSTED_PUBLISHING` variable 设置为 `true`。凭据由仓库与包管理员在平台设置中维护。预检验证配置存在，实际发布验证授权生效。

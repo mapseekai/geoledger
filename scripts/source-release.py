@@ -83,7 +83,15 @@ def main():
     notes += f'- Source: `{args.sha}`\n- Image: `{record["image"]}`\n'
     notes += f'- Tag: `zwishing/geoledger:{args.tag[1:]}`; Linux AMD64 / ARM64.\n'
     notes += '- This prerelease distributes source and the combined Docker image only; npm/PyPI packages and standalone binaries are not published.\n'
-    notes += '- Same-SHA CI, performance acceptance, build/runtime scans, signing and native digest-pull SDK smoke checks completed in this workflow.\n'
+    if (args.assets / 'recovery.json').exists():
+        recovery = load('recover-source-release')
+        if (json.loads((args.assets / 'recovery.json').read_text()) != recovery.evidence()
+                or args.sha != recovery.SHA or args.tag != recovery.TAG or record['image'] != recovery.IMAGE):
+            raise ValueError('recovery evidence differs from the approved publication')
+        notes += f'- Same-SHA CI, performance acceptance, build/runtime scans and signing passed in https://github.com/{repo}/actions/runs/{recovery.RUN}.\n'
+        notes += '- This recovery workflow verified the original artifact checksums, exact signing identity and unchanged registry tag, then completed anonymous native digest-pull SDK smoke checks on both architectures.\n'
+    else:
+        notes += '- Same-SHA CI, performance acceptance, build/runtime scans, signing and native digest-pull SDK smoke checks completed in this workflow.\n'
     Path('notes.md').write_text(notes)
     if actual is None:
         # The workflow GITHUB_TOKEN prevents recursive SDK tag workflows.
