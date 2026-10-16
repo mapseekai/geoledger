@@ -4,6 +4,12 @@
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
+## [Unreleased]
+
+### Fixed
+
+- PostGIS 发布通过完整要素键定位待关闭的历史记录，避免项目数据分布不均及统计信息滞后时扫描整个项目的历史数据。
+
 ## [0.3.0-alpha.4] - 2026-10-15
 
 ### Breaking
