@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -82,6 +83,47 @@ class SourceReleaseTests(unittest.TestCase):
                 self.assertNotEqual(subprocess.run([sys.executable, '-', str(root)], input=aggregate, text=True, capture_output=True).returncode, 0)
                 (root / name).write_text('0\n')
 
+    def test_preflight_rejects_public_release_before_reserving_tag(self):
+        resume = MagicMock(); resume.run.return_value = SHA
+        resume.find_release.return_value = {'draft': False, 'prerelease': True}
+        argv = ['source-release.py', 'preflight', '--reserve-tag', '--sha', SHA, '--tag', 'v1.0.0-alpha.1']
+        with patch.object(sys, 'argv', argv), patch.dict(os.environ, GITHUB_REPOSITORY='mapseekai/geoledger', GITHUB_REF='refs/heads/main'), patch.object(release, 'load', return_value=resume), patch.object(release.subprocess, 'run'), patch.object(release, 'require_tag') as reserve:
+            with self.assertRaisesRegex(ValueError, 'public release'):
+                release.main()
+            reserve.assert_not_called()
+
+    def test_reserve_current_main_tag_before_builds(self):
+        resume = MagicMock()
+        resume.tag_sha.side_effect = [None, SHA]
+        resume.gh.return_value = {'object': {'sha': SHA}}
+        release.require_tag(resume, 'test/repo', 'v1-alpha.1', SHA, True)
+        resume.run.assert_called_once_with('gh', 'api', 'repos/test/repo/git/refs', '-f',
+                                          'ref=refs/tags/v1-alpha.1', '-f', 'sha=' + SHA)
+
+    def test_reserved_tag_survives_main_advancing(self):
+        for reserve in (False, True):
+            resume = MagicMock(); resume.tag_sha.return_value = SHA
+            release.require_tag(resume, 'test/repo', 'v1-alpha.1', SHA, reserve)
+            resume.run.assert_not_called(); resume.gh.assert_not_called()
+
+    def test_missing_historical_or_conflicting_tag_stops_before_publication(self):
+        for actual, head, reserve in [(None, SHA, False), (None, 'b' * 40, True), ('b' * 40, SHA, True)]:
+            resume = MagicMock(); resume.tag_sha.return_value = actual
+            resume.gh.return_value = {'object': {'sha': head}}
+            with self.subTest(actual=actual, reserve=reserve), self.assertRaises(ValueError):
+                release.require_tag(resume, 'test/repo', 'v1-alpha.1', SHA, reserve)
+            resume.run.assert_not_called()
+
+    def test_tag_creation_denial_or_mismatch_stops_preflight(self):
+        resume = MagicMock(); resume.tag_sha.side_effect = [None, 'b' * 40]
+        resume.gh.return_value = {'object': {'sha': SHA}}
+        with self.assertRaises(ValueError):
+            release.require_tag(resume, 'test/repo', 'v1-alpha.1', SHA, True)
+        resume.tag_sha.side_effect = [None]
+        resume.run.side_effect = subprocess.CalledProcessError(1, 'gh')
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.require_tag(resume, 'test/repo', 'v1-alpha.1', SHA, True)
+
     def test_only_full_sha_and_prerelease_are_accepted(self):
         release.validate_identity(SHA, 'v0.3.0-alpha.4')
         for sha, tag in [(SHA, 'v0.3.0'), ('main', 'v0.3.0-alpha.4'), (SHA, 'v0.3.0-alpha.4;false')]:
@@ -135,7 +177,9 @@ class SourceReleaseTests(unittest.TestCase):
     def test_every_release_barrier_and_scope_is_required(self):
         files = {p.name: p.read_text() for p in (ROOT / '.github/workflows').glob('*.yml')}
         policy.check_source_release(files)
-        changes = [('needs: [validate, quality, performance]', 'needs: [validate, quality]'),
+        changes = [('preflight --reserve-tag', 'preflight'),
+                   ('      contents: write', '      contents: read'),
+                   ('needs: [validate, quality, performance]', 'needs: [validate, quality]'),
                    ('needs: [validate, images]', 'needs: validate'),
                    ('needs: [validate, quality, performance, images, acceptance]', 'needs: [validate, images]'),
                    ('immutable_tags: true', 'immutable_tags: false'),

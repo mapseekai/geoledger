@@ -558,14 +558,14 @@ class ReleaseResumeTests(unittest.TestCase):
     def test_partial_draft_upload_preserves_existing_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one'); (root / 'two').write_bytes(b'two')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': True}, [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'one'), patch.object(resume, 'run') as write:
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[{'id': 1, 'tag_name': 'v1', 'draft': True}], [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'one'), patch.object(resume, 'run') as write:
                 resume.release('test/repo', 'v1', 'sha', root)
                 write.assert_called_once_with('gh', 'release', 'upload', 'v1', str(root / 'two'), '--repo', 'test/repo')
 
     def test_different_release_asset_blocks_upload(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': True}, [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'wrong'), patch.object(resume, 'run') as write:
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[{'id': 1, 'tag_name': 'v1', 'draft': True}], [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'wrong'), patch.object(resume, 'run') as write:
                 with self.assertRaises(ValueError): resume.release('test/repo', 'v1', 'sha', root)
                 write.assert_not_called()
 
@@ -583,19 +583,42 @@ class ReleaseResumeTests(unittest.TestCase):
     def test_published_release_cannot_receive_missing_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': False}, []]), patch.object(resume, 'run') as write:
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[{'id': 1, 'tag_name': 'v1', 'draft': False}], []]), patch.object(resume, 'run') as write:
                 with self.assertRaises(ValueError): resume.release('test/repo', 'v1', 'sha', root)
                 write.assert_not_called()
 
     def test_new_release_stays_draft_and_uploads_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[None, {'id': 1, 'draft': True}, []]), patch.object(resume, 'run') as write:
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[], [{'id': 1, 'tag_name': 'v1-alpha.1', 'draft': True}], []]), patch.object(resume, 'run') as write:
                 resume.release('test/repo', 'v1-alpha.1', 'sha', root)
                 self.assertIn('--draft', write.call_args_list[0].args)
                 self.assertIn('--verify-tag', write.call_args_list[0].args)
                 self.assertIn('--prerelease', write.call_args_list[0].args)
                 self.assertEqual(write.call_args_list[1].args[1:3], ('release', 'upload'))
+
+    def test_release_lookup_finds_drafts_on_later_pages(self):
+        draft = {'id': 101, 'tag_name': 'v2', 'draft': True}
+        with patch.object(resume, 'gh', side_effect=[[{'tag_name': 'v1'}] * 100, [draft]]) as api:
+            self.assertEqual(resume.find_release('test/repo', 'v2'), draft)
+            self.assertEqual(api.call_args_list[-1].args, ('repos/test/repo/releases?per_page=100&page=2',))
+
+    def test_release_listing_errors_never_create_a_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            for error in (None, RuntimeError('HTTP 403')):
+                with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[error]), patch.object(resume, 'run') as write:
+                    with self.assertRaises(RuntimeError):
+                        resume.release('test/repo', 'v1', 'sha', root)
+                    write.assert_not_called()
+
+    def test_new_draft_not_yet_visible_fails_without_duplicate_creation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[], []]), patch.object(resume, 'run') as write:
+                with self.assertRaisesRegex(RuntimeError, 'rerun'):
+                    resume.release('test/repo', 'v1', 'sha', root)
+                self.assertEqual(write.call_count, 1)
 
     def test_unknown_npm_lookup_outcome_never_publishes(self):
         with patch.object(resume, 'fetch', side_effect=TimeoutError), patch.object(resume.subprocess, 'run') as write:

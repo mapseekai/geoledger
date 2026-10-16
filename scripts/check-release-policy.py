@@ -183,6 +183,9 @@ def check_source_release(files: dict[str, str]) -> None:
         job = graph[name]
         if needs(job) != prerequisites or re.search(r'^    (if|continue-on-error):', job, re.M):
             raise ValueError('source release gate bypass: ' + name)
+    if ('preflight --reserve-tag' not in graph['validate']
+            or '      contents: write' not in graph['validate']):
+        raise ValueError('source release must reserve its tag with write permission before builds')
     for name in ('quality', 'images'):
         if 'source_sha: ${{ needs.validate.outputs.sha }}' not in graph[name]:
             raise ValueError('source release must use the selected SHA')

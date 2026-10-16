@@ -43,13 +43,33 @@ def validate_acceptance(directory, record, version):
             raise ValueError('image acceptance differs from candidate: ' + arch)
 
 
+def require_tag(resume, repo, tag, sha, reserve):
+    actual = resume.tag_sha(repo, tag)
+    if actual == sha:
+        return
+    if actual is not None:
+        raise ValueError('existing tag points to another commit')
+    if not reserve:
+        raise ValueError('release tag is missing; reserve it during preflight before building images')
+    head = resume.gh(f'repos/{repo}/git/ref/heads/main')
+    if head is None or head['object']['sha'] != sha:
+        raise ValueError('new release tags require the current main HEAD; dispatch with its SHA')
+    # Reserve while main still identifies the candidate; GITHUB_TOKEN cannot tag all historical workflows.
+    resume.run('gh', 'api', f'repos/{repo}/git/refs', '-f', 'ref=refs/tags/' + tag, '-f', 'sha=' + sha)
+    if resume.tag_sha(repo, tag) != sha:
+        raise ValueError('reserved tag differs from candidate')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['preflight', 'complete'])
     parser.add_argument('--sha', required=True)
     parser.add_argument('--tag', required=True)
     parser.add_argument('--assets', type=Path)
+    parser.add_argument('--reserve-tag', action='store_true', help='reserve the current main candidate during preflight')
     args = parser.parse_args()
+    if args.reserve_tag and args.command != 'preflight':
+        parser.error('--reserve-tag is only valid for preflight')
     validate_identity(args.sha, args.tag)
     repo = os.environ['GITHUB_REPOSITORY']
     if repo != 'mapseekai/geoledger':
@@ -61,12 +81,10 @@ def main():
         raise ValueError('checkout differs from candidate')
     subprocess.run(['git', 'merge-base', '--is-ancestor', args.sha, 'origin/main'], check=True)
     subprocess.run(['python3', 'scripts/check-release-version.py', '--tag', args.tag], check=True)
-    actual = resume.tag_sha(repo, args.tag)
-    if actual not in (None, args.sha):
-        raise ValueError('existing tag points to another commit')
-    existing = resume.gh(f'repos/{repo}/releases/tags/{args.tag}')
+    existing = resume.find_release(repo, args.tag)
     if existing and (not existing['draft'] or not existing['prerelease']):
         raise ValueError('existing public release must not be changed')
+    require_tag(resume, repo, args.tag, args.sha, args.reserve_tag)
     if args.command == 'preflight':
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write(f'sha={args.sha}\nversion={args.tag[1:]}\n')
@@ -93,9 +111,6 @@ def main():
     else:
         notes += '- Same-SHA CI, performance acceptance, build/runtime scans, signing and native digest-pull SDK smoke checks completed in this workflow.\n'
     Path('notes.md').write_text(notes)
-    if actual is None:
-        # The workflow GITHUB_TOKEN prevents recursive SDK tag workflows.
-        resume.run('gh', 'api', f'repos/{repo}/git/refs', '-f', 'ref=refs/tags/' + args.tag, '-f', 'sha=' + args.sha)
     resume.release(repo, args.tag, args.sha, args.assets)
     resume.run('gh', 'release', 'edit', args.tag, '--draft=false', '--prerelease', '--repo', repo)
 

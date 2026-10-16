@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Full candidate commit SHA on main
+        description: Full current main HEAD SHA (or an already reserved candidate)
         type: string
         required: true
       release_tag:
@@ -17,6 +17,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validate:
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     outputs:
       sha: ${{ steps.identity.outputs.sha }}
@@ -38,7 +40,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-        run: python3 scripts/source-release.py preflight --sha "$SOURCE_SHA" --tag "$RELEASE_TAG"
+        run: python3 scripts/source-release.py preflight --reserve-tag --sha "$SOURCE_SHA" --tag "$RELEASE_TAG"
   quality:
     needs: validate
     uses: ./.github/workflows/ci.yml

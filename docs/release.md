@@ -16,11 +16,13 @@
 
 [Source prerelease and Docker Hub](../.github/workflows/source-docker-release.yml) 是独立的手动入口，仅发布 GitHub prerelease 和 `docker.io/zwishing/geoledger:<版本>`，覆盖 Linux AMD64 / ARM64；不分发 npm/PyPI 包、Go 模块标签或独立二进制。完整 SDK 发布继续使用下文的既有流程。
 
-先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（完整 40 位提交 SHA）及 `release_tag`（例如 `v0.3.0-alpha.4`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
+先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（当前 main HEAD 的完整 40 位提交 SHA；重跑可使用已固定标签的原候选）及 `release_tag`（例如 `v0.3.0-alpha.4`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
 
-发布顺序为同 SHA 完整 CI、[性能验收脚本](../scripts/release-performance.sh)、受检构建阶段和双架构运行镜像、不可变 digest 推送和签名、两架构原生拉取与 SDK 验收，最后才创建 tag 并公开 prerelease。性能检查保留 20 并发、300 秒和原 p95 门限，使用显式 CRS 的 10,000 条合成要素及一次性数据库。镜像验收检查源码 revision、服务版本、统一容器健康状态、重启后的 API Key 及 SDK 业务流程。
+预检以 `contents: write` 的内置 `GITHUB_TOKEN` 创建并核对候选 tag，之后才启动同 SHA 完整 CI、[性能验收脚本](../scripts/release-performance.sh)、受检构建阶段和双架构运行镜像、不可变 digest 推送和签名、两架构原生拉取与 SDK 验收，最后公开 prerelease。性能检查保留 20 并发、300 秒和原 p95 门限，使用显式 CRS 的 10,000 条合成要素及一次性数据库。镜像验收检查源码 revision、服务版本、统一容器健康状态、重启后的 API Key 及 SDK 业务流程。
 
-工作流使用仓库 `GITHUB_TOKEN` 创建 tag，避免递归触发完整 SDK 流程。已有镜像标签指向不同 digest、已有公开 Release、候选 SHA 或验收证据不一致时停止；不会覆盖已有产物。中断后优先重跑同一次运行的失败 job，保留已通过的产物。镜像推送后若原生验收失败，GitHub prerelease 保持未公开；检查失败证据，不把镜像存在当作整个发布完成。
+工作流使用仓库 `GITHUB_TOKEN` 创建 tag，避免递归触发完整 SDK 流程。新标签只允许指向预检时的 main HEAD，避免历史工作流差异需要额外 Workflows 写权限；若 main 在预检中前移或权限不足，会在构建与镜像推送前失败。标签固定后 main 可以继续前进，重跑只接受同一 SHA，完成阶段绝不补建或移动标签。失败的验收可能留下候选 tag，但不代表公开 Release，也不会自动删除或复用为其他提交。
+
+Release 查询使用带认证、分页的 releases 列表匹配 `tag_name`，同时识别草稿与公开版本。草稿创建后若查询仍无结果，明确失败并允许重跑；不会把查询失败当作不存在。已上传附件仍逐项校验摘要，公开版本不补写附件。已有镜像标签指向不同 digest、已有公开 Release、候选 SHA 或验收证据不一致时停止；不会覆盖已有产物。中断后优先重跑同一次运行的失败 job，保留已通过的产物。镜像推送后若原生验收失败，GitHub prerelease 保持未公开；检查失败证据，不把镜像存在当作整个发布完成。
 
 签名由被调用的 `secure-images.yml` 产生。验收精确要求证书身份 `https://github.com/mapseekai/geoledger/.github/workflows/secure-images.yml@refs/heads/main` 和 issuer `https://token.actions.githubusercontent.com`；调用方工作流名称不能代替签名方身份。
 
@@ -28,7 +30,7 @@
 
 运行 `38732087093` 的同 SHA CI、性能、两架构原生构建、扫描、Docker Hub 推送和签名已成功，验收因预期签名身份写成调用方而失败。镜像源码候选仍为 `6dccccd5ebc655f520a08c374823cc1389651f81`，保留标签 `0.3.0-alpha.4` 对应的 `sha256:15474870959a39598366f6fb455044e7e5bcd06b222c71e2dd60f54646dd1b3b`。
 
-在 main 手动启动 [Recover alpha.4 source prerelease](../.github/workflows/source-release-recovery.yml)，无需输入参数。该一次性入口核对原运行全部前置 job、固定 artifact ID 和归档 SHA256、来源 SHA 及当前 registry 标签。使用全新的匿名 Docker 配置，在 AMD64 / ARM64 原生 runner 验证精确签名身份并按 digest 拉取，执行健康、版本、源码 revision、重启前后 SDK smoke。两边均成功后再次核对标签，只创建指向原候选的 Git tag 和 GitHub prerelease，附上原性能证据、镜像清单、恢复记录及新 smoke 结果。
+在 main 手动启动 [Recover alpha.4 source prerelease](../.github/workflows/source-release-recovery.yml)，无需输入参数。该一次性入口核对原运行全部前置 job、固定 artifact ID 和归档 SHA256、来源 SHA 及当前 registry 标签。使用全新的匿名 Docker 配置，在 AMD64 / ARM64 原生 runner 验证精确签名身份并按 digest 拉取，执行健康、版本、源码 revision、重启前后 SDK smoke。两边均成功后再次核对标签，要求指向原候选的 Git tag 已存在，随后创建 GitHub prerelease，附上原性能证据、镜像清单、恢复记录及新 smoke 结果。
 
 恢复流程不重新构建、推送或签名镜像，不发布 SDK，也不使用 registry 凭据。修复流程的 main 提交与镜像源码 SHA 分开记录。不要为这次恢复重跑旧运行（它仍使用错误的预期身份），也不要启动正常构建流程试图覆盖已发布标签。原产物过期、校验不一致或已有公开 Release 时停止，重新评估恢复方案。
 
