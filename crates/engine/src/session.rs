@@ -1532,18 +1532,22 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
         self.flush_stage()?;
         if matches!(self.0.backend, Backend::Postgis(_)) {
-            // A reused temp table has no useful row estimate after commit clears it.
-            // Keep a small publication from scanning the project's entire history.
+            // Pooled sessions retain the old batch's statistics after commit
+            // clears the temp table. Refresh its cardinality for this batch.
             self.batch_execute("ANALYZE gl_merge_stage")?;
         }
         self.sync_sources(project)?;
-        // Drive SQLite's join from the changed keys, not every live row in the project.
+        // Drive both backends from changed keys, even when a new project's
+        // history is underestimated by statistics dominated by another project.
         let sql = match self.0.backend {
             Backend::Sqlite(_) => {
                 "UPDATE gl_history SET valid_to=$2 WHERE rowid IN (SELECT h.rowid FROM gl_merge_stage m CROSS JOIN gl_history h INDEXED BY history_live ON h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL)"
             }
             Backend::Postgis(_) => {
-                "UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL"
+                // LIMIT keeps each live-key lookup correlated with the staged
+                // row. The TID is consumed in this statement while the project
+                // publication lock protects the history rows.
+                "UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m CROSS JOIN LATERAL (SELECT ctid FROM gl_history WHERE project=$1 AND dataset=m.dataset AND feature_id=m.feature_id AND valid_to IS NULL LIMIT 1) live WHERE h.ctid=live.ctid"
             }
         };
         self.execute(sql, &[&project, &revision])
