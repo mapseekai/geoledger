@@ -363,8 +363,8 @@ export class Client {
       convert.decodeDataset,
     );
   }
-  /** Track an existing PostGIS table, creating its initial published revision. */
-  trackTable(
+  /** Register an existing PostGIS table, creating its initial published revision. */
+  registerTable(
     project: string,
     name: string,
     postgisTable: model.PostgisTable,

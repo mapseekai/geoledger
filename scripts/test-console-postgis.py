@@ -3,11 +3,12 @@
 import argparse,json,uuid,re
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
+from browser_test_support import add_browser_arguments,launch_browser
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--url',required=True);p.add_argument('--api-key-file',required=True);p.add_argument('--chromium',required=True);p.add_argument('--screenshots',default='/tmp/geoledger-postgis-shots');a=p.parse_args()
+p.add_argument('--url',required=True);p.add_argument('--api-key-file',required=True);add_browser_arguments(p);p.add_argument('--screenshots',default='/tmp/geoledger-postgis-shots');a=p.parse_args()
 token=Path(a.api_key_file).read_text().strip()
 with sync_playwright() as pw:
-    browser=pw.chromium.launch(headless=True,executable_path=a.chromium)
+    browser=launch_browser(pw,a)
     context=browser.new_context(viewport={'width':1440,'height':960});page=context.new_page();errors=[]
     page.on('pageerror',lambda error:errors.append(str(error)))
     page.goto(a.url+'/login');page.get_by_role('tab', name='API Key 登录', exact=True).click()
@@ -46,4 +47,4 @@ with sync_playwright() as pw:
     Path(a.screenshots).mkdir(parents=True,exist_ok=True);page.screenshot(path=str(Path(a.screenshots)/'postgis-bound-table.png'),full_page=True)
     assert not errors,errors
     browser.close()
-print('PostGIS browser: existing table tracking, inferred schema, initial snapshot, edit and publication passed')
+print('PostGIS browser: existing table registration, inferred schema, initial snapshot, edit and publication passed')

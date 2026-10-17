@@ -100,6 +100,40 @@ test("existing 256-byte feature identifiers remain editable through the web cont
   );
 });
 
+test("table registration accepts its current action and validates each source identifier", () => {
+  const source = {
+    schema: "business",
+    table: "roads",
+    idColumn: "id",
+    geometryColumn: "geom",
+  };
+  const input = {
+    action: "registerTable",
+    project: "p",
+    name: "roads",
+    source,
+  };
+  assert.equal(requestSchema.safeParse(input).success, true);
+  assert.equal(
+    requestSchema.safeParse({ ...input, action: "trackTable" }).success,
+    false,
+  );
+  for (const field of Object.keys(source)) {
+    assert.equal(
+      requestSchema.safeParse({ ...input, source: { ...source, [field]: "" } })
+        .success,
+      false,
+    );
+    assert.equal(
+      requestSchema.safeParse({
+        ...input,
+        source: { ...source, [field]: "x".repeat(64) },
+      }).success,
+      false,
+    );
+  }
+});
+
 test("legacy token management actions are rejected", () => {
   for (const action of ["tokens", "issueToken", "reissueToken", "revokeToken"])
     assert.equal(requestSchema.safeParse({ action }).success, false);

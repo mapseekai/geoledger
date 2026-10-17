@@ -127,6 +127,75 @@ test("private transport sends only Session header and preserves exact business m
   }
 });
 
+test("table registration keeps the private create_dataset request and Session credentials", async () => {
+  const savedFetch = globalThis.fetch;
+  const savedSecret = process.env.GL_WEB_SESSION_SECRET;
+  const savedEndpoint = process.env.GL_WEB_ENDPOINT;
+  process.env.GL_WEB_SESSION_SECRET = "test-only-session-secret-".repeat(3);
+  process.env.GL_WEB_ENDPOINT = "http://127.0.0.1:18881";
+  const source = {
+    schema: "business",
+    table: "roads",
+    idColumn: "road_id",
+    geometryColumn: "shape",
+  };
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), "http://127.0.0.1:18881/api/v1/create_dataset");
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      project: "p",
+      name: "roads",
+      postgis_table: {
+        schema: "business",
+        table: "roads",
+        id_column: "road_id",
+        geometry_column: "shape",
+      },
+    });
+    const headers = new Headers(init?.headers);
+    assert.equal(headers.get("x-geoledger-session"), "registration-session");
+    assert.equal(headers.has("authorization"), false);
+    return new Response(
+      JSON.stringify({
+        dataset: "d",
+        name: "roads",
+        geometry_type: "line",
+        coordinate_dimension: 3,
+        crs: "EPSG:3857",
+        postgis_table: {
+          schema: "business",
+          table: "roads",
+          id_column: "road_id",
+          geometry_column: "shape",
+        },
+      }),
+    );
+  };
+  try {
+    assert.deepEqual(
+      await consoleClient("registration-session").registerTable(
+        "p",
+        "roads",
+        source,
+      ),
+      {
+        dataset: "d",
+        id: "d",
+        name: "roads",
+        geometryType: "line",
+        coordinateDimension: 3,
+        crs: "EPSG:3857",
+        postgisTable: source,
+      },
+    );
+  } finally {
+    globalThis.fetch = savedFetch;
+    if (savedSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
+    else process.env.GL_WEB_SESSION_SECRET = savedSecret;
+    if (savedEndpoint === undefined) delete process.env.GL_WEB_ENDPOINT;
+    else process.env.GL_WEB_ENDPOINT = savedEndpoint;
+  }
+});
+
 test("commit pagination cannot overwrite the normalized exact revision", async () => {
   const originalFetch = globalThis.fetch;
   const originalSecret = process.env.GL_WEB_SESSION_SECRET;

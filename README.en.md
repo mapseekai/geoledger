@@ -17,7 +17,7 @@ The current source version is `0.3.0-alpha.4`, with storage format 16, defined i
 | Three-way merge and publication | Compare the base revision, current shared revision, and draft; merge independent property changes and review conflicting fields. Publication writes features, history, the revision, receipt, and audit records in one transaction. |
 | Publication recovery | SDKs retain the publication request ID and original payload. Retrying the original request confirms the result after a connection interruption. The console provides a publication recovery flow. |
 | Queries and commit reversal | Query by revision, feature ID, spatial bounds, and pagination cursor. Generate a workspace containing the inverse changes of a selected commit, then review and publish a new revision. |
-| PostGIS table tracking | Connect an existing business table to a dataset and create an initial version. Publication updates the source table transactionally and retains its CRS. |
+| PostGIS table registration | Connect an existing business table to a dataset and create an initial version. Publication updates the source table transactionally and retains its CRS. |
 | GIS console | Map, layer tree, feature search, attribute table, GeoJSON editing and upload, workspace version graph, conflict review, and mobile layouts. Map previews transform coordinates to WGS 84 as needed. |
 | Identity and access | User management, project member roles, personal API keys, database sessions, and HTTP/gRPC TLS and mTLS configuration. |
 
@@ -246,7 +246,7 @@ Measured results for this workspace fix, its execution environment, and outstand
 
 The [Dockerfile](Dockerfile) packages the business service, CLI, Next.js standalone console, and SpatiaLite runtime into one image, running as UID 10001. Compose persists `/data`; the container entry point manages service lifecycles and health checks.
 
-For PostGIS, configure `GL_STORAGE=postgis`, `GL_DATABASE_URL`, and the service account. Connections verify certificates and hostnames by default and accept private CA configuration. Existing business tables are connected through the SDK methods `track_table` / `trackTable` / `TrackTable`. See [Production Operations](docs/production.md) for deployment templates, systemd, and HTTPS gateways.
+For PostGIS, configure `GL_STORAGE=postgis`, `GL_DATABASE_URL`, and the service account. Connections verify certificates and hostnames by default and accept private CA configuration. Existing business tables are connected through the SDK methods `register_table` / `registerTable` / `RegisterTable`. See [Production Operations](docs/production.md) for deployment templates, systemd, and HTTPS gateways.
 
 | Operational interface | Behavior |
 |---|---|

@@ -707,8 +707,8 @@ impl Client {
             .await?,
         )
     }
-    /// Track an existing PostGIS table, creating its initial published revision.
-    pub async fn track_table(
+    /// Register an existing PostGIS table, creating its initial published revision.
+    pub async fn register_table(
         &self,
         project: &str,
         name: &str,

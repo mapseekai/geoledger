@@ -16,6 +16,20 @@ class ContractTests(unittest.TestCase):
         client._stub = stub
         return client
 
+    def test_register_table_preserves_create_dataset_wire_contract(self):
+        source = dict(schema="business", table="roads", id_column="road_id", geometry_column="shape")
+        sent = []
+        def create(request, **kwargs):
+            sent.append(request)
+            return wire.DatasetReply(dataset="dataset", name="roads", geometry_type="line",
+                                     coordinate_dimension=3, crs="EPSG:3857", postgis_table=request.postgis_table)
+        client = self.client(SimpleNamespace(CreateDataset=create))
+        dataset = client.register_table("project", "roads", **source)
+        self.assertEqual(sent, [wire.DatasetRequest(project="project", name="roads", postgis_table=wire.PostgisTable(**source))])
+        self.assertEqual((dataset.id, dataset.geometry_type, dataset.coordinate_dimension, dataset.crs),
+                         ("dataset", "line", 3, "EPSG:3857"))
+        self.assertEqual(dataset.postgis_table, source)
+
     def test_plaintext_to_remote_host_requires_opt_in(self):
         with self.assertRaises(geoledger.GeoLedgerError) as raised:
             geoledger.Client("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

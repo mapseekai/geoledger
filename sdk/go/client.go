@@ -494,8 +494,8 @@ func (c *Client) Restore(ctx context.Context, project string, revision int64) (*
 	return &Workspace{client: c, project: project, info: info}, nil
 }
 
-// TrackTable tracks an existing PostGIS table and creates its initial published revision.
-func (c *Client) TrackTable(ctx context.Context, project, name string, source PostgisTable) (Dataset, error) {
+// RegisterTable registers an existing PostGIS table and creates its initial published revision.
+func (c *Client) RegisterTable(ctx context.Context, project, name string, source PostgisTable) (Dataset, error) {
 	var r Dataset
 	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, PostgisTable: &pb.PostgisTable{Schema: source.Schema, Table: source.Table, IdColumn: source.IDColumn, GeometryColumn: source.GeometryColumn}}, &r)
 	return r, e

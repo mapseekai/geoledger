@@ -6,16 +6,21 @@ import { execute, encode } from "../src/lib/operations";
 import { publication, readPublication } from "../src/lib/publication";
 import { requestSchema } from "../src/lib/requests";
 
-test("table tracking uses the private business transport and validates the source", async () => {
+test("table registration uses the private business transport and validates the source", async () => {
   const source = {
     schema: "business",
     table: "roads",
     idColumn: "id",
     geometryColumn: "geom",
   };
-  const request = { action: "trackTable", project: "p", name: "roads", source };
+  const request = {
+    action: "registerTable",
+    project: "p",
+    name: "roads",
+    source,
+  };
   const client = stubConsoleClient({
-    trackTable: async (...args: unknown[]) => {
+    registerTable: async (...args: unknown[]) => {
       assert.deepEqual(args, ["p", "roads", source]);
       return {
         id: "d",
@@ -27,6 +32,7 @@ test("table tracking uses the private business transport and validates the sourc
       };
     },
   });
+  assert.equal(requestSchema.safeParse(request).success, true);
   assert.deepEqual(await execute(client, request), {
     id: "d",
     name: "roads",

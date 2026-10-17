@@ -157,7 +157,7 @@ Python SDK 与 TS SDK 分别按上文安装和构建；统一安装与联调流�
 |---|---|
 | Client | info、create_project、project、projects、set_member |
 | Client | members、remove_member、archive_project、delete_project |
-| Client | create_dataset、track_table、datasets、create_workspace、workspace、workspaces |
+| Client | create_dataset、register_table、datasets、create_workspace、workspace、workspaces |
 | Client | features、history、commit、audit、restore |
 | Workspace | save、save_batch、delete、features、diff、conflicts |
 | Workspace | publish、resolve、rebase、discard、refresh |
@@ -252,16 +252,20 @@ Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓�
 
 ### PostGIS 表纳管
 
-业务 SDK 使用 `create_dataset`（Go/TypeScript 按各语言命名风格）创建原生数据集，使用 `track_table` / `TrackTable` / `trackTable` 将已有表纳入版本控制。当前表纳管仅支持服务所连接的 PostGIS 数据库，因此来源类型与协议字段仍为 `PostgisTable` / `postgis_table`，不表示支持任意数据库。底层 RPC 共用 `CreateDataset`；HTTP 与 `gl call` 使用 `create_dataset` 加 `postgis_table`，不增加别名。文件导入继续使用创建数据集、分批保存到工作区、发布的流程。
+业务 SDK 使用 `create_dataset`（Go/TypeScript 按各语言命名风格）创建原生数据集，使用 `register_table` / `RegisterTable` / `registerTable` 将已有表纳入版本控制。当前表纳管仅支持服务所连接的 PostGIS 数据库，因此来源类型与协议字段仍为 `PostgisTable` / `postgis_table`，不表示支持任意数据库。底层 RPC 共用 `CreateDataset`；HTTP 与 `gl call` 使用 `create_dataset` 加 `postgis_table`，不增加别名。文件导入继续使用创建数据集、分批保存到工作区、发布的流程。
 
 `create_dataset` 的 `postgis_table` 指定 `{schema, table, id_column, geometry_column}`，纳管时几何类型和维度由原表读取。返回和数据集列表中的 `postgis_table` 描述绑定；内部数据集该字段为空。操作要求平台管理员同时具有项目写权限。纳管建立首个发布版本，日后的 `save`、`publish`、`restore` 使用现有工作区契约。
 
 | SDK | 业务接口 |
 |---|---|
-| Rust | `track_table(project, name, &PostgisTable)` |
-| Go | `TrackTable(ctx, project, name, PostgisTable)` |
-| TypeScript | `trackTable(project, name, {schema, table, idColumn, geometryColumn})` |
-| Python | `track_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
+| Rust | `register_table(project, name, &PostgisTable)` |
+| Go | `RegisterTable(ctx, project, name, PostgisTable)` |
+| TypeScript | `registerTable(project, name, {schema, table, idColumn, geometryColumn})` |
+| Python | `register_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
+
+命名迁移：升级 SDK 时，Rust/Python 的 `track_table`、Go 的 `TrackTable`、TypeScript 和 Web 私有动作的 `trackTable` 分别替换为上述注册名称，参数和返回值不变；这是源码调用与 Web 动作的破坏性改名，不保留旧别名。控制台前端与 Node BFF 应配套部署，并刷新已打开的页面。CLI、HTTP 和 gRPC 仍使用原来的创建数据集请求，不新增注册命令或 RPC；`proto/geoledger/v1/geoledger.proto` 及其生成绑定无需变更。当前没有独立的取消注册接口；删除数据集仍使用 `delete_dataset` 系列接口，原业务表保留。
+
+此改名不修改存储格式或已有数据，不需要重建、导入或迁移数据库。既有表绑定、触发器、备份及原历史提交说明继续有效；新注册提交的默认说明改为 `Register table`，权限失败仍返回相同错误类别。PostGIS 的 `gl_source_track` / `gl_versioned_track` 记录原表写入以检测外部变更，属于变更跟踪，不是注册操作，保留原名。
 
 原表要求和发布事务见 [已有业务表](storage.md#已有业务表)。
 

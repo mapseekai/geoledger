@@ -246,7 +246,7 @@ npm --prefix web run build
 
 [Dockerfile](Dockerfile) 将业务服务、CLI、Next.js standalone 控制台及 SpatiaLite 运行依赖放入统一镜像，以 UID 10001 运行。Compose 持久化 `/data`，容器入口统一处理服务生命周期和健康检查。
 
-PostGIS 部署设置 `GL_STORAGE=postgis`、`GL_DATABASE_URL` 和服务账号。连接配置默认校验证书与主机名，可使用私有 CA；现有业务表通过 SDK 的 `track_table` / `trackTable` / `TrackTable` 接入。部署模板、systemd 和 HTTPS 网关见[生产运行](docs/production.md)。
+PostGIS 部署设置 `GL_STORAGE=postgis`、`GL_DATABASE_URL` 和服务账号。连接配置默认校验证书与主机名，可使用私有 CA；现有业务表通过 SDK 的 `register_table` / `registerTable` / `RegisterTable` 接入。部署模板、systemd 和 HTTPS 网关见[生产运行](docs/production.md)。
 
 | 运维接口 | 行为 |
 |---|---|

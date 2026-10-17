@@ -17,7 +17,7 @@ export type ConsoleClient = Pick<
   | "renameDataset"
   | "deleteDataset"
   | "createDataset"
-  | "trackTable"
+  | "registerTable"
   | "workspaces"
   | "workspaceInfo"
   | "workspaceSummary"
@@ -243,7 +243,7 @@ export function consoleClient(sid: string): ConsoleClient {
         coordinateDimension,
         crs,
       }),
-    trackTable: (project, name, source) =>
+    registerTable: (project, name, source) =>
       call("create_dataset", {
         project,
         name,

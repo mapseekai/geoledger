@@ -40,8 +40,10 @@ export async function execute(
           r.crs,
         ),
       );
-    case "trackTable":
-      return datasetCrs(await client.trackTable(r.project, r.name, r.source));
+    case "registerTable":
+      return datasetCrs(
+        await client.registerTable(r.project, r.name, r.source),
+      );
     case "workspaces":
       return client.workspaces(r.project, r);
     case "workspace":

@@ -1,10 +1,11 @@
-use geoledger_client::Client;
+use geoledger_client::{Client, PostgisTable};
 use geoledger_rpc::v1 as wire;
 use std::sync::{Arc, Mutex};
 use tonic::{Request, Response, Status};
 #[derive(Clone, Default)]
 struct Service {
     requests: Arc<Mutex<Vec<wire::PublishRequest>>>,
+    registrations: Arc<Mutex<Vec<wire::DatasetRequest>>>,
 }
 #[tonic::async_trait]
 impl wire::geo_ledger_server::GeoLedger for Service {
@@ -71,9 +72,24 @@ impl wire::geo_ledger_server::GeoLedger for Service {
     }
     async fn create_dataset(
         &self,
-        _request: Request<wire::DatasetRequest>,
+        request: Request<wire::DatasetRequest>,
     ) -> Result<Response<wire::DatasetReply>, Status> {
-        Err(Status::unimplemented("unused"))
+        let request = request.into_inner();
+        self.registrations
+            .lock()
+            .map_err(|_| Status::internal("lock"))?
+            .push(request.clone());
+        if request.name == "denied" {
+            return Err(Status::permission_denied("registration denied"));
+        }
+        Ok(Response::new(wire::DatasetReply {
+            dataset: "dataset".into(),
+            name: request.name,
+            geometry_type: "line".into(),
+            coordinate_dimension: 3,
+            crs: "EPSG:3857".into(),
+            postgis_table: request.postgis_table,
+        }))
     }
     async fn list_datasets(
         &self,
@@ -321,4 +337,67 @@ async fn plaintext_to_remote_hosts_requires_explicit_opt_in() {
     assert!(geoledger_client::is_loopback_host("[::1]"));
     assert!(geoledger_client::is_loopback_host("LOCALHOST"));
     assert!(!geoledger_client::is_loopback_host("10.0.0.1"));
+}
+
+#[tokio::test]
+async fn register_table_preserves_create_dataset_wire_contract()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let service = Service::default();
+    let registrations = service.registrations.clone();
+    let server = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(wire::geo_ledger_server::GeoLedgerServer::new(service))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+    });
+    let client = Client::connect(
+        format!("http://{address}"),
+        "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .await?;
+    let source = PostgisTable {
+        schema: "business".into(),
+        table: "roads".into(),
+        id_column: "road_id".into(),
+        geometry_column: "shape".into(),
+    };
+    let dataset = client.register_table("project", "roads", &source).await?;
+    assert_eq!(dataset.id, "dataset");
+    assert_eq!(dataset.geometry_type, "line");
+    assert_eq!(dataset.coordinate_dimension, 3);
+    assert_eq!(dataset.crs, "EPSG:3857");
+    assert_eq!(dataset.postgis_table, Some(source));
+    let denied = client
+        .register_table(
+            "project",
+            "denied",
+            dataset.postgis_table.as_ref().ok_or("source")?,
+        )
+        .await
+        .err()
+        .ok_or("expected permission error")?;
+    assert_eq!(denied.code, "permission_denied");
+    assert!(!denied.uncertain);
+    {
+        let seen = registrations.lock().map_err(|_| "lock")?;
+        assert_eq!(seen.len(), 2);
+        assert_eq!(
+            seen[0],
+            wire::DatasetRequest {
+                project: "project".into(),
+                name: "roads".into(),
+                postgis_table: dataset.postgis_table.map(|table| wire::PostgisTable {
+                    schema: table.schema,
+                    table: table.table,
+                    id_column: table.id_column,
+                    geometry_column: table.geometry_column,
+                }),
+                ..Default::default()
+            }
+        );
+    }
+    server.abort();
+    Ok(())
 }

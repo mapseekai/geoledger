@@ -380,7 +380,7 @@ pub(super) fn create_dataset(
         {
             return Err(Error::new(
                 403,
-                "tracking a business table requires a platform administrator",
+                "registering a business table requires a platform administrator",
             ));
         }
         let row = t.inspect_postgis_table(source)?;
@@ -451,7 +451,7 @@ pub(super) fn create_dataset(
             }
         }
         let revision = current.checked_add(1).ok_or_else(bad)?;
-        t.append_commit(&r.project, revision, &w, s, "Track table")?;
+        t.append_commit(&r.project, revision, &w, s, "Register table")?;
         t.append_changes(&r.project, revision)?;
         t.append_history(&r.project, revision)?;
         t.advance_head(&r.project, revision)?;

@@ -17,7 +17,7 @@ export function stubConsoleClient(
     renameDataset: unexpected,
     deleteDataset: unexpected,
     createDataset: unexpected,
-    trackTable: unexpected,
+    registerTable: unexpected,
     workspaces: unexpected,
     workspaceInfo: unexpected,
     workspaceSummary: unexpected,

@@ -65,7 +65,7 @@ export function CreateDatasetDialog({
             const current = state.current;
             if (mode === "postgis") {
               const dataset = await call<Dataset>({
-                action: "trackTable",
+                action: "registerTable",
                 project,
                 name,
                 source: {

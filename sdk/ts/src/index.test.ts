@@ -3,6 +3,74 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { Client, Workspace, GeoLedgerError, parseJson } = require("../dist");
 
+test("registerTable preserves the CreateDataset wire contract and permission errors", async () => {
+  const wire = require("../dist/_internal/geoledger/v1/geoledger");
+  const grpc = require("@grpc/grpc-js");
+  const source = {
+    schema: "business",
+    table: "roads",
+    idColumn: "road_id",
+    geometryColumn: "shape",
+  };
+  const sent = [];
+  let denied = false;
+  const original = wire.GeoLedgerClient.prototype.createDataset;
+  wire.GeoLedgerClient.prototype.createDataset = (request, callback) => {
+    sent.push(request);
+    if (denied) {
+      callback(
+        Object.assign(new Error("registration denied"), {
+          code: grpc.status.PERMISSION_DENIED,
+        }),
+      );
+    } else {
+      callback(null, {
+        dataset: "dataset",
+        name: request.name,
+        geometryType: "line",
+        coordinateDimension: 3,
+        crs: "EPSG:3857",
+        postgisTable: source,
+      });
+    }
+  };
+  const client = new Client(
+    "http://127.0.0.1:7882",
+    "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  );
+  try {
+    assert.deepEqual(await client.registerTable("project", "roads", source), {
+      id: "dataset",
+      name: "roads",
+      geometryType: "line",
+      coordinateDimension: 3,
+      crs: "EPSG:3857",
+      postgisTable: source,
+    });
+    assert.deepEqual(sent, [
+      {
+        project: "project",
+        name: "roads",
+        geometryType: "",
+        coordinateDimension: 0,
+        crs: "",
+        postgisTable: source,
+      },
+    ]);
+    denied = true;
+    await assert.rejects(
+      client.registerTable("project", "roads", source),
+      (error) =>
+        error instanceof GeoLedgerError &&
+        error.code === "permission_denied" &&
+        !error.uncertain,
+    );
+  } finally {
+    client.close();
+    wire.GeoLedgerClient.prototype.createDataset = original;
+  }
+});
+
 test("plaintext to remote hosts requires explicit opt-in", () => {
   const { Client, isLoopbackHost } = require("../dist/index.js");
   assert.throws(

@@ -1,6 +1,8 @@
 package geoledger
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -8,7 +10,34 @@ import (
 	"time"
 
 	pb "github.com/mapseekai/geoledger/sdk/go/internal/geoledgerv1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
+
+func TestRegisterTablePreservesCreateDatasetWireContract(t *testing.T) {
+	source := PostgisTable{Schema: "business", Table: "roads", IDColumn: "road_id", GeometryColumn: "shape"}
+	rpc := &datasetRPC{}
+	client := &Client{rpc: rpc}
+	dataset, err := client.RegisterTable(context.Background(), "project", "roads", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &pb.DatasetRequest{Project: "project", Name: "roads", PostgisTable: &pb.PostgisTable{Schema: source.Schema, Table: source.Table, IdColumn: source.IDColumn, GeometryColumn: source.GeometryColumn}}
+	if !proto.Equal(rpc.request, want) {
+		t.Fatalf("registration changed the wire request: %v", rpc.request)
+	}
+	if dataset.ID != "dataset" || dataset.GeometryType != "line" || dataset.CoordinateDimension != 3 || dataset.CRS != "EPSG:3857" || dataset.PostgisTable == nil || *dataset.PostgisTable != source {
+		t.Fatalf("registration lost inferred source metadata: %+v", dataset)
+	}
+	rpc.err = status.Error(codes.PermissionDenied, "registration denied")
+	_, err = client.RegisterTable(context.Background(), "project", "roads", source)
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != "permission_denied" || failure.Uncertain {
+		t.Fatalf("registration changed permission errors: %v", err)
+	}
+}
 
 func TestOpaquePropertiesAndExactNumbersSurviveReplyConversion(t *testing.T) {
 	raw := `{"type":"Feature","id":"one","geometry":null,"properties":{"nested":{"geojson":"ordinary text"},"detail_json":"plain","exact":9007199254740993,"max":18446744073709551615}}`
@@ -54,4 +83,19 @@ func ExampleDial() {
 	defer client.Close()
 	fmt.Println(client != nil)
 	// Output: true
+}
+
+// datasetRPC substitutes only the private RPC used by table registration.
+type datasetRPC struct {
+	pb.GeoLedgerClient
+	request *pb.DatasetRequest
+	err     error
+}
+
+func (s *datasetRPC) CreateDataset(_ context.Context, request *pb.DatasetRequest, _ ...grpc.CallOption) (*pb.DatasetReply, error) {
+	s.request = proto.Clone(request).(*pb.DatasetRequest)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &pb.DatasetReply{Dataset: "dataset", Name: request.Name, GeometryType: "line", CoordinateDimension: 3, Crs: "EPSG:3857", PostgisTable: request.PostgisTable}, nil
 }

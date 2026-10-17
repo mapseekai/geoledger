@@ -52,8 +52,8 @@ def native_leaks(pid, output):
     return result
 
 
-def track_table(base, token, fixture, container, output, name):
-    """Create an existing business-table fixture, then enroll and publish through the API."""
+def register_table(base, token, fixture, container, output, name):
+    """Create an existing business-table fixture, then register and publish through the API."""
     def call(action, body):
         request = urllib.request.Request(base + "/api/v1/" + action, data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
         try:
@@ -71,7 +71,7 @@ def track_table(base, token, fixture, container, output, name):
     subprocess.run(["docker", "exec", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "geoledger_test", "-c", sql], check=True, capture_output=True)
     started = time.monotonic()
     bound = call("create_dataset", {"project": project, "name": table, "postgis_table": {"schema": "business", "table": table, "id_column": "id", "geometry_column": "geom"}})
-    result = {"features": fixture["features"], "track_seconds": time.monotonic() - started}
+    result = {"features": fixture["features"], "registration_seconds": time.monotonic() - started}
     feature = call("features", {"project": project, "dataset": bound["dataset"], "feature_id": "000000000001"})
     feature = {key: feature[key] for key in ["type", "id", "properties", "geometry"]}
     feature["properties"]["attributes"]["benchmark"] = True
@@ -217,7 +217,7 @@ def main():
                     break
             for fixture in binding_reports:
                 bind_env = dict(env, GL_BASE_URL=base, GL_BENCH_REPORT=str(fixture), GL_BENCH_CONTAINER=container)
-                command = ["python3", "-c", "import json,os; from pathlib import Path; from scripts.benchmark import track_table; p=Path(os.environ['GL_BENCH_REPORT']); token=Path(os.environ['GL_API_KEY_FILE']).read_text().strip(); track_table(os.environ['GL_BASE_URL'],token,json.loads(p.read_text()),os.environ['GL_BENCH_CONTAINER'],p.parent,p.stem)"]
+                command = ["python3", "-c", "import json,os; from pathlib import Path; from scripts.benchmark import register_table; p=Path(os.environ['GL_BENCH_REPORT']); token=Path(os.environ['GL_API_KEY_FILE']).read_text().strip(); register_table(os.environ['GL_BASE_URL'],token,json.loads(p.read_text()),os.environ['GL_BENCH_CONTAINER'],p.parent,p.stem)"]
                 results.append({"test": fixture.stem + "-binding", **monitor(command, bind_env, server, output, fixture.stem + "-binding", a.timeout, a.rss_limit_mib)})
             token = Path(env["GL_API_KEY_FILE"]).read_text().strip()
             request = urllib.request.Request(base + "/metrics", headers={"Authorization": "Bearer " + token})

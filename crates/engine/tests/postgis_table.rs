@@ -44,6 +44,10 @@ fn existing_table_publication_is_atomic() -> TestResult {
             .err()
             .ok_or("non-admin attached a table")?;
         assert_eq!(denied.status, 403);
+        assert_eq!(
+            denied.body["error"]["message"],
+            "registering a business table requires a platform administrator"
+        );
         let created = run(
             "create_dataset",
             json!({"name":"existing","postgis_table":source}),
@@ -52,6 +56,7 @@ fn existing_table_publication_is_atomic() -> TestResult {
         assert_eq!(created["geometry_type"], "point");
         assert_eq!(created["coordinate_dimension"], 3);
         assert_eq!(created["crs"], "EPSG:3857");
+        assert_eq!(run("history", json!({}))?[0]["message"], "Register table");
         let features = run("features", json!({"dataset":d}))?;
         assert_eq!(
             features["features"][0]["properties"]["n"],

@@ -206,7 +206,7 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 
 `scripts/test-console-postgis.py` 验证完整 Web 纳管与发布。使用隔离 PostGIS 服务，在当前数据库准备 `business.roads(id bigint PRIMARY KEY, name text NOT NULL, geom geometry(LineString,4326))` 及一条要素，并使用数据库平台管理员授权测试操作。脚本接收与上传测试相同的 `--url`、`--api-key-file`、`--chromium` 和 `--screenshots` 参数。
 
-2026-10-10 本机隔离验证：Node.js 22.23.2、Web 生产构建、PostgreSQL 17.10 / PostGIS 3.6.1；服务使用非超级用户并拥有测试业务表。浏览器经 `trackTable` 纳管一条 LineString，编辑属性与几何并发布 r2，直接 SQL 核对原表写回。对该库执行 `pg_dump -Fc` / `pg_restore` 到独立新库后，确认绑定和 r2 快照保留；继续发布 r3、重放原请求，再直接核对原表写回。该验证仅覆盖小规模功能恢复，不代表目标环境的容量、RPO、RTO 或高可用验收。
+2026-10-10 本机隔离验证：Node.js 22.23.2、Web 生产构建、PostgreSQL 17.10 / PostGIS 3.6.1；服务使用非超级用户并拥有测试业务表。浏览器纳管一条 LineString，编辑属性与几何并发布 r2，直接 SQL 核对原表写回。对该库执行 `pg_dump -Fc` / `pg_restore` 到独立新库后，确认绑定和 r2 快照保留；继续发布 r3、重放原请求，再直接核对原表写回。该验证仅覆盖小规模功能恢复，不代表目标环境的容量、RPO、RTO 或高可用验收。
 
 ## 身份认证验收
 
