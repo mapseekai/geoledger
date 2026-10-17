@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Server limits and storage/protocol metadata for the connected service.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub platform_admin: bool,
@@ -12,6 +13,7 @@ pub struct ServerInfo {
     pub max_feature_bytes: u32,
 }
 
+/// Project identity, current revision and the caller’s server-authorized role.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     #[serde(rename = "project")]
@@ -175,12 +177,19 @@ pub struct Edit {
     #[serde(deserialize_with = "required_feature")]
     pub feature: Option<Value>,
 }
+/// A page request whose continuation key depends on the called method.
+/// Use the last ID for project/dataset/workspace lists, the last subject for
+/// members, the last [`Change::cursor`] for diff/commit changes, or
+/// [`Conflicts::next_after`] for conflicts. Start with an empty `after`.
+/// `None` for `limit` selects the server default; follow each method's end condition.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Page {
     pub after: String,
     pub limit: Option<i64>,
 }
+/// Feature filters. `workspace` and `revision` are mutually exclusive;
+/// draft handles select their own workspace. Continue with the returned cursor.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FeatureQuery {

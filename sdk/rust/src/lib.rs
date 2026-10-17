@@ -4,7 +4,7 @@ use geoledger_rpc::v1 as pb;
 pub use models::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fmt, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tonic::{
     Request, Status,
     metadata::MetadataValue,
@@ -13,7 +13,14 @@ use tonic::{
 };
 
 /// Stable SDK error. No transport-specific error inspection is required.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// [`std::error::Error::source`] exposes a sanitized local diagnostic chain:
+/// JSON category/position, gRPC code, or transport stage and I/O error kind.
+/// Raw server payloads, endpoints and credentials are never copied into that chain.
+/// Diagnostics survive cloning but are omitted from serialization and are absent
+/// after deserialization. Use [`Error::new`] instead of a struct literal.
+#[derive(Clone, Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("{code}: {message}")]
 pub struct Error {
     pub code: String,
     pub message: String,
@@ -21,27 +28,84 @@ pub struct Error {
     pub conflicts: Option<Box<Conflicts>>,
     /// A write may have completed. Confirm its state or retry the same publication.
     pub uncertain: bool,
+    #[serde(skip)]
+    #[source]
+    diagnostic: Option<Arc<Diagnostic>>,
+}
+/// Deliberately stores only classifications, never the original error text.
+#[derive(Debug, thiserror::Error)]
+#[error("{description}")]
+struct Diagnostic {
+    description: String,
+    #[source]
+    cause: Option<Arc<Diagnostic>>,
+}
+impl Diagnostic {
+    fn json(error: &serde_json::Error) -> Self {
+        Self {
+            description: format!(
+                "JSON {:?} at line {} column {}",
+                error.classify(),
+                error.line(),
+                error.column()
+            ),
+            cause: None,
+        }
+    }
+    fn transport(stage: &'static str, error: &(dyn std::error::Error + 'static)) -> Self {
+        // Traverse without formatting opaque causes. Bound traversal even for a
+        // third-party error with a cyclic or unexpectedly deep source chain.
+        let mut next = Some(error);
+        let mut cause = None;
+        for _ in 0..16 {
+            let Some(error) = next else { break };
+            if let Some(io) = error.downcast_ref::<std::io::Error>() {
+                cause = Some(Arc::new(Self {
+                    description: format!("I/O {:?}", io.kind()),
+                    cause: None,
+                }));
+                break;
+            }
+            next = error.source();
+        }
+        Self {
+            description: stage.into(),
+            cause,
+        }
+    }
 }
 impl Error {
-    fn invalid(message: impl Into<String>) -> Self {
+    /// Construct a business error without a local diagnostic source.
+    /// Optional public fields may then be set by the caller; `uncertain` defaults
+    /// to false. This constructor replaces external struct-literal construction.
+    ///
+    /// ```
+    /// use geoledger_client::Error;
+    /// let mut error = Error::new("unavailable", "service unavailable");
+    /// error.uncertain = true;
+    /// assert_eq!(error.code, "unavailable");
+    /// ```
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
-            code: "invalid_argument".into(),
+            code: code.into(),
             message: message.into(),
             request_id: None,
             conflicts: None,
             uncertain: false,
+            diagnostic: None,
         }
     }
-}
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
+    fn invalid(message: impl Into<String>) -> Self {
+        Self::new("invalid_argument", message)
+    }
+    fn diagnosed(mut self, diagnostic: Diagnostic) -> Self {
+        self.diagnostic = Some(Arc::new(diagnostic));
+        self
     }
 }
-impl std::error::Error for Error {}
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
-        Self::invalid(e.to_string())
+        Self::invalid("invalid JSON value").diagnosed(Diagnostic::json(&e))
     }
 }
 impl From<Status> for Error {
@@ -79,6 +143,10 @@ impl From<Status> for Error {
                 | tonic::Code::DataLoss
                 | tonic::Code::ResourceExhausted
         );
+        let diagnostic = Some(Arc::new(Diagnostic {
+            description: format!("gRPC {:?}", status.code()),
+            cause: None,
+        }));
         match detail {
             Some(d) => Self {
                 code: d.code,
@@ -92,6 +160,7 @@ impl From<Status> for Error {
                         decode(v).ok().map(Box::new)
                     }),
                 uncertain,
+                diagnostic,
             },
             None => Self {
                 code: code.into(),
@@ -99,6 +168,7 @@ impl From<Status> for Error {
                 request_id: None,
                 conflicts: None,
                 uncertain,
+                diagnostic,
             },
         }
     }
@@ -118,6 +188,8 @@ impl Interceptor for Authentication {
 type Transport = pb::geo_ledger_client::GeoLedgerClient<
     tonic::service::interceptor::InterceptedService<Channel, Authentication>,
 >;
+/// Cloneable API-Key client. Clones share the underlying connection and may issue
+/// independent requests concurrently. Dropping the last clone releases its channel.
 #[derive(Clone)]
 pub struct Client {
     rpc: Transport,
@@ -129,10 +201,12 @@ fn response_error() -> Error {
         request_id: None,
         conflicts: None,
         uncertain: true,
+        diagnostic: None,
     }
 }
 fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
-    serde_json::from_value(value).map_err(|_| response_error())
+    serde_json::from_value(value)
+        .map_err(|error| response_error().diagnosed(Diagnostic::json(&error)))
 }
 fn normalize(value: &mut Value) -> Result<(), Error> {
     fn feature(v: &mut Value) -> Result<(), Error> {
@@ -141,7 +215,8 @@ fn normalize(value: &mut Value) -> Result<(), Error> {
                 .get("geojson")
                 .and_then(Value::as_str)
                 .ok_or_else(response_error)?;
-            *v = serde_json::from_str(raw).map_err(|_| response_error())?
+            *v = serde_json::from_str(raw)
+                .map_err(|error| response_error().diagnosed(Diagnostic::json(&error)))?
         }
         Ok(())
     }
@@ -165,7 +240,8 @@ fn normalize(value: &mut Value) -> Result<(), Error> {
         for row in rows {
             if let Some(v) = row.get_mut("detail_json") {
                 let raw = v.as_str().ok_or_else(response_error)?;
-                *v = serde_json::from_str(raw).map_err(|_| response_error())?
+                *v = serde_json::from_str(raw)
+                    .map_err(|error| response_error().diagnosed(Diagnostic::json(&error)))?
             }
         }
     }
@@ -205,9 +281,16 @@ fn insecure_opt_in() -> bool {
 }
 
 impl Client {
+    /// Connect with a 30-second per-request timeout. Requires an API Key.
+    ///
+    /// Errors classify invalid configuration or unavailable transport; local
+    /// diagnostic sources contain only safe classifications. Clones share the channel.
     pub async fn connect(endpoint: impl Into<String>, api_key: &str) -> Result<Self, Error> {
         Self::connect_with(endpoint, api_key, ConnectOptions::default()).await
     }
+    /// Connect with a positive per-request timeout; connection establishment is
+    /// separately bounded to ten seconds. Dropping a request future cancels local
+    /// waiting but does not prove that a server-side write was rolled back.
     pub async fn connect_with_timeout(
         endpoint: impl Into<String>,
         api_key: &str,
@@ -223,6 +306,9 @@ impl Client {
         )
         .await
     }
+    /// Connect using explicit TLS and timeout options. Plaintext is restricted
+    /// to loopback unless explicitly allowed. Invalid options return
+    /// `invalid_argument`; connection failures return `unavailable`.
     pub async fn connect_with(
         endpoint: impl Into<String>,
         api_key: &str,
@@ -230,8 +316,10 @@ impl Client {
     ) -> Result<Self, Error> {
         let timeout = options.timeout;
         let endpoint = endpoint.into();
-        let mut e = Endpoint::from_shared(endpoint)
-            .map_err(|_| Error::invalid("endpoint must be http(s)://host:port"))?;
+        let mut e = Endpoint::from_shared(endpoint).map_err(|error| {
+            Error::invalid("endpoint must be http(s)://host:port")
+                .diagnosed(Diagnostic::transport("invalid endpoint", &error))
+        })?;
         if !matches!(e.uri().scheme_str(), Some("http" | "https"))
             || e.uri().authority().is_none()
             || e.uri()
@@ -268,9 +356,10 @@ impl Client {
             } else {
                 tls.with_native_roots()
             };
-            e = e
-                .tls_config(tls)
-                .map_err(|_| Error::invalid("TLS configuration failed"))?
+            e = e.tls_config(tls).map_err(|error| {
+                Error::invalid("TLS configuration failed")
+                    .diagnosed(Diagnostic::transport("TLS configuration failed", &error))
+            })?
         }
         let auth = Authentication {
             value: format!("Bearer {api_key}")
@@ -278,12 +367,10 @@ impl Client {
                 .map_err(|_| Error::invalid("invalid api_key"))?,
             timeout,
         };
-        let channel = e.connect().await.map_err(|_| Error {
-            code: "unavailable".into(),
-            message: "could not connect to GeoLedger".into(),
-            request_id: None,
-            conflicts: None,
-            uncertain: false,
+        let channel = e.connect().await.map_err(|error| {
+            Error::new("unavailable", "could not connect to GeoLedger").diagnosed(
+                Diagnostic::transport("connection failed (DNS, TCP or TLS)", &error),
+            )
         })?;
         Ok(Self {
             rpc: pb::geo_ledger_client::GeoLedgerClient::with_interceptor(channel, auth)
@@ -485,6 +572,8 @@ impl Client {
                 .await?,
         )
     }
+    /// List one page of accessible projects, ordered by project ID. Pass the last
+    /// returned ID as `Page::after`; an empty page ends traversal.
     pub async fn projects(&self, page: Page) -> Result<Vec<Project>, Error> {
         decode(
             self.execute("list_projects", serde_json::to_value(page)?)
@@ -492,6 +581,8 @@ impl Client {
                 .take(),
         )
     }
+    /// Set a user’s project role, subject to server authorization and last-owner
+    /// invariants. Permission or validation failures are returned as SDK errors.
     pub async fn set_member(&self, project: &str, subject: &str, role: &str) -> Result<(), Error> {
         self.execute(
             "set_member",
@@ -500,7 +591,8 @@ impl Client {
         .await?;
         Ok(())
     }
-    /// Active members ordered by subject.
+    /// Active members ordered by subject. Continue with the last member's subject
+    /// in `Page::after`; an empty page ends traversal.
     pub async fn members(&self, project: &str, page: Page) -> Result<Vec<Member>, Error> {
         decode(
             self.execute(
@@ -729,6 +821,8 @@ impl Client {
             .await?,
         )
     }
+    /// Read one page of a commit's changes. Continue with the last
+    /// [`Change::cursor`] in `Page::after`; an empty changes list ends traversal.
     pub async fn commit(
         &self,
         project: &str,
@@ -751,6 +845,9 @@ impl Client {
             .await?,
         )
     }
+    /// Submit an immutable publication intent. On an uncertain failure or local
+    /// cancellation, retry this exact intent, including its request ID and version.
+    /// The server replays a committed receipt rather than publishing twice.
     pub async fn publish(&self, publication: &Publication) -> Result<PublicationResult, Error> {
         decode(
             self.execute("publish", serde_json::to_value(publication)?)
@@ -772,6 +869,9 @@ impl Client {
 }
 /// A personal draft. Mutating methods keep its optimistic version up to date.
 /// Keep this handle (or persist pending_publication) when a publication outcome is uncertain.
+/// Mutations require exclusive `&mut self`; do not create independent handles to
+/// coordinate concurrent writes without handling optimistic-version conflicts.
+/// Dropping a future stops local waiting, not necessarily server-side work.
 pub struct Workspace {
     client: Client,
     project: String,
@@ -802,6 +902,8 @@ impl Workspace {
     fn input(&self) -> Value {
         json!({"project":self.project,"workspace":self.info.id,"expected_workspace_version":self.info.version})
     }
+    /// Reload the server’s workspace version and status. A pending publication
+    /// remains intact; refreshing does not resolve its uncertain outcome.
     pub async fn refresh(&mut self) -> Result<&WorkspaceInfo, Error> {
         self.info = decode(
             self.client
@@ -834,6 +936,9 @@ impl Workspace {
         }])
         .await
     }
+    /// Save an atomic batch against this workspace’s current optimistic version.
+    /// A pending publication or closed workspace rejects edits. Cancellation may
+    /// leave the server changed; refresh state before deciding whether to retry.
     pub async fn save_batch(&mut self, edits: &[Edit]) -> Result<SaveResult, Error> {
         self.editable()?;
         let mut input = self.input();
@@ -855,12 +960,23 @@ impl Workspace {
         query.workspace = Some(self.info.id.clone());
         self.client.features(&self.project, dataset, query).await
     }
+    /// Read draft changes. Continue with the last [`Change::cursor`] in
+    /// `Page::after`; an empty changes list ends traversal.
     pub async fn diff(&self, page: Page) -> Result<Diff, Error> {
         decode(self.client.execute("diff",json!({"project":self.project,"workspace":self.info.id,"after":page.after,"limit":page.limit})).await?)
     }
+    /// Read conflicts. Continue with [`Conflicts::next_after`] in `Page::after`;
+    /// `None` means there is no continuation page.
     pub async fn conflicts(&self, page: Page) -> Result<Conflicts, Error> {
         decode(self.client.execute("conflicts",json!({"project":self.project,"workspace":self.info.id,"after":page.after,"limit":page.limit})).await?)
     }
+    /// Publish the draft, retaining the immutable intent before awaiting the RPC.
+    ///
+    /// After cancellation or an uncertain error, retry with the identical message
+    /// or recover the intent through [`Workspace::pending_publication`]. Pending
+    /// publication blocks edits. A successful retry replays the committed receipt.
+    /// Definitive failures can clear the pending intent; authorization failures
+    /// during a retry preserve it for later recovery.
     pub async fn publish(&mut self, message: &str) -> Result<PublicationResult, Error> {
         let was_pending = self.pending.is_some();
         if let Some(p) = &self.pending {
@@ -938,6 +1054,79 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostics_survive_clone_but_not_wire_roundtrip() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::error::Error as _;
+        let original =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "secret endpoint/key");
+        let error = Error::new("unavailable", "could not connect to GeoLedger")
+            .diagnosed(Diagnostic::transport("connection failed", &original));
+        let clone = error.clone();
+        assert_eq!(
+            clone.to_string(),
+            "unavailable: could not connect to GeoLedger"
+        );
+        let source = clone.source().ok_or("missing diagnostic")?;
+        assert_eq!(source.to_string(), "connection failed");
+        assert_eq!(
+            source.source().ok_or("missing I/O kind")?.to_string(),
+            "I/O ConnectionRefused"
+        );
+        assert!(!format!("{clone:?}").contains("secret"));
+        assert!(!clone.to_string().contains("secret"));
+        let mut cause = clone.source();
+        while let Some(source) = cause {
+            assert!(!source.to_string().contains("secret"));
+            assert!(!format!("{source:?}").contains("secret"));
+            cause = source.source();
+        }
+        let encoded = serde_json::to_value(&clone)?;
+        assert_eq!(
+            encoded,
+            json!({"code":"unavailable","message":"could not connect to GeoLedger","request_id":null,"conflicts":null,"uncertain":false})
+        );
+        let decoded: Error = serde_json::from_value(encoded)?;
+        assert!(decoded.source().is_none());
+        assert_eq!(decoded.to_string(), clone.to_string());
+        assert!(
+            Error::new("invalid_argument", "invalid input")
+                .source()
+                .is_none()
+        );
+        Ok(())
+    }
+    #[test]
+    fn json_and_rpc_sources_exclude_payload_text() -> Result<(), Box<dyn std::error::Error>> {
+        use std::error::Error as _;
+        let raw = serde_json::from_str::<u32>("\"secret payload\"")
+            .err()
+            .ok_or("expected JSON error")?;
+        let error = Error::from(raw);
+        assert_eq!(error.message, "invalid JSON value");
+        assert!(
+            error
+                .source()
+                .ok_or("missing JSON source")?
+                .to_string()
+                .starts_with("JSON Data at line 1 column")
+        );
+        assert!(!format!("{error:?}").contains("secret"));
+        assert!(!error.to_string().contains("secret"));
+        let status = Error::from(Status::unavailable("remote public error message"));
+        assert_eq!(status.message, "remote public error message");
+        assert_eq!(
+            status.source().ok_or("missing RPC source")?.to_string(),
+            "gRPC Unavailable"
+        );
+        let converted = decode::<u32>(json!("private stored value"))
+            .err()
+            .ok_or("expected decode error")?;
+        assert_eq!(converted.code, "invalid_response");
+        assert!(converted.source().is_some());
+        assert!(!format!("{converted:?}").contains("private stored"));
+        Ok(())
+    }
     #[test]
     fn response_conversion_preserves_opaque_properties_and_numbers() -> Result<(), Error> {
         let original = json!({"type":"Feature","id":"one","properties":{"nested":{"geojson":"ordinary text"},"detail_json":"plain","exact":18446744073709551615u64},"geometry":null});

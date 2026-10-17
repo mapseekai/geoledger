@@ -58,9 +58,7 @@ fn million_features_twenty_distinct_writers() -> Result<(), Box<dyn std::error::
         c.batch_execute("ANALYZE gl_history;")?;
     } else {
         let c = rusqlite::Connection::open(&path)?;
-        let extension =
-            std::env::var_os("GL_SPATIALITE_EXTENSION").unwrap_or_else(|| "mod_spatialite".into());
-        let native = geoledger_spatialite::load(c, std::path::Path::new(&extension))?;
+        let native = geoledger_spatialite::load_configured(c)?;
         let c = native.read()?;
         let tx = c.unchecked_transaction()?;
         tx.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES(?1,1,?2,'capacity-0','SQL fixture')",[&p,&w])?;

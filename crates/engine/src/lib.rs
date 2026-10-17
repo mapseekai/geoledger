@@ -357,6 +357,42 @@ mod tests {
         }
         assert!(decode::<Publish>(json!({"project":"p","workspace":"w","expected_workspace_version":0,"request_id":Uuid::new_v4(),"message":"x","author":"forged"})).is_err());
     }
+
+    mod deadline_tests {
+        use super::*;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct ProbeBackend(AtomicBool);
+        impl StorageBackend for ProbeBackend {
+            fn name(&self) -> &'static str {
+                "probe"
+            }
+            fn initialize(&self, _: Duration) -> Result<()> {
+                Ok(())
+            }
+            fn health(&self, _: Duration) -> Result<()> {
+                Ok(())
+            }
+            fn begin(&self, _: bool, _: Duration) -> Result<Box<dyn RepositoryTransaction>> {
+                self.0.store(true, Ordering::SeqCst);
+                Err(Error::new(500, "storage must not be reached after expiry"))
+            }
+        }
+        #[test]
+        fn expired_application_does_not_start_a_storage_operation() -> Result<()> {
+            let backend = Arc::new(ProbeBackend(AtomicBool::new(false)));
+            let app = Application::with_backend(backend.clone()).with_timeout(Duration::ZERO);
+            let error = app
+                .execute("alice", "list_projects", json!({}))
+                .err()
+                .ok_or_else(bad)?;
+            assert_eq!(error.status, 504);
+            assert!(!backend.0.load(Ordering::SeqCst));
+            Ok(())
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -406,41 +442,4 @@ pub struct PostgisTable {
     pub table: String,
     pub id_column: String,
     pub geometry_column: String,
-}
-
-#[cfg(test)]
-mod deadline_tests {
-    use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    struct ProbeBackend(AtomicBool);
-    impl StorageBackend for ProbeBackend {
-        fn name(&self) -> &'static str {
-            "probe"
-        }
-        fn initialize(&self, _: Duration) -> Result<()> {
-            Ok(())
-        }
-        fn health(&self, _: Duration) -> Result<()> {
-            Ok(())
-        }
-        fn begin(&self, _: bool, _: Duration) -> Result<Box<dyn RepositoryTransaction>> {
-            self.0.store(true, Ordering::SeqCst);
-            Err(Error::new(500, "storage must not be reached after expiry"))
-        }
-    }
-    #[test]
-    fn expired_application_does_not_start_a_storage_operation() -> Result<()> {
-        let backend = Arc::new(ProbeBackend(AtomicBool::new(false)));
-        let app = Application::with_backend(backend.clone()).with_timeout(Duration::ZERO);
-        let error = app
-            .execute("alice", "list_projects", json!({}))
-            .err()
-            .ok_or_else(bad)?;
-        assert_eq!(error.status, 504);
-        assert!(!backend.0.load(Ordering::SeqCst));
-        Ok(())
-    }
 }

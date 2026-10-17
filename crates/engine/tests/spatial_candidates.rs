@@ -1,4 +1,7 @@
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "test fixtures and assertions should fail immediately"
+)]
 use geoledger_engine::{Application, Storage};
 use serde_json::{Value, json};
 
