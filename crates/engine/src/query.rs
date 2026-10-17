@@ -140,7 +140,16 @@ pub(super) fn diff(t: &mut Transaction, s: &str, r: Diff) -> Result<Value> {
             result.push(item);
         }
     }
-    Ok(json!({"base_revision":base,"version":version,"changes":result}))
+    // Probe only keys in the same snapshot: an unreturned large feature must
+    // not consume the current page's database/response byte budget.
+    let next = if result.len() == r.limit as usize {
+        let (dataset, key) = cursor_parts(&after)?;
+        t.diff_has_after(&r.project, &r.workspace, &dataset, &key)?
+            .then_some(after)
+    } else {
+        None
+    };
+    Ok(json!({"base_revision":base,"version":version,"changes":result,"next_after":next}))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -157,7 +166,15 @@ pub(super) fn history(t: &mut Transaction, s: &str, r: History) -> Result<Value>
         return Err(bad());
     }
     let rows = t.history_page(&r.project, r.after, r.limit)?;
-    Ok(json!(rows.iter().map(|x|Ok(json!({"revision":x.get::<_,i64>(0usize)?,"subject":x.get::<_,String>(1usize)?,"message":x.get::<_,String>(2usize)?,"created_at":x.get::<_,String>(3usize)?,"source_workspace":x.get::<_,String>(4usize)?,"source_base_revision":x.get::<_,i64>(5usize)?}))).collect::<Result<Vec<_>>>()?))
+    let next = match rows.last() {
+        Some(row) if rows.len() == r.limit as usize => {
+            let after = row.get::<_, i64>(0usize)?;
+            t.history_has_after(&r.project, after)?.then_some(after)
+        }
+        _ => None,
+    };
+    let commits = rows.iter().map(|x|Ok(json!({"revision":x.get::<_,i64>(0usize)?,"subject":x.get::<_,String>(1usize)?,"message":x.get::<_,String>(2usize)?,"created_at":x.get::<_,String>(3usize)?,"source_workspace":x.get::<_,String>(4usize)?,"source_base_revision":x.get::<_,i64>(5usize)?}))).collect::<Result<Vec<_>>>()?;
+    Ok(json!({"commits":commits,"next_after":next}))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -197,7 +214,14 @@ pub(super) fn commit_detail(t: &mut Transaction, s: &str, r: Commit) -> Result<V
             out.push(item);
         }
     }
-    Ok(json!({"revision":r.revision,"changes":out}))
+    let next = if out.len() == r.limit as usize {
+        let (dataset, key) = cursor_parts(&after)?;
+        t.commit_has_after(&r.project, r.revision, &dataset, &key)?
+            .then_some(after)
+    } else {
+        None
+    };
+    Ok(json!({"revision":r.revision,"changes":out,"next_after":next}))
 }
 
 fn feature_row(row: &Row, key: &str, properties: usize, geometry: usize) -> Result<Value> {
@@ -244,6 +268,13 @@ pub(super) fn audit_events(t: &mut Transaction, subject: &str, r: Audit) -> Resu
         return Err(bad());
     }
     let rows = t.audit_page(&r.project, r.after, r.limit)?;
+    let next = match rows.last() {
+        Some(row) if rows.len() == r.limit as usize => {
+            let after = row.get::<_, i64>(0usize)?;
+            t.audit_has_after(&r.project, after)?.then_some(after)
+        }
+        _ => None,
+    };
     let mut events = Vec::new();
     let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
     for row in rows {
@@ -252,7 +283,6 @@ pub(super) fn audit_events(t: &mut Transaction, subject: &str, r: Audit) -> Resu
         budget.include(&event)?;
         events.push(event);
     }
-    let next = events.last().map(|e| e["id"].clone());
     Ok(json!({"events":events,"next_after":next}))
 }
 

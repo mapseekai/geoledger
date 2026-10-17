@@ -62,6 +62,22 @@ test("private transport sends only Session header and preserves exact business m
     assert.match(raw, /"snake_case":18446744073709551615/);
     assert.match(raw, /"exact":1.00000000000000001e18/);
     assert.match(raw, /"__proto__":/);
+    response =
+      '{"commits":[{"revision":9007199254740993}],"next_after":9007199254740993}';
+    assert.equal((await client.history("p")).nextAfter, 9007199254740993n);
+    response = '{"commits":[{"revision":9007199254740993}],"next_after":null}';
+    assert.equal((await client.history("p")).nextAfter, undefined);
+    response =
+      '{"base_revision":1,"version":2,"changes":[{"cursor":"d/key/1"}],"next_after":"d/key/1"}';
+    assert.equal((await client.diff("p", "w")).nextAfter, "d/key/1");
+    response = '{"revision":1,"changes":[],"next_after":null}';
+    assert.equal((await client.commit("p", 1n)).nextAfter, undefined);
+    response =
+      '{"events":[{"id":9007199254740993,"detail":{"next_after":"opaque"}}],"next_after":null}';
+    const audit = await client.audit("p");
+    assert.equal(audit.nextAfter, undefined);
+    assert.equal(audit.events[0]?.id, 9007199254740993n);
+    assert.deepEqual(audit.events[0]?.detail, { next_after: "opaque" });
     response = '{"version":3,"changes":1}';
     await execute(client, {
       action: "save",
@@ -203,7 +219,9 @@ test("commit pagination cannot overwrite the normalized exact revision", async (
   let body = "";
   globalThis.fetch = async (_input, init) => {
     body = String(init?.body);
-    return new Response('{"revision":9007199254740993,"changes":[]}');
+    return new Response(
+      '{"revision":9007199254740993,"changes":[],"next_after":null}',
+    );
   };
   try {
     await execute(consoleClient("test-session"), {

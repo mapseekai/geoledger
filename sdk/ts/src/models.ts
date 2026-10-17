@@ -181,6 +181,8 @@ export interface Diff {
   baseRevision: bigint;
   version: bigint;
   changes: Change[];
+  /** Absent at the current read snapshot end; pass back unchanged. */
+  nextAfter?: string;
 }
 
 export interface Conflict {
@@ -213,9 +215,17 @@ export interface Commit {
   sourceWorkspace: string;
   sourceBaseRevision: bigint;
 }
+/** Commits are ordered by ascending revision. Later requests may see new publications. */
+export interface HistoryPage {
+  commits: Commit[];
+  /** Absent at the current read snapshot end. */
+  nextAfter?: bigint;
+}
 export interface CommitChanges {
   revision: bigint;
   changes: Change[];
+  /** Absent at the current read snapshot end; pass back unchanged. */
+  nextAfter?: string;
 }
 
 export interface AuditEvent {

@@ -240,7 +240,17 @@ pub trait RepositoryTransaction: Send {
         after_key: &str,
         limit: i64,
     ) -> Result<Vec<Row>>;
+    /// Key-only continuation probes use this transaction's read snapshot and
+    /// must not materialize unreturned feature properties, geometry or audit detail.
+    fn diff_has_after(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        after_dataset: &str,
+        after_key: &str,
+    ) -> Result<bool>;
     fn history_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>>;
+    fn history_has_after(&mut self, project: &str, after: i64) -> Result<bool>;
     fn commit_exists(&mut self, project: &str, revision: i64) -> Result<Option<Row>>;
     fn commit_page(
         &mut self,
@@ -250,7 +260,15 @@ pub trait RepositoryTransaction: Send {
         after_key: &str,
         limit: i64,
     ) -> Result<Vec<Row>>;
+    fn commit_has_after(
+        &mut self,
+        project: &str,
+        revision: i64,
+        after_dataset: &str,
+        after_key: &str,
+    ) -> Result<bool>;
     fn audit_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>>;
+    fn audit_has_after(&mut self, project: &str, after: i64) -> Result<bool>;
     /// Transactional conflict index for exactly one workspace/version/HEAD tuple.
     /// Its rows are derived data and must not grant access without application authorization.
     fn cached_conflict_count(

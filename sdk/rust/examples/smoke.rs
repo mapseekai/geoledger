@@ -65,9 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .await?;
     assert_eq!(rows.features[0], feature);
     let history = client.history(&project.id, 0, None).await?;
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0].source_workspace, receipt.workspace);
-    assert_eq!(history[0].source_base_revision, 0);
+    assert_eq!(history.commits.len(), 1);
+    assert_eq!(history.commits[0].source_workspace, receipt.workspace);
+    assert_eq!(history.commits[0].source_base_revision, 0);
     assert_eq!(
         client
             .commit(&project.id, receipt.revision, Page::default())

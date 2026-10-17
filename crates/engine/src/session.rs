@@ -1392,6 +1392,18 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     ) -> Result<Vec<Row>> {
         self.query("WITH batch AS MATERIALIZED (SELECT project,dataset,feature_id,properties,geometry_json,resolved_head,resolution_stale FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($4,$5) ORDER BY dataset,feature_id LIMIT $6) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,b.properties,b.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &after_dataset, &after_key, &limit])
     }
+    fn diff_has_after(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        after_dataset: &str,
+        after_key: &str,
+    ) -> Result<bool> {
+        self.query_one("SELECT EXISTS(SELECT 1 FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($3,$4))", &[&project, &workspace, &after_dataset, &after_key])?.get(0usize)
+    }
+    fn history_has_after(&mut self, project: &str, after: i64) -> Result<bool> {
+        self.query_one("SELECT EXISTS(SELECT 1 FROM gl_commits c JOIN gl_workspaces w ON w.project=c.project AND w.id=c.workspace WHERE c.project=$1 AND c.revision>$2)", &[&project, &after])?.get(0usize)
+    }
     fn history_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>> {
         self.query("SELECT c.revision,c.subject,c.message,c.created_at,c.workspace,w.base_revision FROM gl_commits c JOIN gl_workspaces w ON w.project=c.project AND w.id=c.workspace WHERE c.project=$1 AND c.revision>$2 ORDER BY c.revision LIMIT $3", &[&project, &after, &limit])
     }
@@ -1410,6 +1422,22 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
         limit: i64,
     ) -> Result<Vec<Row>> {
         self.query("SELECT dataset,feature_id,(gl_json_field(before_value,'properties')),gl_json_field(before_value,'geometry'),(gl_json_field(after_value,'properties')),gl_json_field(after_value,'geometry') FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT $5", &[&project, &revision, &after_dataset, &after_key, &limit])
+    }
+    fn commit_has_after(
+        &mut self,
+        project: &str,
+        revision: i64,
+        after_dataset: &str,
+        after_key: &str,
+    ) -> Result<bool> {
+        self.query_one("SELECT EXISTS(SELECT 1 FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4))", &[&project, &revision, &after_dataset, &after_key])?.get(0usize)
+    }
+    fn audit_has_after(&mut self, project: &str, after: i64) -> Result<bool> {
+        self.query_one(
+            "SELECT EXISTS(SELECT 1 FROM gl_audit_events WHERE project=$1 AND id>$2)",
+            &[&project, &after],
+        )?
+        .get(0usize)
     }
     fn audit_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>> {
         self.query("SELECT id,subject,action,detail,created_at FROM gl_audit_events WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3", &[&project, &after, &limit])
@@ -1941,10 +1969,16 @@ mod tests {
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].get::<_, String>(2usize)?, "first");
         let after = page[0].get::<_, i64>(0usize)?;
-        reader.commit()?;
+        assert!(!reader.audit_has_after(&project, after)?);
         commit_tx.send(()).unwrap();
         worker.join().unwrap()?;
+        // A commit between the page read and its continuation probe cannot
+        // change the end signal within this REPEATABLE READ transaction.
+        assert!(!reader.audit_has_after(&project, after)?);
+        assert!(reader.audit_page(&project, after, 10)?.is_empty());
+        reader.commit()?;
         let mut reader = Client::open(&storage, &pool, timeout)?.transaction(true)?;
+        assert!(reader.audit_has_after(&project, after)?);
         let page = reader.audit_page(&project, after, 10)?;
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].get::<_, String>(2usize)?, "second");

@@ -268,6 +268,8 @@ export interface DiffReply {
   baseRevision: string;
   version: string;
   changes: Change[];
+  /** Present only if more changes exist in this request's read snapshot. */
+  nextAfter?: string | undefined;
 }
 
 export interface Conflict {
@@ -302,11 +304,14 @@ export interface CommitInfo {
 
 export interface HistoryReply {
   commits: CommitInfo[];
+  /** Ascending revision cursor; absent at the end of this read snapshot. */
+  nextAfter?: string | undefined;
 }
 
 export interface CommitReply {
   revision: string;
   changes: Change[];
+  nextAfter?: string | undefined;
 }
 
 export interface AuditEvent {
@@ -319,6 +324,7 @@ export interface AuditEvent {
 
 export interface AuditReply {
   events: AuditEvent[];
+  /** Absent when no later event exists in this request's read snapshot. */
   nextAfter?: string | undefined;
 }
 
@@ -4322,7 +4328,7 @@ export const Change: MessageFns<Change> = {
 };
 
 function createBaseDiffReply(): DiffReply {
-  return { baseRevision: "0", version: "0", changes: [] };
+  return { baseRevision: "0", version: "0", changes: [], nextAfter: undefined };
 }
 
 export const DiffReply: MessageFns<DiffReply> = {
@@ -4335,6 +4341,9 @@ export const DiffReply: MessageFns<DiffReply> = {
     }
     for (const v of message.changes) {
       Change.encode(v!, writer.uint32(26).fork()).join();
+    }
+    if (message.nextAfter !== undefined) {
+      writer.uint32(34).string(message.nextAfter);
     }
     return writer;
   },
@@ -4376,6 +4385,14 @@ export const DiffReply: MessageFns<DiffReply> = {
             message.changes.push(Change.decode(reader, reader.uint32()));
             continue;
           }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.nextAfter = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -4397,6 +4414,11 @@ export const DiffReply: MessageFns<DiffReply> = {
         : "0",
       version: isSet(object.version) ? globalThis.String(object.version) : "0",
       changes: globalThis.Array.isArray(object?.changes) ? object.changes.map((e: any) => Change.fromJSON(e)) : [],
+      nextAfter: isSet(object.nextAfter)
+        ? globalThis.String(object.nextAfter)
+        : isSet(object.next_after)
+        ? globalThis.String(object.next_after)
+        : undefined,
     };
   },
 
@@ -4411,6 +4433,9 @@ export const DiffReply: MessageFns<DiffReply> = {
     if (message.changes?.length) {
       obj.changes = message.changes.map((e) => Change.toJSON(e));
     }
+    if (message.nextAfter !== undefined) {
+      obj.nextAfter = message.nextAfter;
+    }
     return obj;
   },
 
@@ -4422,6 +4447,7 @@ export const DiffReply: MessageFns<DiffReply> = {
     message.baseRevision = object.baseRevision ?? "0";
     message.version = object.version ?? "0";
     message.changes = object.changes?.map((e) => Change.fromPartial(e)) || [];
+    message.nextAfter = object.nextAfter ?? undefined;
     return message;
   },
 };
@@ -4962,13 +4988,16 @@ export const CommitInfo: MessageFns<CommitInfo> = {
 };
 
 function createBaseHistoryReply(): HistoryReply {
-  return { commits: [] };
+  return { commits: [], nextAfter: undefined };
 }
 
 export const HistoryReply: MessageFns<HistoryReply> = {
   encode(message: HistoryReply, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     for (const v of message.commits) {
       CommitInfo.encode(v!, writer.uint32(10).fork()).join();
+    }
+    if (message.nextAfter !== undefined) {
+      writer.uint32(16).int64(message.nextAfter);
     }
     return writer;
   },
@@ -4994,6 +5023,14 @@ export const HistoryReply: MessageFns<HistoryReply> = {
             message.commits.push(CommitInfo.decode(reader, reader.uint32()));
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.nextAfter = reader.int64().toString();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -5009,6 +5046,11 @@ export const HistoryReply: MessageFns<HistoryReply> = {
   fromJSON(object: any): HistoryReply {
     return {
       commits: globalThis.Array.isArray(object?.commits) ? object.commits.map((e: any) => CommitInfo.fromJSON(e)) : [],
+      nextAfter: isSet(object.nextAfter)
+        ? globalThis.String(object.nextAfter)
+        : isSet(object.next_after)
+        ? globalThis.String(object.next_after)
+        : undefined,
     };
   },
 
@@ -5016,6 +5058,9 @@ export const HistoryReply: MessageFns<HistoryReply> = {
     const obj: any = {};
     if (message.commits?.length) {
       obj.commits = message.commits.map((e) => CommitInfo.toJSON(e));
+    }
+    if (message.nextAfter !== undefined) {
+      obj.nextAfter = message.nextAfter;
     }
     return obj;
   },
@@ -5026,12 +5071,13 @@ export const HistoryReply: MessageFns<HistoryReply> = {
   fromPartial<I extends Exact<DeepPartial<HistoryReply>, I>>(object: I): HistoryReply {
     const message = createBaseHistoryReply();
     message.commits = object.commits?.map((e) => CommitInfo.fromPartial(e)) || [];
+    message.nextAfter = object.nextAfter ?? undefined;
     return message;
   },
 };
 
 function createBaseCommitReply(): CommitReply {
-  return { revision: "0", changes: [] };
+  return { revision: "0", changes: [], nextAfter: undefined };
 }
 
 export const CommitReply: MessageFns<CommitReply> = {
@@ -5041,6 +5087,9 @@ export const CommitReply: MessageFns<CommitReply> = {
     }
     for (const v of message.changes) {
       Change.encode(v!, writer.uint32(18).fork()).join();
+    }
+    if (message.nextAfter !== undefined) {
+      writer.uint32(26).string(message.nextAfter);
     }
     return writer;
   },
@@ -5074,6 +5123,14 @@ export const CommitReply: MessageFns<CommitReply> = {
             message.changes.push(Change.decode(reader, reader.uint32()));
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.nextAfter = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -5090,6 +5147,11 @@ export const CommitReply: MessageFns<CommitReply> = {
     return {
       revision: isSet(object.revision) ? globalThis.String(object.revision) : "0",
       changes: globalThis.Array.isArray(object?.changes) ? object.changes.map((e: any) => Change.fromJSON(e)) : [],
+      nextAfter: isSet(object.nextAfter)
+        ? globalThis.String(object.nextAfter)
+        : isSet(object.next_after)
+        ? globalThis.String(object.next_after)
+        : undefined,
     };
   },
 
@@ -5101,6 +5163,9 @@ export const CommitReply: MessageFns<CommitReply> = {
     if (message.changes?.length) {
       obj.changes = message.changes.map((e) => Change.toJSON(e));
     }
+    if (message.nextAfter !== undefined) {
+      obj.nextAfter = message.nextAfter;
+    }
     return obj;
   },
 
@@ -5111,6 +5176,7 @@ export const CommitReply: MessageFns<CommitReply> = {
     const message = createBaseCommitReply();
     message.revision = object.revision ?? "0";
     message.changes = object.changes?.map((e) => Change.fromPartial(e)) || [];
+    message.nextAfter = object.nextAfter ?? undefined;
     return message;
   },
 };

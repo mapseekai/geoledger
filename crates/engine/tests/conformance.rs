@@ -1033,6 +1033,182 @@ fn stale_deletion_resolution_after_unrelated_save_is_reconfirmed() -> TestResult
 }
 
 #[test]
+fn change_pages_signal_exact_end_and_preserve_tuple_order() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    let empty = f.call(&f.alice, "diff", json!({"workspace":w,"limit":2}))?;
+    assert_eq!(empty.get("next_after"), Some(&Value::Null));
+    assert_eq!(empty["changes"], json!([]));
+    let keys: Vec<_> = (0..34).map(|i| format!("key/{i:02}")).collect();
+    let edits: Vec<_> = keys
+        .iter()
+        .map(|k| f.edit(k, json!({"exact":9007199254740993_u64}), Value::Null))
+        .collect();
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":0,"edits":edits}),
+    )?;
+    let expected: Vec<_> = keys.iter().map(|k| json!(format!("{}/{k}", f.d))).collect();
+    assert_query_pages(
+        &f,
+        "diff",
+        json!({"workspace":w}),
+        ("changes", "cursor"),
+        json!(""),
+        &expected,
+        &[1, 2, 17, 34, 35],
+    )?;
+    f.publish(&f.alice, &w, 1)?;
+    assert_query_pages(
+        &f,
+        "commit",
+        json!({"revision":1}),
+        ("changes", "cursor"),
+        json!(""),
+        &expected,
+        &[1, 2, 17, 34, 35],
+    )?;
+    Ok(())
+}
+
+#[test]
+fn change_page_probe_does_not_consume_response_budget() -> TestResult {
+    let mut f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    let edits = [
+        f.edit("a", json!({"small":true}), Value::Null),
+        f.edit("b", json!({"payload":"x".repeat(48 * 1024)}), Value::Null),
+    ];
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":0,"edits":edits}),
+    )?;
+    f.app = f.app.clone().with_response_limit(2048);
+    let page = f.call(&f.alice, "diff", json!({"workspace":w,"limit":1}))?;
+    assert_eq!(page["changes"][0]["feature_id"], "a");
+    assert!(page["next_after"].is_string());
+    assert_eq!(
+        f.call(&f.alice, "diff", json!({"workspace":w,"limit":2}))
+            .unwrap_err()
+            .status,
+        413
+    );
+    // Publication reads the actual large edit; the small read budget applies
+    // only to the paged query, not fixture publication.
+    f.app = f.app.clone().with_response_limit(64 * 1024 * 1024);
+    f.publish(&f.alice, &w, 1)?;
+    f.app = f.app.clone().with_response_limit(2048);
+    let page = f.call(&f.alice, "commit", json!({"revision":1,"limit":1}))?;
+    assert_eq!(page["changes"][0]["feature_id"], "a");
+    assert!(page["next_after"].is_string());
+    assert_eq!(
+        f.call(&f.alice, "commit", json!({"revision":1,"limit":2}))
+            .unwrap_err()
+            .status,
+        413
+    );
+    Ok(())
+}
+
+#[test]
+fn history_and_audit_pages_signal_current_snapshot_end() -> TestResult {
+    let f = Fixture::new()?;
+    let empty = f.call(&f.alice, "history", json!({"limit":2}))?;
+    assert_eq!(empty, json!({"commits":[],"next_after":null}));
+    for revision in 1..=2 {
+        let w = f.ws(&f.alice);
+        f.save(&f.alice, &w, 0, json!({"revision":revision}), Value::Null)?;
+        f.publish(&f.alice, &w, 1)?;
+    }
+    assert_query_pages(
+        &f,
+        "history",
+        json!({}),
+        ("commits", "revision"),
+        json!(0),
+        &[json!(1), json!(2)],
+        &[1, 2, 3],
+    )?;
+    let audit = f.call(&f.alice, "audit", json!({"limit":1000}))?;
+    let ids: Vec<_> = audit["events"]
+        .as_array()
+        .ok_or("events")?
+        .iter()
+        .map(|e| e["id"].clone())
+        .collect();
+    assert!(ids.len() > 2);
+    assert_query_pages(
+        &f,
+        "audit",
+        json!({}),
+        ("events", "id"),
+        json!(0),
+        &ids,
+        &[1, 2, ids.len(), ids.len() + 1],
+    )?;
+    // A terminal page describes one request's snapshot. Later appends are visible
+    // when polling after the last observed revision/event ID, even after a null cursor.
+    let last_id = ids.last().ok_or("audit id")?;
+    let w = f.ws(&f.alice);
+    f.save(&f.alice, &w, 0, json!({"revision":3}), Value::Null)?;
+    f.publish(&f.alice, &w, 1)?;
+    let later = f.call(&f.alice, "history", json!({"after":2,"limit":2}))?;
+    assert_eq!(later["commits"][0]["revision"], 3);
+    assert_eq!(later["commits"].as_array().ok_or("commits")?.len(), 1);
+    assert_eq!(later["next_after"], Value::Null);
+    let later = f.call(&f.alice, "audit", json!({"after":last_id,"limit":1000}))?;
+    let events = later["events"].as_array().ok_or("events")?;
+    assert!(!events.is_empty());
+    assert!(events.iter().all(|e| e["id"].as_i64() > last_id.as_i64()));
+    assert_eq!(later["next_after"], Value::Null);
+    Ok(())
+}
+
+fn assert_query_pages(
+    f: &Fixture,
+    operation: &str,
+    input: Value,
+    fields: (&str, &str),
+    start: Value,
+    expected: &[Value],
+    limits: &[usize],
+) -> TestResult {
+    let (collection, cursor) = fields;
+    for &limit in limits {
+        let mut after = start.clone();
+        let mut seen = Vec::new();
+        loop {
+            let mut request = input.clone();
+            request["after"] = after.clone();
+            request["limit"] = json!(limit);
+            let page = f.call(&f.alice, operation, request)?;
+            let rows = page[collection].as_array().ok_or("page collection")?;
+            assert!(rows.len() <= limit);
+            seen.extend(rows.iter().map(|row| row[cursor].clone()));
+            assert_eq!(seen, expected[..seen.len()], "{operation} limit={limit}");
+            let next = page.get("next_after").ok_or("page next_after")?;
+            if seen.len() == expected.len() {
+                assert_eq!(next, &Value::Null, "{operation} terminal limit={limit}");
+                // Reading beyond the last returned item also yields an empty terminal page.
+                let mut request = input.clone();
+                request["after"] = rows.last().ok_or("last row")?[cursor].clone();
+                request["limit"] = json!(limit);
+                let empty = f.call(&f.alice, operation, request)?;
+                assert_eq!(empty[collection], json!([]));
+                assert_eq!(empty.get("next_after"), Some(&Value::Null));
+                break;
+            }
+            assert_eq!(next, &rows.last().ok_or("last row")?[cursor]);
+            assert_ne!(next, &after);
+            after = next.clone();
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn audit_pagination_is_owner_only_and_project_scoped() -> TestResult {
     let f = Fixture::new()?;
     let page = f.call(&f.alice, "audit", json!({"limit":2}))?;
@@ -1344,7 +1520,7 @@ fn dataset_family_and_lifecycle_preserve_shared_history() -> TestResult {
         json!({"dataset":f.d,"confirm_name":"renamed points"}),
     )?;
     let history = f.call(&f.alice, "history", json!({}))?;
-    assert_eq!(history.as_array().unwrap().len(), 1);
+    assert_eq!(history["commits"].as_array().unwrap().len(), 1);
     let changes = f.call(&f.alice, "commit", json!({"revision":1}))?;
     assert_eq!(changes["changes"].as_array().unwrap().len(), 1);
     assert_eq!(changes["changes"][0]["dataset"], other);

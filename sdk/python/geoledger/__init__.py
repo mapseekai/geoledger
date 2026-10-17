@@ -259,8 +259,12 @@ class Client:
                  feature_id: str | None = None, bbox: list[float] | None = None, after: str = "", limit: int = 100) -> dict[str, Any]:
         return self._call("Features", project=project, dataset=dataset, workspace=workspace, revision=revision, feature_id=feature_id, bbox=bbox, after=after, limit=limit)
 
-    def history(self, project: str, *, after: int = 0, limit: int = 100) -> list[dict[str, Any]]:
-        return self._call("History", project=project, after=after, limit=limit)["commits"]
+    def history(self, project: str, *, after: int = 0, limit: int = 100) -> dict[str, Any]:
+        """Ascending commits page; next_after is None at the current snapshot end.
+
+        Later publications can appear when polling after the last observed revision.
+        """
+        return self._call("History", project=project, after=after, limit=limit)
 
     def workspace_summary(self, project: str, workspace: str) -> dict[str, Any]:
         return self._call("WorkspaceSummary", project=project, workspace=workspace)

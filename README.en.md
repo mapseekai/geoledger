@@ -139,6 +139,8 @@ curl --fail http://127.0.0.1:7881/ready
 
 See the [User Guide](docs/user-guide.md) for the data model and merge rules, and [API and SDKs](docs/api.md) for pagination and retry contracts.
 
+`diff`, `commit`, `history`, and `audit` use server page cursors to mark the end of the current read snapshot. `history` returns a page containing `commits`; see the [pagination contract](docs/api.md#差异提交历史与审计分页).
+
 ## API and SDKs
 
 HTTP business endpoints live under `/api/v1`. The four SDKs and CLI use the `geoledger.v1` gRPC protocol. SDKs authenticate with user API keys; workspace objects maintain draft versions and pending publication requests.

@@ -89,6 +89,8 @@ pub struct Diff {
     pub base_revision: i64,
     pub version: i64,
     pub changes: Vec<Change>,
+    /// Present only when another page exists in the current read snapshot.
+    pub next_after: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -124,9 +126,17 @@ pub struct Commit {
     pub source_base_revision: i64,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPage {
+    pub commits: Vec<Commit>,
+    pub next_after: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CommitChanges {
     pub revision: i64,
     pub changes: Vec<Change>,
+    /// Present only when another page exists in the current read snapshot.
+    pub next_after: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -179,8 +189,8 @@ pub struct Edit {
 }
 /// A page request whose continuation key depends on the called method.
 /// Use the last ID for project/dataset/workspace lists, the last subject for
-/// members, the last [`Change::cursor`] for diff/commit changes, or
-/// [`Conflicts::next_after`] for conflicts. Start with an empty `after`.
+/// members, or the returned `next_after` for diff/commit changes and conflicts.
+/// Start with an empty `after`.
 /// `None` for `limit` selects the server default; follow each method's end condition.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

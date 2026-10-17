@@ -119,8 +119,8 @@ func (w *Workspace) Features(ctx context.Context, dataset string, q FeatureQuery
 	return w.client.Features(ctx, w.project, dataset, q)
 }
 
-// Diff returns one page of draft changes; continue with the last Change.Cursor
-// as Page.After and verify the returned Version is unchanged between pages.
+// Diff returns one page of draft changes; continue with NextAfter as Page.After
+// and verify Version is unchanged between pages. A nil NextAfter ends iteration.
 func (w *Workspace) Diff(ctx context.Context, page Page) (Diff, error) {
 	if err := w.mu.lock(ctx); err != nil {
 		return Diff{}, err

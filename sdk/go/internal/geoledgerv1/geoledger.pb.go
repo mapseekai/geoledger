@@ -2267,10 +2267,12 @@ func (x *Change) GetAfter() *Feature {
 }
 
 type DiffReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BaseRevision  int64                  `protobuf:"varint,1,opt,name=base_revision,json=baseRevision,proto3" json:"base_revision,omitempty"`
-	Version       int64                  `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
-	Changes       []*Change              `protobuf:"bytes,3,rep,name=changes,proto3" json:"changes,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	BaseRevision int64                  `protobuf:"varint,1,opt,name=base_revision,json=baseRevision,proto3" json:"base_revision,omitempty"`
+	Version      int64                  `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	Changes      []*Change              `protobuf:"bytes,3,rep,name=changes,proto3" json:"changes,omitempty"`
+	// Present only if more changes exist in this request's read snapshot.
+	NextAfter     *string `protobuf:"bytes,4,opt,name=next_after,json=nextAfter,proto3,oneof" json:"next_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2324,6 +2326,13 @@ func (x *DiffReply) GetChanges() []*Change {
 		return x.Changes
 	}
 	return nil
+}
+
+func (x *DiffReply) GetNextAfter() string {
+	if x != nil && x.NextAfter != nil {
+		return *x.NextAfter
+	}
+	return ""
 }
 
 type Conflict struct {
@@ -2603,8 +2612,10 @@ func (x *CommitInfo) GetSourceBaseRevision() int64 {
 }
 
 type HistoryReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Commits       []*CommitInfo          `protobuf:"bytes,1,rep,name=commits,proto3" json:"commits,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Commits []*CommitInfo          `protobuf:"bytes,1,rep,name=commits,proto3" json:"commits,omitempty"`
+	// Ascending revision cursor; absent at the end of this read snapshot.
+	NextAfter     *int64 `protobuf:"varint,2,opt,name=next_after,json=nextAfter,proto3,oneof" json:"next_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2646,10 +2657,18 @@ func (x *HistoryReply) GetCommits() []*CommitInfo {
 	return nil
 }
 
+func (x *HistoryReply) GetNextAfter() int64 {
+	if x != nil && x.NextAfter != nil {
+		return *x.NextAfter
+	}
+	return 0
+}
+
 type CommitReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Revision      int64                  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
 	Changes       []*Change              `protobuf:"bytes,2,rep,name=changes,proto3" json:"changes,omitempty"`
+	NextAfter     *string                `protobuf:"bytes,3,opt,name=next_after,json=nextAfter,proto3,oneof" json:"next_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2696,6 +2715,13 @@ func (x *CommitReply) GetChanges() []*Change {
 		return x.Changes
 	}
 	return nil
+}
+
+func (x *CommitReply) GetNextAfter() string {
+	if x != nil && x.NextAfter != nil {
+		return *x.NextAfter
+	}
+	return ""
 }
 
 type AuditEvent struct {
@@ -2775,9 +2801,10 @@ func (x *AuditEvent) GetCreatedAt() string {
 }
 
 type AuditReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Events        []*AuditEvent          `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
-	NextAfter     *int64                 `protobuf:"varint,2,opt,name=next_after,json=nextAfter,proto3,oneof" json:"next_after,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Events []*AuditEvent          `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	// Absent when no later event exists in this request's read snapshot.
+	NextAfter     *int64 `protobuf:"varint,2,opt,name=next_after,json=nextAfter,proto3,oneof" json:"next_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3877,11 +3904,14 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\x04base\x18\x04 \x01(\v2\x15.geoledger.v1.FeatureR\x04base\x12+\n" +
 	"\x05draft\x18\x05 \x01(\v2\x15.geoledger.v1.FeatureR\x05draft\x12-\n" +
 	"\x06before\x18\x06 \x01(\v2\x15.geoledger.v1.FeatureR\x06before\x12+\n" +
-	"\x05after\x18\a \x01(\v2\x15.geoledger.v1.FeatureR\x05after\"z\n" +
+	"\x05after\x18\a \x01(\v2\x15.geoledger.v1.FeatureR\x05after\"\xad\x01\n" +
 	"\tDiffReply\x12#\n" +
 	"\rbase_revision\x18\x01 \x01(\x03R\fbaseRevision\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x03R\aversion\x12.\n" +
-	"\achanges\x18\x03 \x03(\v2\x14.geoledger.v1.ChangeR\achanges\"\xf3\x02\n" +
+	"\achanges\x18\x03 \x03(\v2\x14.geoledger.v1.ChangeR\achanges\x12\"\n" +
+	"\n" +
+	"next_after\x18\x04 \x01(\tH\x00R\tnextAfter\x88\x01\x01B\r\n" +
+	"\v_next_after\"\xf3\x02\n" +
 	"\bConflict\x12\x16\n" +
 	"\x06cursor\x18\x01 \x01(\tR\x06cursor\x12\x18\n" +
 	"\adataset\x18\x02 \x01(\tR\adataset\x12\x1d\n" +
@@ -3911,12 +3941,18 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x04 \x01(\tR\tcreatedAt\x12)\n" +
 	"\x10source_workspace\x18\x05 \x01(\tR\x0fsourceWorkspace\x120\n" +
-	"\x14source_base_revision\x18\x06 \x01(\x03R\x12sourceBaseRevision\"B\n" +
+	"\x14source_base_revision\x18\x06 \x01(\x03R\x12sourceBaseRevision\"u\n" +
 	"\fHistoryReply\x122\n" +
-	"\acommits\x18\x01 \x03(\v2\x18.geoledger.v1.CommitInfoR\acommits\"Y\n" +
+	"\acommits\x18\x01 \x03(\v2\x18.geoledger.v1.CommitInfoR\acommits\x12\"\n" +
+	"\n" +
+	"next_after\x18\x02 \x01(\x03H\x00R\tnextAfter\x88\x01\x01B\r\n" +
+	"\v_next_after\"\x8c\x01\n" +
 	"\vCommitReply\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x03R\brevision\x12.\n" +
-	"\achanges\x18\x02 \x03(\v2\x14.geoledger.v1.ChangeR\achanges\"\x8e\x01\n" +
+	"\achanges\x18\x02 \x03(\v2\x14.geoledger.v1.ChangeR\achanges\x12\"\n" +
+	"\n" +
+	"next_after\x18\x03 \x01(\tH\x00R\tnextAfter\x88\x01\x01B\r\n" +
+	"\v_next_after\"\x8e\x01\n" +
 	"\n" +
 	"AuditEvent\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x18\n" +
@@ -4219,8 +4255,11 @@ func file_geoledger_v1_geoledger_proto_init() {
 	file_geoledger_v1_geoledger_proto_msgTypes[17].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[18].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[35].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[37].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[38].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[39].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[41].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[42].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[44].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[57].OneofWrappers = []any{}
 	type x struct{}

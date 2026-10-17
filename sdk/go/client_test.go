@@ -74,6 +74,39 @@ func TestPlaintextRemoteRequiresOptIn(t *testing.T) {
 	}
 }
 
+func TestQueryPageContinuationsSurviveReplyConversion(t *testing.T) {
+	for _, cursor := range []*string{nil, new("dataset/key/with/slashes")} {
+		var diff Diff
+		if err := decode(&pb.DiffReply{NextAfter: cursor}, &diff); err != nil {
+			t.Fatal(err)
+		}
+		var commit CommitChanges
+		if err := decode(&pb.CommitReply{NextAfter: cursor}, &commit); err != nil {
+			t.Fatal(err)
+		}
+		for _, got := range []*string{diff.NextAfter, commit.NextAfter} {
+			if (got == nil) != (cursor == nil) || got != nil && *got != *cursor {
+				t.Fatalf("cursor = %v, want %v", got, cursor)
+			}
+		}
+	}
+	for _, cursor := range []*int64{nil, new(int64(9007199254740993))} {
+		var history HistoryPage
+		if err := decode(&pb.HistoryReply{NextAfter: cursor}, &history); err != nil {
+			t.Fatal(err)
+		}
+		var audit AuditPage
+		if err := decode(&pb.AuditReply{NextAfter: cursor}, &audit); err != nil {
+			t.Fatal(err)
+		}
+		for _, got := range []*int64{history.NextAfter, audit.NextAfter} {
+			if (got == nil) != (cursor == nil) || got != nil && *got != *cursor {
+				t.Fatalf("cursor = %v, want %v", got, cursor)
+			}
+		}
+	}
+}
+
 func ExampleDial() {
 	// Dial is lazy: this example does not contact a service.
 	client, err := Dial("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

@@ -4,6 +4,7 @@ import {
   call,
   type Changes,
   type Commit,
+  type HistoryPage,
   type Conflicts,
   type Workspace,
 } from "@/lib/browser-api";
@@ -79,12 +80,13 @@ export function UpdateDialog({
         workspace: workspace.id,
         limit: 1,
       });
-      const commits = await call<Commit[]>({
+      const history = await call<HistoryPage>({
         action: "history",
         project,
         after: workspace.baseRevision,
         limit: MAX_COMMITS,
       });
+      const commits = history.commits;
       const summaries = await Promise.all(
         commits.map((commit) =>
           call<ChangeSummary>({
@@ -101,7 +103,7 @@ export function UpdateDialog({
           ...commit,
           summary: summaries[index],
         })),
-        more: commits.length === MAX_COMMITS,
+        more: history.nextAfter !== undefined,
         conflicts: Number(conflicts.total),
       });
     } catch (cause) {

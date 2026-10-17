@@ -178,7 +178,7 @@ fn check_imported(app: &Application, seed: &Seed, expected: &DataSummary) -> Tes
     );
     assert_eq!(a["properties"]["x"], json!(122), "{a}");
     let history = app.execute("bob", "history", json!({"project":p}))?;
-    assert!(history.as_array().ok_or("history")?.len() >= 2);
+    assert!(history["commits"].as_array().ok_or("commits")?.len() >= 2);
     // The stored receipt answers the original publication retry.
     let retry = app.execute(
         "bob",

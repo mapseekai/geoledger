@@ -346,7 +346,6 @@ impl Service {
             "list_projects" => json!({"projects":result}),
             "list_datasets" => json!({"datasets":result}),
             "list_workspaces" => json!({"workspaces":result}),
-            "history" => json!({"commits":result}),
             "list_members" => json!({"members":result}),
             "features" if result["type"] == "Feature" => {
                 json!({"crs":result["crs"],"revision":result["revision"],"workspace_version":result["workspace_version"],"features":[result]})

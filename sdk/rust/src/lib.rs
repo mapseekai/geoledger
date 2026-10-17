@@ -780,19 +780,20 @@ impl Client {
         input["dataset"] = json!(dataset);
         decode(self.execute("features", input).await?)
     }
+    /// Read commits in ascending revision order. `next_after` is absent at the
+    /// current snapshot end; later publications may appear in a later request.
     pub async fn history(
         &self,
         project: &str,
         after: i64,
         limit: Option<i64>,
-    ) -> Result<Vec<Commit>, Error> {
+    ) -> Result<HistoryPage, Error> {
         decode(
             self.execute(
                 "history",
                 json!({"project":project,"after":after,"limit":limit}),
             )
-            .await?["commits"]
-                .take(),
+            .await?,
         )
     }
     pub async fn workspace_summary(
@@ -821,8 +822,8 @@ impl Client {
             .await?,
         )
     }
-    /// Read one page of a commit's changes. Continue with the last
-    /// [`Change::cursor`] in `Page::after`; an empty changes list ends traversal.
+    /// Read one page of a commit's changes. Continue with `next_after` in
+    /// `Page::after`; `None` ends traversal.
     pub async fn commit(
         &self,
         project: &str,
@@ -960,8 +961,8 @@ impl Workspace {
         query.workspace = Some(self.info.id.clone());
         self.client.features(&self.project, dataset, query).await
     }
-    /// Read draft changes. Continue with the last [`Change::cursor`] in
-    /// `Page::after`; an empty changes list ends traversal.
+    /// Read draft changes. Continue with `next_after` in `Page::after`;
+    /// `None` ends traversal. Verify `version` is unchanged between pages.
     pub async fn diff(&self, page: Page) -> Result<Diff, Error> {
         decode(self.client.execute("diff",json!({"project":self.project,"workspace":self.info.id,"after":page.after,"limit":page.limit})).await?)
     }
@@ -1054,6 +1055,36 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn query_page_continuations_survive_wire_conversion() -> Result<(), Box<dyn std::error::Error>>
+    {
+        for cursor in [None, Some("dataset/key/with/slashes".to_owned())] {
+            let diff: Diff = decode(serde_json::to_value(pb::DiffReply {
+                next_after: cursor.clone(),
+                ..Default::default()
+            })?)?;
+            let commit: CommitChanges = decode(serde_json::to_value(pb::CommitReply {
+                next_after: cursor.clone(),
+                ..Default::default()
+            })?)?;
+            assert_eq!(diff.next_after, cursor);
+            assert_eq!(commit.next_after, cursor);
+        }
+        for cursor in [None, Some(9007199254740993_i64)] {
+            let history: HistoryPage = decode(serde_json::to_value(pb::HistoryReply {
+                next_after: cursor,
+                ..Default::default()
+            })?)?;
+            let audit: AuditPage = decode(serde_json::to_value(pb::AuditReply {
+                next_after: cursor,
+                ..Default::default()
+            })?)?;
+            assert_eq!(history.next_after, cursor);
+            assert_eq!(audit.next_after, cursor);
+        }
+        Ok(())
+    }
+
     #[test]
     fn diagnostics_survive_clone_but_not_wire_roundtrip() -> Result<(), Box<dyn std::error::Error>>
     {

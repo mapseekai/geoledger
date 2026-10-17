@@ -15,6 +15,7 @@ import {
   type Conflict,
   type Conflicts,
   type Commit,
+  type HistoryPage,
   type CommitChanges,
   type AuditEvent,
   type AuditPage,
@@ -135,6 +136,7 @@ export function decodeDiff(v: wire.DiffReply): Diff {
     baseRevision: BigInt(v.baseRevision),
     version: BigInt(v.version),
     changes: v.changes.map((item) => decodeChange(item)),
+    ...(v.nextAfter === undefined ? {} : { nextAfter: v.nextAfter }),
   };
 }
 export function decodeConflict(v: wire.Conflict): Conflict {
@@ -172,10 +174,17 @@ export function decodeCommit(v: wire.CommitInfo): Commit {
     sourceBaseRevision: BigInt(v.sourceBaseRevision),
   };
 }
+export function decodeHistoryPage(v: wire.HistoryReply): HistoryPage {
+  return {
+    commits: v.commits.map(decodeCommit),
+    ...(v.nextAfter === undefined ? {} : { nextAfter: BigInt(v.nextAfter) }),
+  };
+}
 export function decodeCommitChanges(v: wire.CommitReply): CommitChanges {
   return {
     revision: BigInt(v.revision),
     changes: v.changes.map((item) => decodeChange(item)),
+    ...(v.nextAfter === undefined ? {} : { nextAfter: v.nextAfter }),
   };
 }
 export function decodeAuditEvent(v: wire.AuditEvent): AuditEvent {

@@ -19,3 +19,28 @@ test("transport decoders reject invalid Feature envelopes and dimensions without
   assert.equal(Object.hasOwn(result.features[0].properties, "__proto__"), true);
   assert.equal(result.features[0].properties.snake_case, 7);
 });
+
+
+test("query page decoders preserve opaque and 64-bit continuations and terminal absence", () => {
+  const convert = require("../../dist/_internal/convert");
+  for (const nextAfter of [undefined, "opaque/%/cursor"]) {
+    for (const [decode, value] of [
+      [convert.decodeDiff, { baseRevision: "1", version: "2", changes: [], nextAfter }],
+      [convert.decodeCommitChanges, { revision: "3", changes: [], nextAfter }],
+    ]) {
+      const result = decode(value);
+      assert.equal(result.nextAfter, nextAfter);
+      assert.equal(Object.hasOwn(result, "nextAfter"), nextAfter !== undefined);
+    }
+  }
+  for (const nextAfter of [undefined, "9007199254740993"]) {
+    for (const [decode, value] of [
+      [convert.decodeHistoryPage, { commits: [], nextAfter }],
+      [convert.decodeAuditPage, { events: [], nextAfter }],
+    ]) {
+      const result = decode(value);
+      assert.equal(result.nextAfter, nextAfter === undefined ? undefined : 9007199254740993n);
+      assert.equal(Object.hasOwn(result, "nextAfter"), nextAfter !== undefined);
+    }
+  }
+});

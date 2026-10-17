@@ -590,10 +590,7 @@ export function Workspaces({
               });
               return {
                 rows: result.changes,
-                next:
-                  result.changes.length === 50
-                    ? result.changes.at(-1)!.cursor
-                    : undefined,
+                next: result.nextAfter,
               };
             }
             const result = await call<Changes>({
@@ -605,10 +602,7 @@ export function Workspaces({
             });
             return {
               rows: result.changes,
-              next:
-                result.changes.length === 50
-                  ? result.changes.at(-1)!.cursor
-                  : undefined,
+              next: result.nextAfter,
             };
           }}
         />

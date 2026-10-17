@@ -59,6 +59,23 @@ class ContractTests(unittest.TestCase):
             id=1, detail_json=json.dumps(value))]))
         self.assertEqual(self.client(stub).audit("project")["events"][0]["detail"], value)
 
+    def test_query_pages_preserve_continuations_and_terminal_none(self):
+        for cursor in [None, "dataset/key/with/slashes"]:
+            stub = SimpleNamespace(
+                Diff=lambda *a, **k: wire.DiffReply(**({"next_after": cursor} if cursor else {})),
+                Commit=lambda *a, **k: wire.CommitReply(**({"next_after": cursor} if cursor else {})))
+            client = self.client(stub)
+            workspace = Workspace(client, "project", WorkspaceInfo("draft", 0, 0, "open"))
+            self.assertEqual(workspace.diff()["next_after"], cursor)
+            self.assertEqual(client.commit("project", 1)["next_after"], cursor)
+        for cursor in [None, 9007199254740993]:
+            stub = SimpleNamespace(
+                History=lambda *a, **k: wire.HistoryReply(**({"next_after": cursor} if cursor else {})),
+                Audit=lambda *a, **k: wire.AuditReply(**({"next_after": cursor} if cursor else {})))
+            client = self.client(stub)
+            self.assertEqual(client.history("project"), {"commits": [], "next_after": cursor})
+            self.assertEqual(client.audit("project")["next_after"], cursor)
+
     def test_missing_feature_is_rejected_but_explicit_delete_is_sent(self):
         sent = []
         def save(request, **kwargs):

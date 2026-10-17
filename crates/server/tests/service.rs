@@ -308,3 +308,148 @@ async fn large_streams_and_http_preserve_atomic_saves_without_four_mib_cap() -> 
     assert_eq!(page.features[0], feature);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn query_pages_match_http_and_grpc_and_audit_stays_owner_only() -> TestResult {
+    let dir = common::tempdir()?;
+    common::database(&dir.path().join("geoledger.sqlite3"))?;
+    let outsider_key = "glk_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    common::seed(
+        &dir.path().join("geoledger.sqlite3"),
+        &[("other-admin", outsider_key, true)],
+    )?;
+    let server = start(dir.path())?;
+    let client = connect(&server, common::KEY).await?;
+    let other_admin = connect(&server, outsider_key).await?;
+    assert!(other_admin.info().await?.platform_admin);
+    let project = client.create_project("query pages").await?.id;
+    let dataset = client.create_dataset(&project, "points", "point").await?.id;
+    let read_http = |operation: &str,
+                     mut request: Value|
+     -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        request["project"] = json!(project);
+        let (status, response) = http(
+            server.http,
+            &format!("/api/v1/{operation}"),
+            Some(common::KEY),
+            Some(&request.to_string()),
+        )?;
+        assert_eq!(status, 200, "{operation}: {response}");
+        Ok(serde_json::from_str(
+            response.split_once("\r\n\r\n").ok_or("HTTP body")?.1,
+        )?)
+    };
+    assert!(
+        client
+            .history(&project, 0, Some(2))
+            .await?
+            .commits
+            .is_empty()
+    );
+    assert_eq!(
+        read_http("history", json!({"limit":2}))?,
+        json!({"commits":[],"next_after":null})
+    );
+    let mut draft = client.create_workspace(&project).await?;
+    for key in ["a/1", "b/2"] {
+        draft.save(&dataset, json!({"type":"Feature","id":key,"properties":{"exact":9007199254740993_u64},"geometry":null})).await?;
+    }
+    for limit in [1, 2, 3] {
+        let page = draft
+            .diff(Page {
+                limit: Some(limit),
+                ..Default::default()
+            })
+            .await?;
+        let raw = read_http("diff", json!({"workspace":draft.info().id,"limit":limit}))?;
+        assert_eq!(
+            raw["changes"].as_array().ok_or("changes")?.len(),
+            page.changes.len()
+        );
+        assert_eq!(raw["next_after"], json!(page.next_after));
+        assert_eq!(page.next_after.is_some(), limit == 1);
+        if let Some(after) = page.next_after {
+            let terminal = draft
+                .diff(Page {
+                    after,
+                    limit: Some(limit),
+                })
+                .await?;
+            assert_eq!(terminal.changes[0].feature_id, "b/2");
+            assert!(terminal.next_after.is_none());
+        }
+    }
+    let receipt = draft.publish("first page").await?;
+    for limit in [1, 2, 3] {
+        let page = client
+            .commit(
+                &project,
+                receipt.revision,
+                Page {
+                    limit: Some(limit),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let raw = read_http("commit", json!({"revision":receipt.revision,"limit":limit}))?;
+        assert_eq!(raw["next_after"], json!(page.next_after));
+        assert_eq!(page.next_after.is_some(), limit == 1);
+    }
+    let mut second = client.create_workspace(&project).await?;
+    second
+        .save(
+            &dataset,
+            json!({"type":"Feature","id":"c","properties":{},"geometry":null}),
+        )
+        .await?;
+    second.publish("second page").await?;
+    for limit in [1, 2, 3] {
+        let page = client.history(&project, 0, Some(limit)).await?;
+        let raw = read_http("history", json!({"limit":limit}))?;
+        assert_eq!(raw["next_after"], json!(page.next_after));
+        assert_eq!(page.next_after, if limit == 1 { Some(1) } else { None });
+        assert_eq!(page.commits[0].revision, 1);
+    }
+    let next = client.history(&project, 1, Some(1)).await?;
+    assert_eq!(next.commits[0].revision, 2);
+    assert!(next.next_after.is_none());
+    assert!(
+        client
+            .history(&project, 2, Some(1))
+            .await?
+            .commits
+            .is_empty()
+    );
+    let events = client.audit(&project, 0, Some(1000)).await?.events;
+    let count = events.len() as i64;
+    for limit in [1, count, count + 1] {
+        let page = client.audit(&project, 0, Some(limit)).await?;
+        let raw = read_http("audit", json!({"limit":limit}))?;
+        assert_eq!(raw["next_after"], json!(page.next_after));
+        assert_eq!(page.next_after.is_some(), limit < count);
+    }
+    let last = events.last().ok_or("last audit event")?.id;
+    let terminal = client.audit(&project, last, Some(2)).await?;
+    assert!(terminal.events.is_empty());
+    assert!(terminal.next_after.is_none());
+    assert_eq!(
+        other_admin
+            .audit(&project, 0, Some(1))
+            .await
+            .err()
+            .ok_or("audit denied")?
+            .code,
+        "not_found"
+    );
+    assert_eq!(
+        http(
+            server.http,
+            "/api/v1/audit",
+            Some(outsider_key),
+            Some(&json!({"project":project,"limit":1}).to_string())
+        )?
+        .0,
+        404
+    );
+    Ok(())
+}

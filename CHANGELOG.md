@@ -10,12 +10,16 @@
 
 - 表注册 SDK 方法改为 Rust/Python `register_table`、Go `RegisterTable`、TypeScript `registerTable`；原 `track_table` / `TrackTable` / `trackTable` 调用需直接改名，不保留旧别名。Web 私有动作同步改为 `registerTable`，部署后刷新旧页面。
 - 已有表基准脚本的注册耗时字段由 `track_seconds` 改为 `registration_seconds`；读取新报告的工具需同步更新。
+- `history` 的 HTTP 响应与四语言 SDK 返回值改为 `commits` 和页级 `next_after`（TS/Web 为 `nextAfter`）的页对象。调用方须随服务端更新；存储格式仍为 16，无需数据迁移。
+- 存储后端事务接口增加 diff/commit/history/audit 的仅键后续探测操作；自定义适配器需要实现相同快照及内存预算语义。
 
 ### Changed
 
 - 表注册继续共用 `CreateDataset` / `create_dataset` 与 `postgis_table` 协议，字段编号和 CLI 调用不变。存储格式、既有绑定、备份和历史记录无需迁移；新注册提交说明使用 `Register table`。
 
 ### Fixed
+
+- diff/commit/history/audit 在同一读取快照探测后续记录，仅真实中间页返回页级游标；整页终页与短终页均明确结束，Web 使用服务端游标。history/audit 后续新增记录可通过最后观察位置重新查询。
 
 - PostGIS 发布通过完整要素键定位待关闭的历史记录，避免项目数据分布不均及统计信息滞后时扫描整个项目的历史数据。
 

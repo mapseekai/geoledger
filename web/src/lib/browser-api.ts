@@ -143,6 +143,10 @@ export type Commit = {
   sourceWorkspace: string;
   sourceBaseRevision: string;
 };
+export type HistoryPage = {
+  commits: Commit[];
+  nextAfter?: string;
+};
 export type Audit = {
   id: string;
   subject: string;
@@ -151,6 +155,7 @@ export type Audit = {
   createdAt: string;
 };
 export type Changes = {
+  nextAfter?: string;
   changes: { cursor: string; json: string }[];
   version?: string;
   revision?: string;

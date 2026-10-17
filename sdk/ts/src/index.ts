@@ -30,6 +30,7 @@ export type {
   Conflict,
   Conflicts,
   Commit,
+  HistoryPage,
   CommitChanges,
   AuditEvent,
   AuditPage,
@@ -500,14 +501,14 @@ export class Client {
       convert.decodeChangeSummary,
     );
   }
-  history(project: string, after = 0n, limit = 100): Promise<model.Commit[]> {
-    return this.#call<wire.HistoryReply, model.Commit[]>(
+  history(project: string, after = 0n, limit = 100): Promise<model.HistoryPage> {
+    return this.#call(
       (cb) =>
         this.#rpc.history(
           { project, after: revision(after), limit: String(limit) },
           cb,
         ),
-      (r) => r.commits.map(convert.decodeCommit),
+      convert.decodeHistoryPage,
     );
   }
   commit(

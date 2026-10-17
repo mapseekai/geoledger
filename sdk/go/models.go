@@ -81,6 +81,7 @@ type Diff struct {
 	BaseRevision int64    `json:"base_revision"`
 	Version      int64    `json:"version"`
 	Changes      []Change `json:"changes"`
+	NextAfter    *string  `json:"next_after"`
 }
 
 type Conflict struct {
@@ -112,9 +113,18 @@ type Commit struct {
 	SourceWorkspace    string `json:"source_workspace"`
 	SourceBaseRevision int64  `json:"source_base_revision"`
 }
+
+// HistoryPage contains commits in ascending revision order. A nil NextAfter
+// marks the current read snapshot end; later publications can still be appended.
+type HistoryPage struct {
+	Commits   []Commit `json:"commits"`
+	NextAfter *int64   `json:"next_after"`
+}
+
 type CommitChanges struct {
-	Revision int64    `json:"revision"`
-	Changes  []Change `json:"changes"`
+	Revision  int64    `json:"revision"`
+	Changes   []Change `json:"changes"`
+	NextAfter *string  `json:"next_after"`
 }
 
 type AuditEvent struct {

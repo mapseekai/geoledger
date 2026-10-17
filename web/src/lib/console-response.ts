@@ -101,6 +101,35 @@ export function validateBusinessResponse(
   value: unknown,
 ): unknown {
   if (operation === "conflicts") return decodeConflicts(value);
+  if (["diff", "commit", "history", "audit"].includes(operation)) {
+    const row = object(value);
+    const collection =
+      operation === "history"
+        ? "commits"
+        : operation === "audit"
+          ? "events"
+          : "changes";
+    const items = row[collection];
+    if (!Array.isArray(items)) return invalid();
+    for (const item of items) {
+      const entry = object(item);
+      if (operation === "history") integer(entry.revision);
+      else if (operation === "audit") integer(entry.id);
+      else text(entry.cursor);
+    }
+    // HTTP sends null at the snapshot end; SDK/BFF models omit the optional key.
+    // Missing metadata is a contract error, not an older-protocol fallback.
+    const { nextAfter, ...page } = row;
+    if (nextAfter === null) return page;
+    return {
+      ...page,
+      nextAfter:
+        operation === "history" || operation === "audit"
+          ? integer(nextAfter)
+          : text(nextAfter),
+    };
+  }
+
   if (operation === "list_datasets") {
     if (!Array.isArray(value)) return invalid();
     value.forEach(dataset);

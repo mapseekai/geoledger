@@ -57,8 +57,11 @@ fn inner(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
         feature
     );
     let first_history = call("alice", "history", json!({}))?;
-    assert_eq!(first_history.as_array().ok_or("history")?.len(), 1);
-    assert_eq!(first_history[0]["source_workspace"], w);
+    assert_eq!(
+        first_history["commits"].as_array().ok_or("commits")?.len(),
+        1
+    );
+    assert_eq!(first_history["commits"][0]["source_workspace"], w);
     let mut second_feature = feature.clone();
     second_feature["id"] = json!("two");
     call(
@@ -78,7 +81,7 @@ fn inner(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
         json!({"workspace":w2,"expected_workspace_version":2,"request_id":uuid::Uuid::new_v4(),"message":"rebased workspace"}),
     )?;
     let history = call("alice", "history", json!({}))?;
-    let history = history.as_array().ok_or("history")?;
+    let history = history["commits"].as_array().ok_or("commits")?;
     assert_eq!(history.len(), 2);
     assert_eq!(history[0]["source_workspace"], w);
     assert_eq!(history[0]["source_base_revision"], 0);

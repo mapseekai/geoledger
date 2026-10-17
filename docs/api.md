@@ -165,6 +165,35 @@ Python SDK 与 TS SDK 分别按上文安装和构建；统一安装与联调流�
 `save` 直接接收带字符串 `id` 的完整 GeoJSON Feature。批量编辑使用 SDK 自身的 `Edit`，
 删除通过 `delete()` 或显式 `null` / `None` 表达，保存操作提供完整要素字段。 `save` 保存草稿，`publish` 发布版本，`discard` 丢弃工作区草稿；`restore(project, revision)` 创建撤销指定提交的工作区，需要再次发布，不是将整个项目直接重置到该版本。`archive_project` 只读归档并保留历史，`delete_project` / `delete_dataset` 清除对应版本数据，纳管原表保留。
 正式要素分页固定首次返回的 revision，后续查询带该版本及 next_after；草稿分页需核对 workspace_version。
+
+### 差异、提交、历史与审计分页
+
+`diff`、`commit`、`history`、`audit` 只在同一读取快照内确有后续记录时返回页级 `next_after`；空页、短终页和恰好整页终页均返回 `null`（gRPC 可选字段缺席）。不需要依据条数推测，也无需再请求空页确认结束。下一请求保持项目、工作区或提交修订等条件，并将游标原样传给 `after`。
+
+| 查询 | HTTP 页内容 | 游标 |
+| --- | --- | --- |
+| `diff` | `base_revision`、`version`、`changes`、`next_after` | 最后返回的 `dataset/feature_id`；工作区分页还须核对 `version` 未变 |
+| `commit` | `revision`、`changes`、`next_after` | 最后返回的 `dataset/feature_id`；保持同一修订 |
+| `history` | `commits`、`next_after` | 最后返回的修订号，按 `revision > after` 升序 |
+| `audit` | `events`、`next_after` | 最后返回的事件 ID，按 `id > after` 升序；仅 owner 可读 |
+
+SDK 的 `history` 统一返回页对象：Rust/Go 为 `HistoryPage`，TypeScript 为 `HistoryPage`（`commits` / `nextAfter`），Python 为 `commits` / `next_after` 字典。Rust/Python 的终页游标为 `None`，Go 为 `nil`，TypeScript/Web 省略 `nextAfter`；修订号和事件 ID 在 TypeScript SDK 中使用 `bigint`，浏览器 HTTP 中使用十进制字符串。`diff` / `commit` 的条目 `cursor` 仍保留，翻页使用页级游标。
+
+结束信号仅描述当前请求快照。history/audit 的各次请求独立建立读取快照；下一请求前新增的、更大修订号或事件 ID 可以被读到。需要等待新记录时保存最后观察到的修订号/事件 ID，显式以该值轮询；`next_after = null` 不表示未来不会新增。跨请求不维持冻结的历史/审计快照，diff 的工作区也可能在两页之间改变；提交明细保持固定修订。
+
+HTTP `history` 从数组改为页对象，四语言 SDK 的 `history` 返回类型同步改变；调用方读取 `commits` 并跟随页级游标。此为当前协议的响应/源码兼容性变更，服务端、SDK、CLI 与 Web 同版本更新；不提供旧数组兼容层。新增 Protobuf 字段保留原字段编号；存储结构与格式 16 不变，无需数据迁移。
+
+```python
+after = 0
+while True:
+    page = client.history(project.id, after=after, limit=100)
+    for commit in page["commits"]:
+        print(commit["revision"])
+    if page["next_after"] is None:
+        break
+    after = page["next_after"]
+```
+
 `history` 的每条提交还包含实际发布工作区及其发布时基线：Go 使用 `SourceWorkspace` / `SourceBaseRevision`，Rust/Python 使用 `source_workspace` / `source_base_revision`，TypeScript 使用 `sourceWorkspace` / `sourceBaseRevision`。基线随发布前 rebase 更新；已发布工作区保持其基线不变。
 JSON 对象键通过递归校验，保护普通对象的编解码语义；
 `$serde_json::private::RawValue` 和 `$serde_json::private::Number` 为保留键，

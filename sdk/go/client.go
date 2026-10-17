@@ -447,12 +447,12 @@ func (c *Client) Features(ctx context.Context, project, dataset string, query Fe
 	e := call(c, ctx, c.rpc.Features, &pb.FeaturesRequest{Project: project, Dataset: dataset, Workspace: query.Workspace, Revision: query.Revision, FeatureId: query.FeatureID, Bbox: query.Bbox, After: query.After, Limit: limit(query.Limit)}, &r)
 	return r, e
 }
-func (c *Client) History(ctx context.Context, project string, after int64, n int64) ([]Commit, error) {
-	var r struct {
-		Commits []Commit `json:"commits"`
-	}
+
+// History returns one ascending page. Continue with HistoryPage.NextAfter; nil ends this snapshot.
+func (c *Client) History(ctx context.Context, project string, after int64, n int64) (HistoryPage, error) {
+	var r HistoryPage
 	e := call(c, ctx, c.rpc.History, &pb.HistoryRequest{Project: project, After: after, Limit: limit(n)}, &r)
-	return r.Commits, e
+	return r, e
 }
 func (c *Client) WorkspaceSummary(ctx context.Context, project, workspace string) (ChangeSummary, error) {
 	var r ChangeSummary
@@ -465,8 +465,8 @@ func (c *Client) CommitSummary(ctx context.Context, project string, revision int
 	return r, e
 }
 
-// Commit returns one page of revision changes. Continue with the last Change.Cursor
-// as Page.After, retaining the same revision. An empty page ends iteration.
+// Commit returns one page of revision changes. Continue with NextAfter as
+// Page.After, retaining the same revision. A nil NextAfter ends iteration.
 func (c *Client) Commit(ctx context.Context, project string, revision int64, page Page) (CommitChanges, error) {
 	var r CommitChanges
 	e := call(c, ctx, c.rpc.Commit, &pb.CommitRequest{Project: project, Revision: revision, After: page.After, Limit: limit(page.Limit)}, &r)

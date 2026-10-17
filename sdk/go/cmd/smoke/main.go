@@ -104,7 +104,7 @@ func run() error {
 		return fmt.Errorf("feature roundtrip failed")
 	}
 	history, err := client.History(ctx, project.ID, 0, 100)
-	if err != nil || len(history) != 1 || history[0].SourceWorkspace != receipt.Workspace || history[0].SourceBaseRevision != 0 {
+	if err != nil || len(history.Commits) != 1 || history.Commits[0].SourceWorkspace != receipt.Workspace || history.Commits[0].SourceBaseRevision != 0 || history.NextAfter != nil {
 		return fmt.Errorf("history source workspace/base: %v %v", history, err)
 	}
 	changed := *draft.PendingPublication()

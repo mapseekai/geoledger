@@ -139,6 +139,8 @@ curl --fail http://127.0.0.1:7881/ready
 
 数据模型和合并规则见[使用指南](docs/user-guide.md)，分页和重试契约见 [API 与 SDK](docs/api.md)。
 
+`diff`、`commit`、`history`、`audit` 使用服务端页级游标确认当前快照的结束；`history` 返回 `commits` 页对象，详见 [分页契约](docs/api.md#差异提交历史与审计分页)。
+
 ## API 与 SDK
 
 HTTP 业务接口位于 `/api/v1`，四语言 SDK 与 CLI 通过 `geoledger.v1` gRPC 协议接入。SDK 使用用户 API Key，工作区对象维护草稿版本和待确认的发布请求。

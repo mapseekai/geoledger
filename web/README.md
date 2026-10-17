@@ -175,3 +175,5 @@ Inter 与 Newsreader 字体本地打包，中文衬线采用系统字体。[GeoL
 完整认证浏览器验证：`python3 scripts/test-console-auth.py --url http://127.0.0.1:13000 --admin-file target/auth-refactor-integration/browser-admin.json --chromium /path/to/chromium`。仅使用一次性服务；管理员 JSON 文件权限必须为 0600。验证用户名密码与 API Key 登录、首次改密、个人资料、用户与密钥管理、CSRF、会话撤销和手机页面；截图与无凭证报告写入 `target/auth-refactor-browser`。
 
 单元测试与源码同目录同名（`.test.ts` / `.test.tsx`），每份源码仅一个单测文件；跨模块集成放在 `test/` 并在根 `test-layout.json` 记录理由。`npm test` 递归发现两类文件，`npm run lint` 先执行全仓库测试布局检查。开发机需要 Python 3 和 ast-grep 0.51.0（`npm install --global @ast-grep/cli@0.51.0`）；依赖缺失会明确失败。集成分类和实际覆盖范围需要人工审查。
+
+差异、提交、历史与审计分页验证：`python3 scripts/test-console-pagination.py --url http://localhost:13001 --api-key-file <临时凭据文件> --browser-channel chrome --screenshots /tmp/geoledger-pagination-shots`。仅在一次性测试服务运行，覆盖空历史、20 条历史和 50 条变更的整页终页、审计真实续页与最终 20 条终页、桌面与手机结束控件；使用公共浏览器沙箱配置。

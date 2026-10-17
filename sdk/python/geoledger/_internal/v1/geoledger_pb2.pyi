@@ -381,14 +381,16 @@ class Change(_message.Message):
     def __init__(self, cursor: _Optional[str] = ..., dataset: _Optional[str] = ..., feature_id: _Optional[str] = ..., base: _Optional[_Union[Feature, _Mapping]] = ..., draft: _Optional[_Union[Feature, _Mapping]] = ..., before: _Optional[_Union[Feature, _Mapping]] = ..., after: _Optional[_Union[Feature, _Mapping]] = ...) -> None: ...
 
 class DiffReply(_message.Message):
-    __slots__ = ("base_revision", "version", "changes")
+    __slots__ = ("base_revision", "version", "changes", "next_after")
     BASE_REVISION_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     CHANGES_FIELD_NUMBER: _ClassVar[int]
+    NEXT_AFTER_FIELD_NUMBER: _ClassVar[int]
     base_revision: int
     version: int
     changes: _containers.RepeatedCompositeFieldContainer[Change]
-    def __init__(self, base_revision: _Optional[int] = ..., version: _Optional[int] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ...) -> None: ...
+    next_after: str
+    def __init__(self, base_revision: _Optional[int] = ..., version: _Optional[int] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ..., next_after: _Optional[str] = ...) -> None: ...
 
 class Conflict(_message.Message):
     __slots__ = ("cursor", "dataset", "feature_id", "fields", "base", "current", "draft", "reason", "resolved_against_revision")
@@ -445,18 +447,22 @@ class CommitInfo(_message.Message):
     def __init__(self, revision: _Optional[int] = ..., subject: _Optional[str] = ..., message: _Optional[str] = ..., created_at: _Optional[str] = ..., source_workspace: _Optional[str] = ..., source_base_revision: _Optional[int] = ...) -> None: ...
 
 class HistoryReply(_message.Message):
-    __slots__ = ("commits",)
+    __slots__ = ("commits", "next_after")
     COMMITS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_AFTER_FIELD_NUMBER: _ClassVar[int]
     commits: _containers.RepeatedCompositeFieldContainer[CommitInfo]
-    def __init__(self, commits: _Optional[_Iterable[_Union[CommitInfo, _Mapping]]] = ...) -> None: ...
+    next_after: int
+    def __init__(self, commits: _Optional[_Iterable[_Union[CommitInfo, _Mapping]]] = ..., next_after: _Optional[int] = ...) -> None: ...
 
 class CommitReply(_message.Message):
-    __slots__ = ("revision", "changes")
+    __slots__ = ("revision", "changes", "next_after")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     CHANGES_FIELD_NUMBER: _ClassVar[int]
+    NEXT_AFTER_FIELD_NUMBER: _ClassVar[int]
     revision: int
     changes: _containers.RepeatedCompositeFieldContainer[Change]
-    def __init__(self, revision: _Optional[int] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ...) -> None: ...
+    next_after: str
+    def __init__(self, revision: _Optional[int] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ..., next_after: _Optional[str] = ...) -> None: ...
 
 class AuditEvent(_message.Message):
     __slots__ = ("id", "subject", "action", "detail_json", "created_at")

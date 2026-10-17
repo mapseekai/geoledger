@@ -241,6 +241,8 @@ message DiffReply {
  int64 base_revision = 1;
  int64 version = 2;
  repeated Change changes = 3;
+ // Present only if more changes exist in this request's read snapshot.
+ optional string next_after = 4;
 }
 message Conflict {
  string cursor = 1;
@@ -271,10 +273,13 @@ message CommitInfo {
 }
 message HistoryReply {
  repeated CommitInfo commits = 1;
+ // Ascending revision cursor; absent at the end of this read snapshot.
+ optional int64 next_after = 2;
 }
 message CommitReply {
  int64 revision = 1;
  repeated Change changes = 2;
+ optional string next_after = 3;
 }
 message AuditEvent {
  int64 id = 1;
@@ -285,6 +290,7 @@ message AuditEvent {
 }
 message AuditReply {
  repeated AuditEvent events = 1;
+ // Absent when no later event exists in this request's read snapshot.
  optional int64 next_after = 2;
 }
 message PublishReply {

@@ -66,8 +66,8 @@ with sync_playwright() as playwright:
     remaining=command({'action':'datasets','project':project})
     assert [d['id'] for d in remaining]==[points['id']]
     history=command({'action':'history','project':project})
-    assert len(history)==1
-    changes=command({'action':'commit','project':project,'revision':history[0]['revision']})['changes']
+    assert len(history['commits'])==1 and history.get('nextAfter') is None
+    changes=command({'action':'commit','project':project,'revision':history['commits'][0]['revision']})['changes']
     assert len(changes)==1 and json.loads(changes[0]['json'])['dataset']==points['id']
     assert len(command({'action':'features','project':project,'dataset':points['id']})['features'])==1
     page.screenshot(path=str(shots/'dataset-deleted.png'),full_page=True)
