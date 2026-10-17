@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	gl "github.com/mapseekai/geoledger/sdk/go"
 	"os"
 	"strings"
 	"time"
+
+	gl "github.com/mapseekai/geoledger/sdk/go"
 )
 
 func main() {
