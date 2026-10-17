@@ -96,7 +96,7 @@ publication={'project':project,'workspace':workspace,'version':saved['version'],
 published=b.business('publish',**publication)
 assert published['revision']=='1'
 assert b.business('publish',**publication)['revision']=='1'
-assert b.business('history',project=project)[0]['subject']==user_id
+assert b.business('history',project=project)['commits'][0]['subject']==user_id
 assert b.business('audit',project=project)['events']
 assert b.business('commitSummary',project=project,revision='1')['total']['added']=='1'
 

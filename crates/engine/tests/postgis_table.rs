@@ -56,7 +56,10 @@ fn existing_table_publication_is_atomic() -> TestResult {
         assert_eq!(created["geometry_type"], "point");
         assert_eq!(created["coordinate_dimension"], 3);
         assert_eq!(created["crs"], "EPSG:3857");
-        assert_eq!(run("history", json!({}))?[0]["message"], "Register table");
+        assert_eq!(
+            run("history", json!({}))?["commits"][0]["message"],
+            "Register table"
+        );
         let features = run("features", json!({"dataset":d}))?;
         assert_eq!(
             features["features"][0]["properties"]["n"],
