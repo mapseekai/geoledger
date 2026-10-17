@@ -1530,18 +1530,22 @@ impl crate::repository::RepositoryTransaction for SqlTransaction {
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
         self.flush_stage()?;
         if matches!(self.0.backend, Backend::Postgis(_)) {
-            // A reused temp table has no useful row estimate after commit clears it.
-            // Keep a small publication from scanning the project's entire history.
+            // Pooled sessions retain the old batch's statistics after commit
+            // clears the temp table. Refresh its cardinality for this batch.
             self.batch_execute("ANALYZE gl_merge_stage")?;
         }
         self.sync_sources(project)?;
-        // Drive SQLite's join from the changed keys, not every live row in the project.
+        // Drive both backends from changed keys, even when a new project's
+        // history is underestimated by statistics dominated by another project.
         let sql = match self.0.backend {
             Backend::Sqlite(_) => {
                 "UPDATE gl_history SET valid_to=$2 WHERE rowid IN (SELECT h.rowid FROM gl_merge_stage m CROSS JOIN gl_history h INDEXED BY history_live ON h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL)"
             }
             Backend::Postgis(_) => {
-                "UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m WHERE h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL"
+                // LIMIT keeps each live-key lookup correlated with the staged
+                // row. The TID is consumed in this statement while the project
+                // publication lock protects the history rows.
+                "UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m CROSS JOIN LATERAL (SELECT ctid FROM gl_history WHERE project=$1 AND dataset=m.dataset AND feature_id=m.feature_id AND valid_to IS NULL LIMIT 1) live WHERE h.ctid=live.ctid"
             }
         };
         self.execute(sql, &[&project, &revision])
@@ -2557,56 +2561,86 @@ mod tests {
             let timeout = Duration::from_secs(30);
             Client::open(&storage, &pool, timeout)?.migrate()?;
             let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+            let background = uuid::Uuid::new_v4().to_string();
             let project = uuid::Uuid::new_v4().to_string();
-            t.execute(
-                "INSERT INTO gl_projects(id,name) VALUES($1,'plan')",
-                &[&project],
-            )?;
-            t.execute(
-                "INSERT INTO gl_project_members(project,subject,role) VALUES($1,'alice','owner')",
-                &[&project],
-            )?;
-            t.execute(
-        "INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES($1,'d','points','point')",
-        &[&project],
-    )?;
-            t.execute(
-        "INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES($1,'w','alice',0)",
-        &[&project],
-    )?;
-            t.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,1,'w','alice','seed'),($1,2,'w','alice','edit')", &[&project])?;
-            t.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties) SELECT $1,'d',lpad(n::text,8,'0'),1,'{}' FROM generate_series(1,10000) n", &[&project])?;
-            t.batch_execute("ANALYZE gl_history")?;
+            // Model the nightly capacity -> load sequence: statistics describe a large
+            // existing project, then another project's history grows before autoanalyze.
+            for (project, rows) in [(&background, 100_000_i64), (&project, 10_000)] {
+                t.execute(
+                    "INSERT INTO gl_projects(id,name) VALUES($1,'plan')",
+                    &[&project],
+                )?;
+                t.execute(
+            "INSERT INTO gl_project_members(project,subject,role) VALUES($1,'alice','owner')",
+            &[&project],
+        )?;
+                t.execute(
+            "INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES($1,'d','points','point')",
+            &[&project],
+        )?;
+                t.execute(
+            "INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES($1,'w','alice',0)",
+            &[&project],
+        )?;
+                t.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,1,'w','alice','seed'),($1,2,'w','alice','edit')", &[&project])?;
+                t.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties) SELECT $1,'d',lpad(n::text,8,'0'),1,'{}' FROM generate_series(1,$2::bigint) n", &[&project, &rows])?;
+                if project == &background {
+                    t.batch_execute("ANALYZE gl_history")?;
+                }
+            }
+            t.batch_execute("SET LOCAL plan_cache_mode=force_custom_plan")?;
             t.begin_merge()?;
             t.stage_merge("d", "00000001", &Some("{}".into()), &None)?;
+            t.stage_merge("d", "00000002", &Some("{}".into()), &Some("{}".into()))?;
+            for n in 0..8 {
+                t.stage_merge("d", &format!("new-{n}"), &None, &Some("{}".into()))?;
+            }
             t.close_history(&project, 2)?;
             let sql: String = t.query_one("SELECT statement FROM pg_prepared_statements WHERE statement LIKE 'UPDATE gl_history%SET valid_to%'", &[])?.get(0usize)?;
-            let plan = t
-                .query(
-                    &format!("EXPLAIN (ANALYZE, COSTS OFF) {sql}"),
-                    &[&project, &2_i64],
-                )?
-                .iter()
-                .map(|r| r.get::<_, String>(0usize))
-                .collect::<Result<Vec<_>>>()?
-                .join("\n");
-            assert!(
-                plan.contains("Index Scan using history_live"),
-                "publication lost live-key lookup: {plan}"
-            );
-            assert!(
-                !plan.contains("Seq Scan on gl_history"),
-                "small publication scanned history: {plan}"
-            );
+            for mode in ["force_custom_plan", "force_generic_plan"] {
+                t.batch_execute(&format!("SET LOCAL plan_cache_mode={mode}"))?;
+                let plan = t
+                    .query(
+                        &format!("EXPLAIN (ANALYZE, COSTS OFF) {sql}"),
+                        &[&project, &2_i64],
+                    )?
+                    .iter()
+                    .map(|r| r.get::<_, String>(0usize))
+                    .collect::<Result<Vec<_>>>()?
+                    .join("\n");
+                assert!(
+                    plan.contains("Index Scan using history_live"),
+                    "publication lost live-key lookup ({mode}): {plan}"
+                );
+                assert!(
+                    plan.lines().any(|line| line.contains("Index Cond:")
+                        && line.contains("project")
+                        && line.contains("dataset")
+                        && line.contains("feature_id")),
+                    "publication scanned a project prefix ({mode}): {plan}"
+                );
+                assert!(
+                    !plan.contains("Seq Scan on gl_history"),
+                    "small publication scanned history: {plan}"
+                );
+                eprintln!("{mode}: {plan}");
+            }
             assert_eq!(
                 t.query_one(
                     "SELECT count(*) FROM gl_history WHERE project=$1 AND valid_to=2",
                     &[&project]
                 )?
                 .get::<_, i64>(0usize)?,
-                1
+                2
             );
-            eprintln!("{plan}");
+            assert_eq!(
+                t.query_one(
+                    "SELECT count(*) FROM gl_history WHERE project=$1 AND valid_to IS NULL",
+                    &[&project]
+                )?
+                .get::<_, i64>(0usize)?,
+                9998
+            );
             Ok(())
         }
     }
