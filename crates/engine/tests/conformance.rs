@@ -138,6 +138,173 @@ fn thousand_large_features_publish_and_page_conflicts_without_full_materializati
 }
 
 #[test]
+fn features_pagination_returns_a_cursor_only_when_the_snapshot_has_more_results() -> TestResult {
+    let f = Fixture::new()?;
+    let empty = f.ws(&f.alice);
+    assert_feature_pages(&f, json!({}), &[], 0, None)?;
+    assert_feature_pages(&f, json!({"workspace":empty}), &[], 0, Some(0))?;
+
+    let ids: Vec<_> = (0..70).map(|i| format!("{i:03}")).collect();
+    let edits: Vec<_> = ids
+        .iter()
+        .map(|id| f.edit(id, json!({}), Value::Null))
+        .collect();
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":empty,"expected_workspace_version":0,"edits":edits}),
+    )?;
+    assert_feature_pages(&f, json!({"workspace":empty}), &ids, 0, Some(1))?;
+    f.publish(&f.alice, &empty, 1)?;
+    assert_feature_pages(&f, json!({}), &ids, 1, None)?;
+    assert_feature_pages(&f, json!({"revision":1}), &ids, 1, None)?;
+    Ok(())
+}
+
+#[test]
+fn features_pagination_uses_bbox_matches_after_workspace_moves_and_deletes() -> TestResult {
+    let f = Fixture::new()?;
+    let seed = f.ws(&f.alice);
+    let edits: Vec<_> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        .into_iter()
+        .map(|id| {
+            let x = if matches!(id, "d" | "f") { 20. } else { 0. };
+            f.edit(id, json!({}), point(x, x))
+        })
+        .collect();
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":seed,"expected_workspace_version":0,"edits":edits}),
+    )?;
+    f.publish(&f.alice, &seed, 1)?;
+    let draft = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":draft,"expected_workspace_version":0,"edits":[
+            f.edit("b",json!({}),point(20.,20.)),
+            f.edit("bb",json!({}),point(0.,0.)),
+            {"dataset":f.d,"feature_id":"c","feature":null},
+            f.edit("d",json!({}),point(0.,0.)),
+            {"dataset":f.d,"feature_id":"g","feature":null},
+            f.edit("h",json!({}),point(20.,20.)),
+            f.edit("z",json!({}),point(20.,20.))
+        ]}),
+    )?;
+    let bounds = json!([-1., -1., 1., 1.]);
+    let visible: Vec<_> = ["a", "bb", "d", "e"].map(String::from).into();
+    assert_feature_pages(
+        &f,
+        json!({"workspace":draft,"bbox":bounds}),
+        &visible,
+        1,
+        Some(1),
+    )?;
+    let all: Vec<_> = ["a", "b", "bb", "d", "e", "f", "h", "z"]
+        .map(String::from)
+        .into();
+    assert_feature_pages(&f, json!({"workspace":draft}), &all, 1, Some(1))?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":draft,"bbox":[40.,40.,41.,41.]}),
+        &[],
+        1,
+        Some(1),
+    )?;
+    let pinned = f.ws(&f.alice);
+    f.publish(&f.alice, &draft, 1)?;
+    let original: Vec<_> = ["a", "b", "c", "e", "g", "h"].map(String::from).into();
+    assert_feature_pages(&f, json!({"revision":1,"bbox":bounds}), &original, 1, None)?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":pinned,"bbox":bounds}),
+        &original,
+        1,
+        Some(0),
+    )?;
+    assert_feature_pages(&f, json!({"revision":2,"bbox":bounds}), &visible, 2, None)?;
+    assert_feature_pages(&f, json!({"bbox":bounds}), &visible, 2, None)?;
+    Ok(())
+}
+
+#[test]
+fn features_pagination_keeps_workspace_versions_available_for_cross_page_checks() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":0,"edits":[
+            f.edit("a",json!({}),Value::Null),f.edit("b",json!({}),Value::Null)
+        ]}),
+    )?;
+    let first = f.call(
+        &f.alice,
+        "features",
+        json!({"dataset":f.d,"workspace":w,"limit":1}),
+    )?;
+    assert_eq!(first["workspace_version"], 1);
+    assert_eq!(first["next_after"], "a");
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":1,"edits":[f.edit("c",json!({}),Value::Null)]}),
+    )?;
+    let second = f.call(
+        &f.alice,
+        "features",
+        json!({"dataset":f.d,"workspace":w,"after":first["next_after"],"limit":2}),
+    )?;
+    assert_eq!(second["revision"], first["revision"]);
+    assert_eq!(second["workspace_version"], 2);
+    assert_ne!(second["workspace_version"], first["workspace_version"]);
+    assert_eq!(second["features"][0]["id"], "b");
+    assert_eq!(second["features"][1]["id"], "c");
+    assert_eq!(second["next_after"], Value::Null);
+    Ok(())
+}
+
+#[test]
+fn features_pagination_lookahead_does_not_charge_the_response_budget() -> TestResult {
+    let mut f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":0,"edits":[
+            f.edit("a",json!({}),Value::Null),
+            f.edit("b",json!({"payload":"x".repeat(128*1024)}),Value::Null)
+        ]}),
+    )?;
+    f.publish(&f.alice, &w, 1)?;
+    f.app = f.app.clone().with_response_limit(512);
+    let page = f.call(&f.alice, "features", json!({"dataset":f.d,"limit":1}))?;
+    assert_eq!(page["features"].as_array().unwrap().len(), 1);
+    assert_eq!(page["features"][0]["id"], "a");
+    assert_eq!(page["next_after"], "a");
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "features",
+            json!({"dataset":f.d,"limit":1,"after":page["next_after"]})
+        )
+        .unwrap_err()
+        .status,
+        413
+    );
+    let feature = f.call(
+        &f.alice,
+        "features",
+        json!({"dataset":f.d,"feature_id":"a","limit":1}),
+    )?;
+    assert_eq!(feature["type"], "Feature");
+    assert_eq!(feature["id"], "a");
+    assert!(feature.get("next_after").is_none());
+    Ok(())
+}
+
+#[test]
 fn duplicate_dataset_is_conflict_and_rolls_back_without_public_diagnostics() -> TestResult {
     use std::error::Error as _;
     let f = Fixture::new()?;
@@ -316,6 +483,50 @@ fn point(x: f64, y: f64) -> Value {
         if x.fract() == 0.0 { json!(x as i64) } else { json!(x) },
         if y.fract() == 0.0 { json!(y as i64) } else { json!(y) }
     ]})
+}
+
+fn assert_feature_pages(
+    f: &Fixture,
+    mut request: Value,
+    expected: &[String],
+    revision: i64,
+    workspace_version: Option<i64>,
+) -> TestResult {
+    request["dataset"] = json!(f.d);
+    let mut limits = vec![expected.len().max(1), expected.len() + 1];
+    if expected.len() > 32 {
+        limits.extend([17, 32, 35]);
+    } else {
+        limits.extend([1, 2]);
+    }
+    limits.sort_unstable();
+    limits.dedup();
+    for limit in limits {
+        request["after"] = json!("");
+        request["limit"] = json!(limit);
+        for start in (0..expected.len().max(1)).step_by(limit) {
+            let end = (start + limit).min(expected.len());
+            let page = f.call(&f.alice, "features", request.clone())?;
+            let ids: Vec<_> = page["features"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|feature| feature["id"].as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(ids, expected[start..end], "request: {request}");
+            assert_eq!(page["revision"], revision);
+            assert_eq!(page["workspace_version"], json!(workspace_version));
+            let next = (end < expected.len()).then(|| expected[end - 1].clone());
+            assert_eq!(page["next_after"], json!(next), "request: {request}");
+            request["after"] = page["next_after"].clone();
+        }
+    }
+    // A caller can still explicitly seek beyond the final visible feature.
+    request["after"] = json!(expected.last().map_or("", String::as_str));
+    let empty = f.call(&f.alice, "features", request)?;
+    assert_eq!(empty["features"], json!([]));
+    assert_eq!(empty["next_after"], Value::Null);
+    Ok(())
 }
 
 #[test]

@@ -50,24 +50,24 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
     // Remove ALL shadowed base rows before spatial filtering, including deletes and moves.
     let mut values = Vec::new();
     let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
-    let mut after = r.after.clone();
+    let mut query = crate::repository::FeatureQuery {
+        project: r.project,
+        dataset: r.dataset,
+        revision,
+        workspace: r.workspace,
+        after: r.after,
+        feature_id: r.feature_id,
+        bbox: r.bbox,
+        limit: r.limit,
+    };
     while values.len() < r.limit as usize {
-        let batch_limit = (r.limit - values.len() as i64).min(32);
-        let rows = t.feature_page(&crate::repository::FeatureQuery {
-            project: r.project.clone(),
-            dataset: r.dataset.clone(),
-            revision,
-            workspace: r.workspace.clone(),
-            after: after.clone(),
-            feature_id: r.feature_id.clone(),
-            bbox: r.bbox,
-            limit: batch_limit,
-        })?;
+        query.limit = (r.limit - values.len() as i64).min(32);
+        let rows = t.feature_page(&query)?;
         if rows.is_empty() {
             break;
         }
         for row in rows {
-            after = row.get(0usize)?;
+            query.after = row.get(0usize)?;
             let properties: Value = codec::stored(&row.get::<_, String>(1usize)?)?;
             let geometry: Value = row
                 .get::<_, Option<String>>(2usize)?
@@ -80,14 +80,19 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
             values.push(item);
         }
     }
-    if r.feature_id.is_some() {
+    if query.feature_id.is_some() {
         let mut feature = values.pop().ok_or_else(missing)?;
         feature["crs"] = json!(crs);
         feature["revision"] = json!(revision);
         feature["workspace_version"] = json!(workspace_version);
         return Ok(feature);
     }
-    let next = values.last().and_then(|x| x.get("id")).cloned();
+    // Probe the same visible snapshot without loading an extra feature's payload.
+    let next = if values.len() == r.limit as usize && t.feature_exists(&query)? {
+        Some(query.after)
+    } else {
+        None
+    };
     Ok(
         json!({"type":"FeatureCollection","crs":crs,"features":values,"revision":revision,"workspace_version":workspace_version,"next_after":next}),
     )
