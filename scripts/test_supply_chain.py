@@ -478,8 +478,6 @@ class OciBuilderDriverTests(unittest.TestCase):
         files['secure-images.yml'] = files['secure-images.yml'].replace('driver: docker-container', 'driver: docker')
         with self.assertRaises(ValueError): policy.check(files)
 
-if __name__ == '__main__': unittest.main()
-
 
 class ReleaseInventoryTests(unittest.TestCase):
     def test_requires_complete_matching_immutable_images(self):
@@ -624,3 +622,7 @@ class ReleaseResumeTests(unittest.TestCase):
         with patch.object(resume, 'fetch', side_effect=TimeoutError), patch.object(resume.subprocess, 'run') as write:
             with self.assertRaises(TimeoutError): resume.npm(Path('package.tgz'), '0.3.0-alpha.2')
             write.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

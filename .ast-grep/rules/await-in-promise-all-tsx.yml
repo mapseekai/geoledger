@@ -1,0 +1,48 @@
+{
+  "id": "await-in-promise-all-tsx",
+  "language": "Tsx",
+  "severity": "warning",
+  "message": "Review direct await in Promise.all: confirm whether serialization is intentional.",
+  "files": [
+    "sdk/ts/src/**/*.tsx"
+  ],
+  "ignores": [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/generated/**",
+    "**/__generated__/**",
+    "**/dist/**",
+    "**/target/**",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/*.generated.*",
+    "**/*.gen.*",
+    "**/*.d.ts",
+    "**/test/**",
+    "**/build/**",
+    "**/coverage/**",
+    "sdk/ts/src/_internal/geoledger/**"
+  ],
+  "rule": {
+    "pattern": "await $A",
+    "inside": {
+      "pattern": "Promise.all($_)",
+      "stopBy": {
+        "not": {
+          "any": [
+            {
+              "kind": "array"
+            },
+            {
+              "kind": "arguments"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

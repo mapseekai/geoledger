@@ -163,6 +163,7 @@ export interface FeaturePage {
   features: Feature[];
   revision: bigint;
   workspaceVersion?: bigint;
+  /** Absent on the final page; pass the opaque value back unchanged. */
   nextAfter?: string;
 }
 
@@ -198,6 +199,7 @@ export interface Conflicts {
   head: bigint;
   version: bigint;
   total: bigint;
+  /** Opaque continuation position; truncated indicates whether more conflicts remain. */
   nextAfter?: string;
   truncated: boolean;
   conflicts: Conflict[];
@@ -249,6 +251,7 @@ export interface RebaseResult {
   changes: bigint;
 }
 
+/** Cursor page: after is opaque and must be returned unchanged; limit bounds one request. */
 export interface Page {
   after?: string;
   limit?: number;

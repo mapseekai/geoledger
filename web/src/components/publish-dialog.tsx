@@ -119,7 +119,7 @@ export function PublishDialog({
     setChecking(false);
   }, [project, workspace]);
   useEffect(() => {
-    void preflight();
+    void preflight().catch(() => setChecking(false));
   }, [preflight, recheck]);
 
   const total = info?.summary?.total;

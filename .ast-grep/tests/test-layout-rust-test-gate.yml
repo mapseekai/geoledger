@@ -1,0 +1,10 @@
+{
+  "id": "test-layout-rust-test-gate",
+  "valid": [
+    "#[cfg(test)] mod tests { #[test] fn works() {} }",
+    "mod business {}"
+  ],
+  "invalid": [
+    "mod tests { #[test] fn works() {} }"
+  ]
+}

@@ -52,9 +52,13 @@ npm ci --prefix sdk/ts
 
 生成工具需在 PATH 上。Python 脚本可用 `PYTHON` 指定含 grpcio-tools 的解释器。Go 模块要求 Go 1.27.2+；TypeScript 构建/运行推荐 Node.js 22；Python 客户端要求 3.10+。
 
+TS SDK 的构建启用 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes` 和 `noImplicitOverride`，手写业务源码另以 `npm --prefix sdk/ts run lint` 执行 Oxlint 类型感知 Promise 检查。控制台保留原有 Oxlint 规则，增加同类检查；严格选项的迁移范围见 [Web 检查说明](../web/README.md)。
+
+项目内另有可手动执行的 [ast-grep 结构提示](../.ast-grep/README.md)：`ast-grep test -c sgconfig.yml` 验证规则，`ast-grep scan -c sgconfig.yml` 扫描源码。warning/hint 供人工审查，不作为新增 CI 门禁；与已有 Web Oxlint 检查按路径去重。
+
 ## 四语言联调
 
-启动一个隔离服务，设置 `GL_ENDPOINT` 和 `GL_API_KEY_FILE`，运行 [test-sdks.sh](../scripts/test-sdks.sh)。API Key 通过私有文件读取，脚本通过公开业务接口创建独立项目、保存精确数字、发布、重复原请求和读回。分别对 SQLite/PostGIS 地址运行。
+启动一个隔离服务，设置 `GL_ENDPOINT` 和 `GL_API_KEY_FILE`，运行 [test-sdks.sh](../scripts/test-sdks.sh)。脚本首先执行只读 Go 格式检查、`go vet` 和 `go test -race`；格式差异或工具失败会阻止后续联调。API Key 通过私有文件读取，脚本通过公开业务接口创建独立项目、保存精确数字、发布、重复原请求和读回。分别对 SQLite/PostGIS 地址运行。
 
 在一个终端启动专用服务：
 
@@ -97,7 +101,7 @@ SDK 示例与测试会写入新的测试项目，请使用专用测试服务。C
 | [失败路径](../crates/server/tests/limits.rs) | 外部锁超过请求期限、执行槽耗尽（429 / RESOURCE_EXHAUSTED）、请求体停滞（408）、畸形凭证（401），失败后恢复 |
 | [运维接口](../crates/server/tests/operations.rs)、[传输安全](../crates/server/tests/security.rs) | request ID 与指标、限流、排空与停机；TLS/mTLS、API Key 与 Session 认证 |
 | [Rust SDK](../sdk/rust/tests/client.rs) | 发布结果确认与原请求恢复 |
-| [Go SDK](../sdk/go/client_test.go)、[Python SDK](../sdk/python/tests/test_client.py)、[TS SDK](../sdk/ts/test/client.test.cjs) | JSON 精度、显式编辑、工作区版本与发布重试 |
+| [Go SDK](../sdk/go/client_test.go)、[Python SDK](../sdk/python/tests/test_client.py)、[TS SDK](../sdk/ts/src/index.test.ts) | JSON 精度、显式编辑、工作区版本与发布重试 |
 | [四语言联调](../scripts/test-sdks.sh) | SDK 连接实际服务完成创建、编辑、发布与读取 |
 
 ## 容量验证
@@ -184,7 +188,7 @@ python3 scripts/test-console.py \
 
 协议以 `proto/geoledger/v1/geoledger.proto` 为统一来源，生成绑定按本页工具版本更新。存储结构变化使用显式格式版本，新库直接初始化当前结构，格式与恢复要求见 [存储接口](storage.md)。文档保持主题集中、仓库相对链接与当前行为说明；项目使用 [MIT 许可证](../LICENSE)。
 
-SQLite 原生空间存储要求 SpatiaLite 5。Ubuntu/Debian 安装 `libsqlite3-mod-spatialite`；自定义安装路径设置 `GL_SPATIALITE_EXTENSION`。测试与服务使用相同依赖，缺失时明确报错。`crates/spatialite` 仅封装受控的原生扩展加载，其他业务 crate 保持禁止 unsafe。
+SQLite 原生空间存储要求 SpatiaLite 5。Ubuntu/Debian 安装 `libsqlite3-mod-spatialite`；自定义安装路径设置 `GL_SPATIALITE_EXTENSION`。测试与服务使用相同依赖，缺失时明确报错。`crates/spatialite` 仅封装受控的原生扩展加载，其他业务 crate 保持禁止 unsafe。其公开入口为 `load_configured(connection)`；原来的 `load(connection, path)` 已移除，任意路径加载实现保持私有并声明 unsafe 前提。进程操作者负责配置可信的 SpatiaLite、依赖与原生搜索路径，不能把请求数据提升为进程加载配置。
 
 原生空间存储的大文件验证是显式 opt-in：
 
@@ -226,3 +230,11 @@ Console 真实 BFF 回归使用 `scripts/test-console-auth-http.py --url <Consol
 ### 容器构建工具链维护
 
 基础镜像由 Dependabot 更新；容器 npm 内置依赖与原生 TypeScript 的源码、Go SDK 和模块文件通过 `.security` 下的构建锁显式管理。更新包版本时同步核对构建锁，发布策略检查会拒绝版本或摘要漂移。当前设计、回归命令与平台验收范围见 [发布验收](release.md)。
+
+## 测试布局检查
+
+`./scripts/check.sh` 首先运行 `python3 scripts/check-test-layout.py`、目录检查器回归与 ast-grep YAML 样例。Web/TS SDK 的 test/lint 和 `scripts/test-sdks.sh` 也执行同一布局门禁。安装 ast-grep 0.51.0：`npm install --global @ast-grep/cli@0.51.0`；CI 固定相同版本，缺少工具、版本不符或规则加载失败均退出非零。
+
+Go `foo.go` 对应唯一 `foo_test.go`（Example 同文件）；TS `foo.ts`/`foo.tsx` 对应唯一 `.test.ts`/`.test.tsx`；Rust 单元测试集中在源码内唯一 `#[cfg(test)] mod tests`。真实集成分别使用 Go/TS 包的 `test/`、Cargo crate 的 `tests/`。Go/TS 集成入口与辅助 fixture 在 `test-layout.json` 写明理由，生成协议目录显式排除。没有测试的源码不会因此被判违规；静态检查不证明覆盖率或集成分类正确。
+
+TS SDK 既有 CommonJS 消费者回归仍以 Node.js 22 的类型剥离模式运行，现归入源码对应的 `.test.ts`；生产 tsc 和类型感知 lint 保持原来的生产源码范围，显式排除这些从 CJS 迁移的运行时测试。Web 测试继续参加完整类型检查。

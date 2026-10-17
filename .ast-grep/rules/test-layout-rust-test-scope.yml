@@ -1,0 +1,54 @@
+{
+  "id": "test-layout-rust-test-scope",
+  "language": "Rust",
+  "severity": "error",
+  "message": "Keep unit tests in the unique source-owned test location.",
+  "files": [
+    "crates/**/src/**/*.rs",
+    "sdk/rust/src/**/*.rs"
+  ],
+  "ignores": [
+    "**/generated/**",
+    "**/target/**"
+  ],
+  "rule": {
+    "all": [
+      {
+        "kind": "function_item"
+      },
+      {
+        "follows": {
+          "kind": "attribute_item",
+          "regex": "^#\\[\\s*(test|tokio::test|async_std::test)\\b",
+          "stopBy": {
+            "not": {
+              "any": [
+                {
+                  "kind": "attribute_item"
+                },
+                {
+                  "kind": "line_comment"
+                },
+                {
+                  "kind": "block_comment"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "not": {
+          "inside": {
+            "kind": "mod_item",
+            "has": {
+              "field": "name",
+              "regex": "^tests$"
+            },
+            "stopBy": "end"
+          }
+        }
+      }
+    ]
+  }
+}

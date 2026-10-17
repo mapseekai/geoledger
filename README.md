@@ -226,7 +226,7 @@ cargo build --release --locked --bins
 ./scripts/check.sh
 ```
 
-产物位于 `target/release/geoledger-server` 与 `target/release/gl`，Windows 使用 `.exe` 后缀。`check.sh` 执行文档与配置检查、rustfmt、Clippy、引擎与工作区测试、备份恢复演练；设置 `GL_TEST_DATABASE_URL` 可启用隔离 `geoledger_test` 数据库上的 PostGIS 用例。
+产物位于 `target/release/geoledger-server` 与 `target/release/gl`，Windows 使用 `.exe` 后缀。`check.sh` 需要 Python 3 和 ast-grep 0.51.0（`npm install --global @ast-grep/cli@0.51.0`），先验证三语言测试布局，再执行文档与配置检查、rustfmt、Clippy、引擎与工作区测试、备份恢复演练；设置 `GL_TEST_DATABASE_URL` 可启用隔离 `geoledger_test` 数据库上的 PostGIS 用例。
 
 Web 检查与生产构建：
 

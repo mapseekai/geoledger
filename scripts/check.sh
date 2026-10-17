@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+python3 scripts/check-test-layout.py
+python3 -m unittest discover -s scripts -p test_test_layout.py
+ast-grep test -c sgconfig.yml
 python3 scripts/check-docs.py
 python3 scripts/check-env.py
 python3 scripts/test_container.py

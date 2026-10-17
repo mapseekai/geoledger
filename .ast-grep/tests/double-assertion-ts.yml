@@ -1,0 +1,15 @@
+{
+  "id": "double-assertion-ts",
+  "valid": [
+    "const x = value as T;",
+    "const x = value as unknown;",
+    "const x = value satisfies T;",
+    "const x = parse(value);",
+    "const x = value as const;"
+  ],
+  "invalid": [
+    "const x = value as unknown as T;",
+    "const x = (value as unknown) as T;",
+    "const x = value as unknown as Map<string, number>;"
+  ]
+}

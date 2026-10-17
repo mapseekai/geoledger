@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "incremental": false
+  },
+  "include": [
+    "src/lib/password.ts",
+    "src/lib/dataset-names.ts",
+    "src/lib/fullscreen.ts",
+    "src/lib/console-response.ts"
+  ],
+  "exclude": ["node_modules"]
+}

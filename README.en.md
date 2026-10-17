@@ -226,7 +226,7 @@ cargo build --release --locked --bins
 ./scripts/check.sh
 ```
 
-Binaries are written to `target/release/geoledger-server` and `target/release/gl`, with an `.exe` suffix on Windows. `check.sh` runs documentation and configuration checks, rustfmt, Clippy, engine and workspace tests, and a backup/restore drill. Set `GL_TEST_DATABASE_URL` to enable PostGIS cases against an isolated `geoledger_test` database.
+Binaries are written to `target/release/geoledger-server` and `target/release/gl`, with an `.exe` suffix on Windows. `check.sh` requires Python 3 and ast-grep 0.51.0 (`npm install --global @ast-grep/cli@0.51.0`). It validates the three-language test layout, then runs documentation and configuration checks, rustfmt, Clippy, engine and workspace tests, and a backup/restore drill. Set `GL_TEST_DATABASE_URL` to enable PostGIS cases against an isolated `geoledger_test` database.
 
 Web checks and production build:
 

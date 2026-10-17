@@ -385,6 +385,7 @@ export function Workspaces({
                   className="lookup"
                   onSubmit={(event) => {
                     event.preventDefault();
+                    // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
                     void task.run(async () => {
                       const workspace = await call<Workspace>({
                         action: "workspace",
@@ -627,6 +628,7 @@ export function Workspaces({
           }}
           complete={() => {
             setPending(undefined);
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches refresh failures and reports them in component state.
             void update();
           }}
         />
@@ -668,6 +670,7 @@ export function Workspaces({
           close={() => setSyncing(undefined)}
           complete={() => {
             setSyncing(undefined);
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches refresh failures and reports them in component state.
             void update();
           }}
           resolve={() => {
@@ -684,10 +687,12 @@ export function Workspaces({
           readOnly={!writable || resolve.workspace.status !== "open"}
           close={() => {
             setResolve(undefined);
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches refresh failures and reports them in component state.
             void update();
           }}
           complete={() => {
             setResolve(undefined);
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches refresh failures and reports them in component state.
             void update();
           }}
         />

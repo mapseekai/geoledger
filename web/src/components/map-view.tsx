@@ -285,6 +285,7 @@ export function MapView({
           setError(e instanceof Error ? e.message : "地图无法初始化");
       }
     }
+    // oxlint-disable-next-line typescript/no-floating-promises -- init catches initialization failures and reports them unless cancelled.
     void init();
     return () => {
       cancelled = true;
@@ -322,9 +323,10 @@ export function MapView({
   }));
 
   useEffect(() => {
-    (map?.getSource("features") as GeoJSONSource | undefined)?.setData(
-      collection,
-    );
+    const source = map?.getSource("features") as GeoJSONSource | undefined;
+    void source?.setData(collection).catch((error: unknown) => {
+      setError(error instanceof Error ? error.message : "地图数据更新失败");
+    });
   }, [map, collection]);
 
   useEffect(() => {

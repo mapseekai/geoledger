@@ -1,0 +1,14 @@
+{
+  "id": "test-layout-rust-test-scope",
+  "valid": [
+    "#[cfg(test)] mod tests { #[test] fn works() {} }",
+    "fn test_connection() {}",
+    "const TEXT: &str = \"#[test] fn example() {}\";",
+    "// #[test]\nfn production() {}"
+  ],
+  "invalid": [
+    "#[test] fn misplaced() {}",
+    "mod checks { #[tokio::test] async fn misplaced() {} }",
+    "#[test] #[ignore] fn misplaced() {}"
+  ]
+}

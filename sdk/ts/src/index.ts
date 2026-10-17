@@ -149,7 +149,13 @@ const page = (p: model.Page = {}) => ({
   limit: p.limit === undefined ? undefined : String(p.limit),
 });
 
-/** Node.js client. All methods return promises and ordinary business data. */
+/**
+ * Owns one Node.js gRPC channel; use API Keys, never browser Sessions.
+ * RPCs reject with GeoLedgerError. The constructor deadline applies to each RPC;
+ * individual calls do not accept AbortSignal. Closing cancels outstanding RPCs,
+ * but cancellation or timeout does not prove a write was rolled back.
+ * Always close this client when its owner finishes using it.
+ */
 export class Client {
   #rpc: wire.GeoLedgerClient;
   #closed = false;
@@ -219,6 +225,7 @@ export class Client {
       },
     );
   }
+  /** Release the channel and cancel outstanding calls. Repeated close is safe; new calls reject. */
   close(): void {
     this.#closed = true;
     this.#rpc.close();
@@ -348,7 +355,11 @@ export class Client {
     crs = "EPSG:4326",
   ): Promise<model.Dataset> {
     return this.#call(
-      (cb) => this.#rpc.createDataset({ project, name, geometryType, coordinateDimension, crs }, cb),
+      (cb) =>
+        this.#rpc.createDataset(
+          { project, name, geometryType, coordinateDimension, crs },
+          cb,
+        ),
       convert.decodeDataset,
     );
   }
@@ -359,9 +370,18 @@ export class Client {
     postgisTable: model.PostgisTable,
   ): Promise<model.Dataset> {
     return this.#call(
-      (cb) => this.#rpc.createDataset({
-        project, name, geometryType: "", coordinateDimension: 0, postgisTable, crs: "",
-      }, cb),
+      (cb) =>
+        this.#rpc.createDataset(
+          {
+            project,
+            name,
+            geometryType: "",
+            coordinateDimension: 0,
+            postgisTable,
+            crs: "",
+          },
+          cb,
+        ),
       convert.decodeDataset,
     );
   }
@@ -400,6 +420,11 @@ export class Client {
       (r) => r.workspaces.map(convert.decodeWorkspaceInfo),
     );
   }
+  /**
+   * Read one page. Pass nextAfter back unchanged; absence means the final page.
+   * Pin revision for a multi-page published snapshot. Feature properties preserve
+   * integer precision (bigint where necessary); stringifyJson serializes them safely.
+   */
   features(
     project: string,
     dataset: string,
@@ -509,6 +534,11 @@ export class Client {
       convert.decodeAuditPage,
     );
   }
+  /**
+   * Publish exactly this intent. After an uncertain failure retry the same requestId,
+   * version and message; creating a new intent can duplicate a completed operation.
+   * Prefer Workspace.publish when the SDK should retain that retry state for you.
+   */
   publish(intent: model.Publication): Promise<model.PublicationResult> {
     return this.#call(
       (cb) =>
@@ -654,6 +684,7 @@ export function isLoopbackHost(host: string): boolean {
   if (isIP(h) === 4) return h.startsWith("127.");
   return false;
 }
+/** Create a channel-owning Client. The caller must close it, preferably in finally. */
 export function connect(
   endpoint: string,
   apiKey: string,
@@ -663,9 +694,14 @@ export function connect(
   return new Client(endpoint, apiKey, timeoutMs, options);
 }
 
+/**
+ * Versioned draft bound to its Client. Mutations reject overlapping operations
+ * rather than queueing them. The handle does not own or close the shared client.
+ * An uncertain publication retains an immutable original request and blocks edits.
+ */
 export class Workspace {
   #info: model.WorkspaceInfo;
-  #pending?: model.Publication;
+  #pending: model.Publication | undefined;
   #busy = false;
   constructor(
     private readonly client: Client,
@@ -680,6 +716,11 @@ export class Workspace {
   get info(): Readonly<model.WorkspaceInfo> {
     return this.#info;
   }
+  /**
+   * Original immutable publication intent, retained after uncertain outcomes and
+   * successful publication so retries remain identical. Undefined before publishing
+   * or after a definitive business rejection releases the intent.
+   */
   get pendingPublication(): model.Publication | undefined {
     return this.#pending;
   }
@@ -713,6 +754,7 @@ export class Workspace {
       this.#busy = false;
     }
   }
+  /** Reload draft metadata without clearing an unresolved publication intent. */
   async refresh(): Promise<Readonly<model.WorkspaceInfo>> {
     return this.#exclusive(async () => {
       this.#info = Object.freeze(
@@ -770,6 +812,11 @@ export class Workspace {
   conflicts(p: model.Page = {}): Promise<model.Conflicts> {
     return this.client.conflicts(this.project, this.id, p);
   }
+  /**
+   * Publish or retry the retained request. Retrying requires the original message;
+   * uncertainty and later authentication failures keep the intent and block edits.
+   * Await this operation before starting another mutation on this handle.
+   */
   publish(message: string): Promise<model.PublicationResult> {
     return this.#exclusive(async () => {
       const wasPending = this.#pending !== undefined;
@@ -836,6 +883,7 @@ export class Workspace {
       );
     });
   }
+  /** Discard an editable draft. An unresolved publication must be settled first. */
   discard(): Promise<model.DiscardResult> {
     return this.#exclusive(async () => {
       this.#editable();

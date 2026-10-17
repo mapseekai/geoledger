@@ -1,0 +1,41 @@
+{
+  "id": "double-assertion-tsx",
+  "language": "Tsx",
+  "severity": "warning",
+  "message": "Review double assertion: validate or document the invariant at this boundary.",
+  "files": [
+    "web/src/**/*.tsx",
+    "sdk/ts/src/**/*.tsx"
+  ],
+  "ignores": [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/generated/**",
+    "**/__generated__/**",
+    "**/dist/**",
+    "**/target/**",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/*.generated.*",
+    "**/*.gen.*",
+    "**/*.d.ts",
+    "**/test/**",
+    "**/build/**",
+    "**/coverage/**",
+    "sdk/ts/src/_internal/geoledger/**"
+  ],
+  "rule": {
+    "any": [
+      {
+        "pattern": "$VALUE as unknown as $TYPE"
+      },
+      {
+        "pattern": "($VALUE as unknown) as $TYPE"
+      }
+    ]
+  }
+}

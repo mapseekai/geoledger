@@ -1,0 +1,14 @@
+{
+  "id": "test-layout-go-declaration",
+  "valid": [
+    "func TestConnection(c *Connection) {}",
+    "// func TestOops(t *testing.T) {}",
+    "const example = \"func ExampleDial() {}\""
+  ],
+  "invalid": [
+    "func TestRead(t *testing.T) {}",
+    "func BenchmarkRead(b *testing.B) {}",
+    "func FuzzRead(f *testing.F) {}",
+    "func ExampleDial() {}"
+  ]
+}

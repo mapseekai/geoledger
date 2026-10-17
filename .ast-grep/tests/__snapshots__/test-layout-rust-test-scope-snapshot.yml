@@ -1,0 +1,32 @@
+id: test-layout-rust-test-scope
+snapshots:
+  "#[test] #[ignore] fn misplaced() {}":
+    labels:
+    - source: fn misplaced() {}
+      style: primary
+      start: 18
+      end: 35
+    - source: "#[test]"
+      style: secondary
+      start: 0
+      end: 7
+  "#[test] fn misplaced() {}":
+    labels:
+    - source: fn misplaced() {}
+      style: primary
+      start: 8
+      end: 25
+    - source: "#[test]"
+      style: secondary
+      start: 0
+      end: 7
+  "mod checks { #[tokio::test] async fn misplaced() {} }":
+    labels:
+    - source: async fn misplaced() {}
+      style: primary
+      start: 28
+      end: 51
+    - source: "#[tokio::test]"
+      style: secondary
+      start: 13
+      end: 27

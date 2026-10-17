@@ -185,6 +185,7 @@ export function Resolution({
   }, [project, workspace.id]);
 
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- load catches request failures and reports them in component state.
     void load();
   }, [load, reload]);
 

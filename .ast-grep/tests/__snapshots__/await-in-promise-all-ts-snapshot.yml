@@ -1,0 +1,22 @@
+id: await-in-promise-all-ts
+snapshots:
+  "async function f() { await Promise.all([a(), await b()]); }":
+    labels:
+    - source: await b()
+      style: primary
+      start: 45
+      end: 54
+    - source: Promise.all([a(), await b()])
+      style: secondary
+      start: 27
+      end: 56
+  "async function f() { await Promise.all([await a(), b()]); }":
+    labels:
+    - source: await a()
+      style: primary
+      start: 40
+      end: 49
+    - source: Promise.all([await a(), b()])
+      style: secondary
+      start: 27
+      end: 56

@@ -101,7 +101,13 @@ export function Login({ expired }: { expired: boolean }) {
           <Brand caption="管理控制台" />
         </div>
         <Card className="login-card">
-          <form onSubmit={login} className="login-form">
+          <form
+            onSubmit={(event) => {
+              // oxlint-disable-next-line typescript/no-floating-promises -- login catches request failures and reports them in the form.
+              void login(event);
+            }}
+            className="login-form"
+          >
             <span className="login-icon" aria-hidden="true">
               <LockKeyhole />
             </span>

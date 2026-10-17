@@ -111,6 +111,7 @@ export function UpdateDialog({
     }
   }, [project, workspace.id, workspace.baseRevision]);
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- load catches request failures and reports them in component state.
     void load();
   }, [load, reload]);
 

@@ -1,0 +1,50 @@
+{
+  "id": "test-layout-framework-ts",
+  "language": "TypeScript",
+  "severity": "error",
+  "message": "Keep unit tests in the unique source-owned test location.",
+  "files": [
+    "web/**/*.ts",
+    "web/**/*.tsx",
+    "sdk/ts/**/*.ts",
+    "sdk/ts/**/*.tsx"
+  ],
+  "ignores": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/test/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.next/**",
+    "**/_internal/geoledger/**",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
+  ],
+  "rule": {
+    "any": [
+      {
+        "kind": "import_statement",
+        "has": {
+          "kind": "string",
+          "regex": "^[\"'](?:node:test|vitest|@jest/globals)[\"']$"
+        }
+      },
+      {
+        "all": [
+          {
+            "pattern": "require($MODULE)"
+          },
+          {
+            "has": {
+              "kind": "arguments",
+              "has": {
+                "kind": "string",
+                "regex": "^[\"'](?:node:test|vitest|@jest/globals)[\"']$"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

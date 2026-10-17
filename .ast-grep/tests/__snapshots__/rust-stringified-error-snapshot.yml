@@ -1,0 +1,14 @@
+id: rust-stringified-error
+snapshots:
+  "fn f() { let x = load().map_err(|err| anyhow::anyhow!(err.to_string()))?; }":
+    labels:
+    - source: load().map_err(|err| anyhow::anyhow!(err.to_string()))
+      style: primary
+      start: 17
+      end: 71
+  "fn f() { let x = result.map_err(|e| anyhow::anyhow!(e.to_string())); }":
+    labels:
+    - source: result.map_err(|e| anyhow::anyhow!(e.to_string()))
+      style: primary
+      start: 17
+      end: 67

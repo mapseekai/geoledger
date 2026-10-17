@@ -1,0 +1,14 @@
+{
+  "id": "test-layout-rust-inline",
+  "valid": [
+    "#[cfg(test)] mod tests { #[test] fn works() {} }",
+    "mod business;",
+    "// #[cfg(test)] mod tests;",
+    "const TEXT: &str = \"mod tests;\";"
+  ],
+  "invalid": [
+    "#[cfg(test)] mod tests;",
+    "#[cfg(test)] #[path = \"other.rs\"] mod checks;",
+    "mod extra_tests;"
+  ]
+}

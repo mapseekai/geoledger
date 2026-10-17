@@ -1,0 +1,62 @@
+id: test-layout-go-declaration
+snapshots:
+  "func BenchmarkRead(b *testing.B) {}":
+    labels:
+    - source: func BenchmarkRead(b *testing.B) {}
+      style: primary
+      start: 0
+      end: 35
+    - source: BenchmarkRead
+      style: secondary
+      start: 5
+      end: 18
+    - source: (b *testing.B)
+      style: secondary
+      start: 18
+      end: 32
+  "func ExampleDial() {}":
+    labels:
+    - source: func ExampleDial() {}
+      style: primary
+      start: 0
+      end: 21
+    - source: ExampleDial
+      style: secondary
+      start: 5
+      end: 16
+    - source: ExampleDial
+      style: secondary
+      start: 5
+      end: 16
+    - source: ()
+      style: secondary
+      start: 16
+      end: 18
+  "func FuzzRead(f *testing.F) {}":
+    labels:
+    - source: func FuzzRead(f *testing.F) {}
+      style: primary
+      start: 0
+      end: 30
+    - source: FuzzRead
+      style: secondary
+      start: 5
+      end: 13
+    - source: (f *testing.F)
+      style: secondary
+      start: 13
+      end: 27
+  "func TestRead(t *testing.T) {}":
+    labels:
+    - source: func TestRead(t *testing.T) {}
+      style: primary
+      start: 0
+      end: 30
+    - source: TestRead
+      style: secondary
+      start: 5
+      end: 13
+    - source: (t *testing.T)
+      style: secondary
+      start: 13
+      end: 27

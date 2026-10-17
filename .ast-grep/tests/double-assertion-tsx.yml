@@ -1,0 +1,17 @@
+{
+  "id": "double-assertion-tsx",
+  "valid": [
+    "const x = value as T;",
+    "const x = value as unknown;",
+    "const x = value satisfies T;",
+    "const x = parse(value);",
+    "const x = value as const;",
+    "const x = <div>{value as T}</div>;"
+  ],
+  "invalid": [
+    "const x = value as unknown as T;",
+    "const x = (value as unknown) as T;",
+    "const x = value as unknown as Map<string, number>;",
+    "const x = <div>{value as unknown as string}</div>;"
+  ]
+}

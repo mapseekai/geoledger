@@ -62,6 +62,7 @@ jobs:
           python3 -m pip install grpcio-tools==1.78.0
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+          npm install --global @ast-grep/cli@0.51.0
           npm ci --prefix sdk/ts
       - name: Shared contracts and service lifecycle
         run: ./scripts/check.sh
@@ -112,8 +113,10 @@ jobs:
           node-version: '22'
       - name: Web dependencies and production checks
         run: |
+          npm install --global @ast-grep/cli@0.51.0
           npm ci --prefix sdk/ts
           npm --prefix sdk/ts run build
+          npm --prefix sdk/ts run lint
           npm ci --prefix web
           npm --prefix web test
           npm --prefix web run lint

@@ -44,7 +44,9 @@ export async function body(
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
-    void reader.cancel();
+    void reader.cancel().catch(() => {
+      // A disconnected/errored body is already stopped; the timed-out read still fails.
+    });
   }, 15_000);
   const chunks: Uint8Array[] = [];
   let length = 0;
