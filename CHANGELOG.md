@@ -4,6 +4,12 @@
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
+## [Unreleased]
+
+### Fixed
+
+- 发布草稿创建后直接使用 API 返回的 ID，避免列表还未包含新草稿时要求人工重跑；继续核对已有标签 SHA、草稿身份与已上传资产摘要。
+
 ## [0.3.0-alpha.6] - 2026-10-18
 
 ### Breaking

@@ -141,13 +141,13 @@ def release(repo, tag, sha, directory):
         raise ValueError('release tag differs from candidate commit')
     existing = find_release(repo, tag)
     if existing is None:
-        args = ['gh', 'release', 'create', tag, '--draft', '--verify-tag', '--title', 'GeoLedger ' + tag[1:], '--notes-file', 'notes.md', '--repo', repo]
-        if '-' in tag:
-            args.append('--prerelease')
-        run(*args)
-        existing = find_release(repo, tag)
-    if existing is None:
-        raise RuntimeError('created release is not visible; rerun to resume safely')
+        # Use the returned ID: the release listing may still omit this new draft.
+        existing = json.loads(run('gh', 'api', f'repos/{repo}/releases', '--method', 'POST',
+                                  '-f', 'tag_name=' + tag, '-f', 'name=GeoLedger ' + tag[1:],
+                                  '-F', 'draft=true', '-F', 'prerelease=' + str('-' in tag).lower(),
+                                  '-F', 'body=@notes.md'))
+        if existing['tag_name'] != tag or not existing['draft'] or existing['prerelease'] != ('-' in tag):
+            raise ValueError('created release identity differs')
     assets = gh(f'repos/{repo}/releases/{existing["id"]}/assets?per_page=100')
     if len(assets) == 100:
         raise ValueError('unexpected release asset count')

@@ -598,12 +598,25 @@ class ReleaseResumeTests(unittest.TestCase):
     def test_new_release_stays_draft_and_uploads_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[], [{'id': 1, 'tag_name': 'v1-alpha.1', 'draft': True}], []]), patch.object(resume, 'run') as write:
+            draft = {'id': 1, 'tag_name': 'v1-alpha.1', 'draft': True, 'prerelease': True}
+            with patch.object(resume, 'tag_sha', return_value='sha') as tag, patch.object(resume, 'gh', side_effect=[[], []]), patch.object(resume, 'run', return_value=json.dumps(draft)) as write:
                 resume.release('test/repo', 'v1-alpha.1', 'sha', root)
-                self.assertIn('--draft', write.call_args_list[0].args)
-                self.assertIn('--verify-tag', write.call_args_list[0].args)
-                self.assertIn('--prerelease', write.call_args_list[0].args)
+                tag.assert_called_once_with('test/repo', 'v1-alpha.1')
+                self.assertEqual(write.call_args_list[0].args[:5], ('gh', 'api', 'repos/test/repo/releases', '--method', 'POST'))
+                for field in ('draft=true', 'prerelease=true', 'body=@notes.md'):
+                    self.assertIn(field, write.call_args_list[0].args)
+                self.assertFalse(any(arg.startswith('target_commitish=') for arg in write.call_args_list[0].args))
                 self.assertEqual(write.call_args_list[1].args[1:3], ('release', 'upload'))
+
+    def test_created_release_identity_must_match_before_upload(self):
+        draft = {'id': 1, 'tag_name': 'v1-alpha.1', 'draft': True, 'prerelease': True}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            for changed in ({'tag_name': 'v2'}, {'draft': False}, {'prerelease': False}):
+                with self.subTest(changed=changed), patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', return_value=[]), patch.object(resume, 'run', return_value=json.dumps({**draft, **changed})) as write:
+                    with self.assertRaisesRegex(ValueError, 'identity'):
+                        resume.release('test/repo', 'v1-alpha.1', 'sha', root)
+                    self.assertEqual(write.call_count, 1)
 
     def test_release_lookup_finds_drafts_on_later_pages(self):
         draft = {'id': 101, 'tag_name': 'v2', 'draft': True}
@@ -620,13 +633,19 @@ class ReleaseResumeTests(unittest.TestCase):
                         resume.release('test/repo', 'v1', 'sha', root)
                     write.assert_not_called()
 
-    def test_new_draft_not_yet_visible_fails_without_duplicate_creation(self):
+    def test_new_draft_uses_creation_response_when_listing_lags(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[], []]), patch.object(resume, 'run') as write:
-                with self.assertRaisesRegex(RuntimeError, 'rerun'):
-                    resume.release('test/repo', 'v1', 'sha', root)
-                self.assertEqual(write.call_count, 1)
+            draft = {'id': 42, 'tag_name': 'v1', 'draft': True, 'prerelease': False}
+            def api(endpoint):
+                if endpoint == 'repos/test/repo/releases?per_page=100&page=1': return []
+                self.assertEqual(endpoint, 'repos/test/repo/releases/42/assets?per_page=100')
+                return []
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=api) as reads, patch.object(resume, 'run', return_value=json.dumps(draft)) as write:
+                resume.release('test/repo', 'v1', 'sha', root)
+                self.assertEqual(reads.call_count, 2)
+                self.assertEqual(write.call_count, 2)
+                self.assertEqual(write.call_args_list[1].args[1:3], ('release', 'upload'))
 
     def test_unknown_npm_lookup_outcome_never_publishes(self):
         with patch.object(resume, 'fetch', side_effect=TimeoutError), patch.object(resume.subprocess, 'run') as write:
