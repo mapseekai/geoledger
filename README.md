@@ -6,7 +6,7 @@ GeoLedger 是空间要素的版本管理与协作编辑服务。团队用项目�
 
 仓库包含 Rust 服务端 `geoledger-server`、远程命令行工具 `gl`、Web 控制台，以及 Rust、Go、TypeScript / Node.js 和 Python SDK。服务端管理 SQLite + SpatiaLite 或 PostGIS 中的数据，HTTP 与 gRPC 入口调用同一个业务引擎。
 
-当前源码版本为 `0.3.0-alpha.5`，存储格式为 16，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。
+当前源码版本为 `0.3.0-alpha.6`，存储格式为 16，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。
 
 ## 核心能力
 
@@ -242,7 +242,7 @@ npm --prefix web run build
 
 [开发指南](docs/development.md) 提供四语言 SDK 联调和真实浏览器验证命令。控制台 CI 的两个浏览器套件共用沙箱配置，Ubuntu 24.04 runner 使用系统 Chrome。依赖门禁 `./scripts/audit.sh` 检查 Rust、npm、Go 和 Python 公告。
 
-alpha.5 的发布准备、本机实测和生产验收边界见 [alpha.5 验收记录](docs/release-alpha5-validation-2026-10-18.md)。早期工作区修复保留在 [2026-10-15 验证记录](docs/ci-validation-2026-10-15.md)。
+alpha.6 的发布准备、本机实测和生产验收边界见 [alpha.6 验收记录](docs/release-alpha6-validation-2026-10-18.md)。早期工作区修复保留在 [2026-10-15 验证记录](docs/ci-validation-2026-10-15.md)。
 
 ## 部署与运行维护
 

@@ -38,6 +38,8 @@
 
 ## 最终发布与生产放行
 
-最终候选提交、统一镜像 digest、双架构拉取验收及性能证据，以 alpha.5 的 GitHub Release 资产和 [Source prerelease and Docker Hub](../.github/workflows/source-docker-release.yml) 对应运行记录为准。只有必需门禁全部成功才公开 Release；不会将本机测量冒充同 SHA 发布证据。
+alpha.5 未公开发布。[候选运行 39106869628](https://github.com/mapseekai/geoledger/actions/runs/39106869628) 对提交 `21988205b727d91f86de2f584b2c8161d1e35489` 的完整 CI、性能和官方 PostGIS TLS/恢复/浏览器演练通过，但构建环境中未使用的 tsgolint 内嵌 Go 1.26.8，触发 3 项 HIGH 公告（两套依赖目录共 6 条）。发布被门禁拦截，没有推送新镜像或公开 Release；已固定的标签保留原提交。
+
+修复与最终候选见 [alpha.6 验收记录](release-alpha6-validation-2026-10-18.md)。本页保留 alpha.5 的测量来源，不作为 alpha.6 同 SHA 证据。
 
 [生产放行清单](production.md#约-20-人单实例的上线放行清单) 中的正式 DNS/证书、真实数据 20 并发持续运行、异机备份恢复、告警接收人与负责人签署，留待目标机器准备后逐项执行。隔离库和测试凭据均不用于生产。

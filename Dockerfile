@@ -45,13 +45,16 @@ COPY sdk/ts ./sdk/ts
 COPY web ./web
 ENV NEXT_TELEMETRY_DISABLED=1
 # Build-stage inventories remain available to the gate; only /output enters runtime.
+# Lint runs in CI; remove unused native linters from this build without changing locks.
 # proxy_ca is optional for ordinary builds and supplies managed-cloud CA trust.
 RUN --mount=type=secret,id=proxy_ca \
     if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
     npm ci --ignore-scripts --prefix sdk/ts && \
+    npm uninstall --ignore-scripts --no-save --prefix sdk/ts oxlint oxlint-tsgolint && \
     node /opt/build-policy/rebuild-typescript.cjs install /app/sdk/ts && \
     npm --prefix sdk/ts run build && \
     npm ci --ignore-scripts --prefix web && \
+    npm uninstall --ignore-scripts --no-save --prefix web oxlint oxlint-tsgolint && \
     node /opt/build-policy/rebuild-typescript.cjs install /app/web && \
     npm --prefix web run build && \
     mkdir /output && \

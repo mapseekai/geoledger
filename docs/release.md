@@ -10,13 +10,13 @@
 
 ## 候选版本与发布配置
 
-当前候选版本为 `0.3.0-alpha.5`，Python 包使用等价版本 `0.3.0a5`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.5`，将通过检查的提交作为候选 SHA。
+当前候选版本为 `0.3.0-alpha.6`，Python 包使用等价版本 `0.3.0a6`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.6`，将通过检查的提交作为候选 SHA。
 
 ### 仅源码与 Docker Hub 的预发布
 
 [Source prerelease and Docker Hub](../.github/workflows/source-docker-release.yml) 是独立的手动入口，仅发布 GitHub prerelease 和 `docker.io/zwishing/geoledger:<版本>`，覆盖 Linux AMD64 / ARM64；不分发 npm/PyPI 包、Go 模块标签或独立二进制。完整 SDK 发布继续使用下文的既有流程。
 
-先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（当前 main HEAD 的完整 40 位提交 SHA；重跑可使用已固定标签的原候选）及 `release_tag`（例如 `v0.3.0-alpha.5`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
+先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（当前 main HEAD 的完整 40 位提交 SHA；重跑可使用已固定标签的原候选）及 `release_tag`（例如 `v0.3.0-alpha.6`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
 
 预检以 `contents: write` 的内置 `GITHUB_TOKEN` 创建并核对候选 tag，之后才启动同 SHA 完整 CI、[性能验收脚本](../scripts/release-performance.sh)、受检构建阶段和双架构运行镜像、不可变 digest 推送和签名、两架构原生拉取与 SDK 验收，最后公开 prerelease。性能检查保留 20 并发、300 秒和原 p95 门限，使用显式 CRS 的 10,000 条合成要素及一次性数据库。镜像验收检查源码 revision、服务版本、统一容器健康状态、重启后的 API Key 及 SDK 业务流程。
 

@@ -4,7 +4,7 @@
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
-## [0.3.0-alpha.5] - 2026-10-18
+## [0.3.0-alpha.6] - 2026-10-18
 
 ### Breaking
 
@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- 镜像构建不保留未参与编译的 Oxlint/tsgolint 工具，避免其内嵌旧 Go 标准库进入构建环境；CI 继续执行完整 lint，构建与运行环境扫描门禁保持启用。
 - 备用 Caddy 网关连接统一镜像中的控制台服务，首次部署指引区分初始化密码和 CLI API Key。
 - diff/commit/history/audit 在同一读取快照探测后续记录，仅真实中间页返回页级游标；整页终页与短终页均明确结束，Web 使用服务端游标。history/audit 后续新增记录可通过最后观察位置重新查询。
 
@@ -31,7 +32,7 @@
 
 ### Validation
 
-- 发布准备、本机测量和目标环境待补项目见 [alpha.5 验收记录](docs/release-alpha5-validation-2026-10-18.md)。最终发布由同候选 SHA 的完整 CI、性能、双架构扫描及原生镜像拉取验收控制。
+- 发布准备、本机测量和目标环境待补项目见 [alpha.6 验收记录](docs/release-alpha6-validation-2026-10-18.md)。最终发布由同候选 SHA 的完整 CI、性能、双架构扫描及原生镜像拉取验收控制。
 
 ## [0.3.0-alpha.4] - 2026-10-15
 
