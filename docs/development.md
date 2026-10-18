@@ -172,6 +172,8 @@ python3 scripts/test-console.py \
 
 ## 依赖与发布
 
+PostGIS 发布演练执行 `python3 scripts/test-postgis-release.py --output <新的绝对目录>`。脚本创建一次性 TLS-only/SCRAM 与明文数据库，执行 `postgres_tls` 的两个真实连接用例，验证正确 CA、错误 CA、错误主机名、TLS-only 拒绝明文及客户端禁止降级；受限角色、原生恢复和恢复后发布均通过 `verify-full`。使用 `--web --chromium <浏览器路径>` 同时验收控制台。生成的私钥、凭据和数据库备份只保留在私有输出目录，不提交。
+
 [audit.sh](../scripts/audit.sh) 是依赖安全门禁（需要网络）：`cargo audit --deny warnings`（RustSec，已接受的公告和理由写在 [.cargo/audit.toml](../.cargo/audit.toml)）、`web/` 与 `sdk/ts/` 的 `npm audit`（运行时依赖 moderate 及以上、全部依赖 high 及以上）、`sdk/go` 的 `govulncheck`、`sdk/python` 的 `pip-audit --strict`。所有扫描器均为必需；工具缺失、公告查询失败和策略命中都会返回非零状态，不再将部分扫描报告为整体通过。`govulncheck` 按运行它的 Go 版本判断标准库公告，使用当前受支持的 Go 版本运行。
 
 [Dependabot](../.github/dependabot.yml) 每周为 Cargo、npm（web、sdk/ts）、Go、pip、GitHub Actions 与 Dockerfile 基础镜像提出更新。Actions 固定到完整 commit SHA；Dockerfile 基础镜像固定 digest，由 Dependabot 刷新。

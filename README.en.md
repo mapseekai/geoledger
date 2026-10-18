@@ -6,7 +6,7 @@ GeoLedger is a version control and collaborative editing service for spatial fea
 
 The repository contains the Rust server `geoledger-server`, the remote `gl` CLI, a web console, and SDKs for Rust, Go, TypeScript / Node.js, and Python. The server manages data in SQLite + SpatiaLite or PostGIS. HTTP and gRPC requests use the same application engine.
 
-The current source version is `0.3.0-alpha.4`, with storage format 16, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
+The current source version is `0.3.0-alpha.5`, with storage format 16, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
 
 ## Key Capabilities
 
@@ -242,7 +242,7 @@ npm --prefix web run build
 
 The [Development Guide](docs/development.md) provides commands for four-language SDK integration and real browser verification. Both console CI browser suites share sandbox configuration, and the Ubuntu 24.04 runner uses system Chrome. The dependency gate `./scripts/audit.sh` checks Rust, npm, Go, and Python advisories.
 
-Measured results for this workspace fix, its execution environment, and outstanding verification items are recorded separately in the [2026-10-15 Validation Record](docs/ci-validation-2026-10-15.md).
+The [alpha.5 Validation Record](docs/release-alpha5-validation-2026-10-18.md) covers release preparation, local measurements, and production acceptance boundaries. Earlier workspace fixes remain in the [2026-10-15 Validation Record](docs/ci-validation-2026-10-15.md).
 
 ## Deployment and Operations
 

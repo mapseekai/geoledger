@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "geoledger-client"
-version = "0.3.0a4"
+version = "0.3.0a5"
 description = "GeoLedger business client"
 requires-python = ">=3.10"
 dependencies = ["grpcio>=1.78,<2", "protobuf>=6.33.5,<8"]

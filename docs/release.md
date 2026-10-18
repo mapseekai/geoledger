@@ -10,13 +10,13 @@
 
 ## 候选版本与发布配置
 
-当前候选版本为 `0.3.0-alpha.4`，Python 包使用等价版本 `0.3.0a4`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.4`，将通过检查的提交作为候选 SHA。
+当前候选版本为 `0.3.0-alpha.5`，Python 包使用等价版本 `0.3.0a5`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.5`，将通过检查的提交作为候选 SHA。
 
 ### 仅源码与 Docker Hub 的预发布
 
 [Source prerelease and Docker Hub](../.github/workflows/source-docker-release.yml) 是独立的手动入口，仅发布 GitHub prerelease 和 `docker.io/zwishing/geoledger:<版本>`，覆盖 Linux AMD64 / ARM64；不分发 npm/PyPI 包、Go 模块标签或独立二进制。完整 SDK 发布继续使用下文的既有流程。
 
-先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（当前 main HEAD 的完整 40 位提交 SHA；重跑可使用已固定标签的原候选）及 `release_tag`（例如 `v0.3.0-alpha.4`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
+先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（当前 main HEAD 的完整 40 位提交 SHA；重跑可使用已固定标签的原候选）及 `release_tag`（例如 `v0.3.0-alpha.5`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
 
 预检以 `contents: write` 的内置 `GITHUB_TOKEN` 创建并核对候选 tag，之后才启动同 SHA 完整 CI、[性能验收脚本](../scripts/release-performance.sh)、受检构建阶段和双架构运行镜像、不可变 digest 推送和签名、两架构原生拉取与 SDK 验收，最后公开 prerelease。性能检查保留 20 并发、300 秒和原 p95 门限，使用显式 CRS 的 10,000 条合成要素及一次性数据库。镜像验收检查源码 revision、服务版本、统一容器健康状态、重启后的 API Key 及 SDK 业务流程。
 
@@ -40,7 +40,7 @@ GitHub 的 `release` environment 配置 `NPM_TOKEN` secret，授予 `@geoledger/
 
 ## 发布顺序
 
-候选提交先通过同 SHA 的完整 CI、双后端 SDK、受限数据库角色原生恢复与浏览器测试。npm 与 PyPI 的发布配置在构建交付前检查。二进制和镜像完成后创建草稿 Release，验证统一 combined 镜像清单属于当前 SHA；SDK 分发成功后才公开 Release。npm 包的 `repository` 指向实际源码仓库及 `sdk/ts` 目录，与 provenance 的发布来源一致。Rust 客户端按同一 tag 从 Git 引用。
+候选提交先通过同 SHA 的完整 CI、双后端 SDK、真实数据库 TLS 校验、受限数据库角色原生恢复与浏览器测试。PostGIS 门禁必须执行两个原先可选的 TLS 测试，并在 verify-full 下完成恢复后业务验证。npm 与 PyPI 的发布配置在构建交付前检查。二进制和镜像完成后创建草稿 Release，验证统一 combined 镜像清单属于当前 SHA；SDK 分发成功后才公开 Release。npm 包的 `repository` 指向实际源码仓库及 `sdk/ts` 目录，与 provenance 的发布来源一致。Rust 客户端按同一 tag 从 Git 引用。
 
 发布中断后使用同一次运行的失败 job 重跑，保留已经验收的构建产物。草稿 Release 校验标签提交和已有资产 SHA256，补传缺失资产；npm/PyPI 校验已有包的文件内容与权限（忽略归档时间及压缩差异），仅发布缺失包；Go 标签必须解析到候选 SHA。已有内容不一致时流程停止，保留原产物用于排查。SDK 安装验收连接打包后的服务器，执行新增、修改、删除、历史读取及发布重试，成功后公开 Release。
 

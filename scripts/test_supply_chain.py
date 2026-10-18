@@ -497,6 +497,16 @@ class ReleaseCompletionTests(unittest.TestCase):
 
 
 class ProductionRoleTests(unittest.TestCase):
+    def test_database_tls_and_restore_acceptance_cannot_be_skipped(self):
+        files = {p.name: p.read_text() for p in (ROOT / '.github/workflows').glob('*.yml')}
+        for before, after in [('python3 scripts/test-postgis-release.py', 'echo skipped'),
+                              ('      - name: Database TLS, restricted role, native restore and browser binding',
+                               '      - if: false\n        name: Database TLS, restricted role, native restore and browser binding')]:
+            broken = dict(files)
+            broken['ci.yml'] = files['ci.yml'].replace(before, after)
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                policy.check(broken)
+
     def test_runtime_role_is_separate_and_unprivileged(self):
         compose=(ROOT/'deploy/compose.production.yaml').read_text()
         initialize=(ROOT/'deploy/postgis/initialize.sh').read_text()

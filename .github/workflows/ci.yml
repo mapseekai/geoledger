@@ -257,7 +257,12 @@ jobs:
           python3 -m playwright install-deps chromium
           test -x /opt/google/chrome/chrome
           /opt/google/chrome/chrome --version
-      - name: Restricted database role, native restore and browser binding
+      - name: Database TLS, restricted role, native restore and browser binding
         run: |
           # Use Ubuntu's existing Chrome AppArmor profile with sandboxing enabled.
           python3 scripts/test-postgis-release.py --output "$RUNNER_TEMP/postgis-release" --web --chromium /opt/google/chrome/chrome
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: postgis-release-acceptance
+          path: ${{ runner.temp }}/postgis-release/result.json
+          if-no-files-found: error

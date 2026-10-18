@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disposable native restore + restricted-role binding drill. Requires Docker."""
+"""Disposable TLS, native restore and restricted-role binding drill. Requires Docker/OpenSSL."""
 import argparse
 import json
 import os
@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import time
 import urllib.request
+from urllib.parse import quote
 import uuid
 from benchmark import ports, stop
 from auth_test_support import provision, auth_call
@@ -23,12 +24,21 @@ def main():
     p.add_argument('--chromium')
     a = p.parse_args()
     if a.web and not a.chromium: p.error("--web requires --chromium")
-    a.output.mkdir(parents=True, exist_ok=False)
-    dbport, http, grpc, webport = ports(4)
+    a.output = a.output.resolve()
+    a.output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    dbport, plainport, http, grpc, webport = ports(5)
     container = 'geoledger-release-' + uuid.uuid4().hex[:12]
+    plain_container = container + '-plaintext'
     processes = []
     env = {k:v for k,v in os.environ.items() if not k.startswith('GL_')}
-    env.update(GL_DATABASE_URL=f'postgresql://geoledger_app@127.0.0.1:{dbport}/geoledger_test?sslmode=disable')
+    tls = a.output / 'tls'
+    subprocess.run(['bash', 'scripts/make-test-certs.sh', str(tls)], check=True)
+    password = secrets.token_hex(32)
+    tls_url = f'postgresql://geoledger_app:{password}@localhost:{dbport}/geoledger_test?sslrootcert={quote(str(tls / "ca.crt"))}'
+    env.update(GL_DATABASE_URL=tls_url + '&sslmode=verify-full',
+               GL_TEST_TLS_DATABASE_URL=tls_url,
+               GL_TEST_TLS_WRONG_HOST_DATABASE_URL=tls_url.replace('@localhost:', '@127.0.0.1:'),
+               GL_TEST_PLAINTEXT_DATABASE_URL=f'postgresql://postgres@127.0.0.1:{plainport}/geoledger_test')
     def sql(statement, database='geoledger_test'):
         return subprocess.check_output(['docker','exec','-i',container,'psql','-U','postgres','-d',database,'-At','-v','ON_ERROR_STOP=1'], input=statement, text=True).strip()
     def start(cmd, name, url):
@@ -42,13 +52,36 @@ def main():
             if proc.poll() is not None: raise RuntimeError(name+' exited; inspect log')
             time.sleep(.25)
         raise RuntimeError(name+' readiness timeout')
-    try:
-        subprocess.run(['docker','run','--rm','-d','--name',container,'-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_DB=geoledger_test','-p',f'127.0.0.1:{dbport}:5432',a.image],check=True,stdout=subprocess.DEVNULL)
+    def wait_database(name):
         for _ in range(120):
-            if subprocess.run(['docker','exec',container,'pg_isready','-h','127.0.0.1','-U','postgres','-d','geoledger_test'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode == 0: break
+            if subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','postgres','-d','geoledger_test'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode == 0:
+                return
             time.sleep(.5)
+        raise RuntimeError(name + ' readiness timeout')
+    try:
+        # Reuse production's hostssl/SCRAM policy and private-key ownership.
+        entrypoint = ('install -d -o postgres -m 0700 /run/geoledger-tls && '
+                      'install -o postgres -m 0600 /tls/postgis.key /run/geoledger-tls/server.key && '
+                      'install -o postgres -m 0644 /tls/postgis.crt /run/geoledger-tls/server.crt && '
+                      'exec docker-entrypoint.sh postgres -c ssl=on '
+                      '-c ssl_cert_file=/run/geoledger-tls/server.crt '
+                      '-c ssl_key_file=/run/geoledger-tls/server.key '
+                      '-c ssl_min_protocol_version=TLSv1.2 -c hba_file=/etc/geoledger/pg_hba.conf')
+        subprocess.run(['docker','run','--rm','-d','--name',container,'-e','POSTGRES_PASSWORD',
+                        '-e','POSTGRES_DB=geoledger_test','-p',f'127.0.0.1:{dbport}:5432',
+                        '-v',f'{tls}:/tls:ro','-v',f'{Path("deploy/postgis/pg_hba.conf").resolve()}:/etc/geoledger/pg_hba.conf:ro',
+                        '--entrypoint','sh',a.image,'-c',entrypoint],
+                       env={**os.environ, 'POSTGRES_PASSWORD': secrets.token_hex(32)}, check=True,stdout=subprocess.DEVNULL)
+        wait_database(container)
         subprocess.run(['docker','cp','deploy/postgis/initialize.sh',container+':/tmp/initialize.sh'],check=True)
-        subprocess.run(['docker','exec','-e','POSTGRES_USER=postgres','-e','POSTGRES_DB=geoledger_test','-e','GL_DB_APP_PASSWORD=disposable-only',container,'sh','/tmp/initialize.sh'],check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(['docker','exec','-e','POSTGRES_USER=postgres','-e','POSTGRES_DB=geoledger_test','-e','GL_DB_APP_PASSWORD',container,'sh','/tmp/initialize.sh'],
+                       env={**os.environ, 'GL_DB_APP_PASSWORD': password}, check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(['docker','run','--rm','-d','--name',plain_container,'-e','POSTGRES_HOST_AUTH_METHOD=trust',
+                        '-e','POSTGRES_DB=geoledger_test','-p',f'127.0.0.1:{plainport}:5432',a.image,'postgres','-c','ssl=off'],
+                       check=True,stdout=subprocess.DEVNULL)
+        wait_database(plain_container)
+        subprocess.run(['cargo','+1.92.0','test','--locked','-p','geoledger-engine','--test','postgres_tls','--','--ignored','--test-threads=1'],
+                       env=env,check=True)
         sql("CREATE SCHEMA business AUTHORIZATION geoledger_app; SET ROLE geoledger_app; CREATE TABLE business.roads(id text PRIMARY KEY, name text, geom geometry(LineString,4326)); INSERT INTO business.roads VALUES('one','original',ST_GeomFromText('LINESTRING(104 35,105 36)',4326));")
         sql('CREATE SCHEMA private; CREATE TABLE private.unrelated(secret text)')
         assert sql("SELECT has_table_privilege('geoledger_app','private.unrelated','SELECT')") == 'f'
@@ -101,10 +134,10 @@ def main():
             env.update(GL_WEB_ENDPOINT=f'http://127.0.0.1:{http}',GL_WEB_ORIGIN=f'http://127.0.0.1:{webport}',GL_WEB_SESSION_SECRET=secrets.token_urlsafe(48))
             start(['npm','--prefix','web','start','--','--port',str(webport)],'web',env['GL_WEB_ORIGIN']+'/login')
             subprocess.run([os.sys.executable,'scripts/test-console-postgis.py','--url',env['GL_WEB_ORIGIN'],'--api-key-file',str(a.output/'api-key'),'--chromium',a.chromium,'--screenshots',str(a.output/'screenshots')],check=True,timeout=180)
-        (a.output/'result.json').write_text(json.dumps({'passed':True,'restore_seconds':restore_seconds,'restricted_role':True,'native_restore':True,'source_survives_unbind':True,'source_batches':[1,100,500]},indent=2))
-        print('PASS restricted role, native restore, history, audit, continued publication and source unbinding; restore seconds:',round(restore_seconds,3))
+        (a.output/'result.json').write_text(json.dumps({'passed':True,'image':a.image,'database_tls':True,'wrong_ca_rejected':True,'wrong_hostname_rejected':True,'plaintext_downgrade_rejected':True,'restore_seconds':restore_seconds,'restricted_role':True,'native_restore':True,'source_survives_unbind':True,'source_batches':[1,100,500]},indent=2))
+        print('PASS database TLS, restricted role, native restore, history, audit, continued publication and source unbinding; restore seconds:',round(restore_seconds,3))
     finally:
         for proc in reversed(processes): stop(proc)
-        subprocess.run(['docker','rm','-f',container],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        subprocess.run(['docker','rm','-f',container,plain_container],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
 if __name__ == '__main__': main()

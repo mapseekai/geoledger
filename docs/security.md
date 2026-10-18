@@ -68,7 +68,7 @@ CLI 通过 `GL_API_KEY` 或 `GL_API_KEY_FILE` / `--api-key-file` 读取 Key。�
 postgresql://geoledger@db.internal:5432/geoledger?sslmode=verify-full&sslrootcert=/etc/geoledger/db-ca.pem
 ```
 
-`crates/engine/tests/postgres_tls.rs` 针对仅允许 `hostssl` 的服务器验证 verify-full、verify-ca、require、错误 CA 被拒绝，以及非 TLS 服务器在默认与 require 模式下连接失败。
+`scripts/test-postgis-release.py` 在 CI 的 PostGIS 发布门禁中创建隔离数据库并实际执行 `crates/engine/tests/postgres_tls.rs`：仅允许 `hostssl` 的服务器验证 verify-full、verify-ca、require、错误 CA 和错误主机名被拒绝，以及非 TLS 服务器在默认与 require 模式下连接失败。受限角色和备份恢复演练也使用同一 TLS-only 服务。
 
 ## 控制台会话
 

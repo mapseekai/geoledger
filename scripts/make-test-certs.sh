@@ -21,7 +21,7 @@ issue() { # name, SAN list
 }
 san=$(printf 'DNS:%s,' "${names[@]}")
 issue gateway "${san%,}"
-issue postgis "DNS:postgis"
+issue postgis "DNS:postgis,DNS:localhost"
 # Certificates are public; keys stay 0600 (containers start as root and copy them).
 chmod 0755 "$dir"
 chmod 0644 "$dir"/*.crt

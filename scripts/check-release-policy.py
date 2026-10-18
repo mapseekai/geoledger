@@ -113,6 +113,9 @@ def check(files: dict[str, str]) -> None:
     for name in ('linux', 'web', 'msrv', 'windows', 'supply-chain', 'postgis-release'):
         if 'source' not in needs(ci[name]) or 'ref: ${{ inputs.source_sha || github.sha }}' not in ci[name]:
             raise ValueError(f'{name} does not check the immutable source')
+    if ('python3 scripts/test-postgis-release.py' not in ci['postgis-release']
+            or re.search(r'^\s+(?:- )?(if|continue-on-error):', ci['postgis-release'], re.M)):
+        raise ValueError('database TLS and native restore acceptance must not be skipped')
     if 'install-spatialite.py' not in ci['windows'] or 'smoke-server.py' not in ci['windows']:
         raise ValueError('Windows must install and exercise native runtime')
     if 'smoke-server.py' not in release['binaries']:
