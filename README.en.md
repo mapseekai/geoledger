@@ -38,7 +38,7 @@ Run the shell commands below from the repository root.
 | SQLite service | The native SpatiaLite extension and its dependencies. Set `GL_SPATIALITE_EXTENSION` to select its path. The repository Dockerfile includes the runtime. |
 | PostGIS service | A PostgreSQL database with the PostGIS extension enabled and a service account. |
 | Web and TypeScript SDK | Node.js 22 and npm. |
-| Go SDK | Go 1.27.2+, as declared in [go.mod](sdk/go/go.mod). |
+| Go SDK | Go 1.27.3+, as declared in [go.mod](sdk/go/go.mod). |
 | Python SDK | Python 3.10+, as declared in [pyproject.toml](sdk/python/pyproject.toml). |
 | Repository checks | Python 3.11+, Bash, rustfmt, and Clippy. Browser verification uses Python Playwright and Chromium/Chrome with a working sandbox. |
 | Containers | Docker, Docker Compose, and OpenSSL to generate the session secret. |

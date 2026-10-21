@@ -32,7 +32,6 @@ if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
   cargo test --locked -p geoledger-engine --test storage -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test portable -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test multi_instance -- --ignored --test-threads=1
-  # This fixture commits a user; bootstrap conformance requires an empty identity store.
   cargo test --locked -p geoledger-engine --lib postgis_capabilities_share_commit_error_and_drop_rollback -- --ignored --test-threads=1
 else
   printf '%s\n' 'PostGIS integration tests not run: GL_TEST_DATABASE_URL is unset.'

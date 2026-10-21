@@ -764,7 +764,12 @@ mod tests {
                 .get::<_, String>(0usize)?,
             "geoledger_test"
         );
-        capability_atomicity(Storage::Postgis(dsn))
+        let result = capability_atomicity(Storage::Postgis(dsn));
+        // Later SDK tests need an empty identity store to bootstrap their administrator.
+        monitor.batch_execute(
+            "DROP SCHEMA IF EXISTS business CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS postgis;",
+        )?;
+        result
     }
 
     #[test]

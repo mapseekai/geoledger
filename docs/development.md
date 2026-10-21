@@ -50,7 +50,7 @@ npm ci --prefix sdk/ts
 ./scripts/generate-sdk.sh
 ```
 
-生成工具需在 PATH 上。Python 脚本可用 `PYTHON` 指定含 grpcio-tools 的解释器。Go 模块要求 Go 1.27.2+；TypeScript 构建/运行推荐 Node.js 22；Python 客户端要求 3.10+。
+生成工具需在 PATH 上。Python 脚本可用 `PYTHON` 指定含 grpcio-tools 的解释器。Go 模块要求 Go 1.27.3+；TypeScript 构建/运行推荐 Node.js 22；Python 客户端要求 3.10+。
 
 TS SDK 的构建启用 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes` 和 `noImplicitOverride`，手写业务源码另以 `npm --prefix sdk/ts run lint` 执行 Oxlint 类型感知 Promise 检查。控制台保留原有 Oxlint 规则，增加同类检查；严格选项的迁移范围见 [Web 检查说明](../web/README.md)。
 
@@ -66,7 +66,7 @@ TS SDK 的构建启用 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`
 ./target/debug/geoledger-server --data-dir ./target/sdk-test
 ```
 
-另一个终端准备 Python 环境、TS 依赖并运行联调（Go 1.27.2+ 已在 PATH）：
+另一个终端准备 Python 环境、TS 依赖并运行联调（Go 1.27.3+ 已在 PATH）：
 
 ```sh
 python3 -m venv .venv

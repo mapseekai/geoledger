@@ -38,7 +38,7 @@ cd geoledger
 | SQLite 服务 | SpatiaLite 原生扩展及其依赖；`GL_SPATIALITE_EXTENSION` 可指定扩展路径。仓库 Dockerfile 包含对应运行环境。 |
 | PostGIS 服务 | 启用 PostGIS 扩展的 PostgreSQL 数据库及服务账号。 |
 | Web 与 TypeScript SDK | Node.js 22 与 npm。 |
-| Go SDK | Go 1.27.2+，见 [go.mod](sdk/go/go.mod)。 |
+| Go SDK | Go 1.27.3+，见 [go.mod](sdk/go/go.mod)。 |
 | Python SDK | Python 3.10+，见 [pyproject.toml](sdk/python/pyproject.toml)。 |
 | 仓库检查 | Python 3.11+、Bash、rustfmt、Clippy；浏览器验证使用 Python Playwright 和可启用沙箱的 Chromium/Chrome。 |
 | 容器运行 | Docker、Docker Compose，以及用于生成会话密钥的 OpenSSL。 |
