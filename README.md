@@ -219,7 +219,7 @@ CLI / SDKs -> gRPC ---------------------------> engine Application
 | `web` | Next.js 控制台、浏览器接口和地图工作台。 |
 | `deploy`、`scripts` | 部署模板、验证脚本与发布门禁。 |
 
-SQLite 使用 WAL、SpatiaLite 几何和 RTree 空间索引；PostGIS 使用 `geometry` 列和 GiST 索引。存储事务边界与后端一致性要求见[存储扩展](docs/storage.md)。
+SQLite 使用 WAL、SpatiaLite 几何和 RTree 空间索引；PostGIS 使用 `geometry` 列和 GiST 索引。存储能力按身份、项目、工作区、读取和发布等职责拆分，共享同一个事务；事务边界与后端一致性要求见[存储扩展](docs/storage.md)。
 
 ## 构建与验证
 

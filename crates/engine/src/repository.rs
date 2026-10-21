@@ -1,357 +1,54 @@
-//! Backend extension contract. All mutations, receipts and audit writes share one atomic transaction.
-//! Implementations must roll back on Drop, serialize competing project publications, preserve
-//! read snapshots, bound query pages, and honour the supplied end-to-end deadline.
-use crate::Result;
-pub use crate::session::{Cell, Decode, Row};
-use std::time::Duration;
-/// A row follows the ordered field schema documented in docs/storage.md.
-/// New backends construct rows using Row::new; no database-specific value escapes.
-pub trait StorageBackend: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn initialize(&self, timeout: Duration) -> Result<()>;
-    fn health(&self, timeout: Duration) -> Result<()>;
-    fn begin(&self, read_only: bool, timeout: Duration) -> Result<Box<dyn RepositoryTransaction>>;
-    /// Connection pool occupancy for metrics; backends without a pool return None.
-    fn pool_stats(&self) -> Option<crate::PoolStats> {
-        None
-    }
-    /// Export project/version tables from one consistent snapshot; global credentials are excluded.
-    fn export(
-        &self,
-        out: &mut dyn std::io::Write,
-        timeout: Duration,
-    ) -> Result<crate::DataSummary> {
-        let _ = (out, timeout);
-        Err(crate::Error::new(409, "this storage backend has no export"))
-    }
-    /// Load a validated export into an initialized, empty database atomically.
-    fn import(
-        &self,
-        input: &mut dyn std::io::BufRead,
-        timeout: Duration,
-    ) -> Result<crate::DataSummary> {
-        let _ = (input, timeout);
-        Err(crate::Error::new(409, "this storage backend has no import"))
-    }
-    /// Online, consistent copy of the whole database into a new file.
-    fn backup(&self, target: &std::path::Path, timeout: Duration) -> Result<()> {
-        let _ = (target, timeout);
-        Err(crate::Error::new(
-            409,
-            "this storage backend has no built-in backup; use the database's own tools or export",
-        ))
-    }
-}
-pub struct DraftDelta {
-    pub dataset: String,
-    pub key: String,
-    pub properties: Option<String>,
-    pub geometry: Option<String>,
-}
-#[derive(Clone)]
-pub struct FeatureQuery {
-    pub project: String,
-    pub dataset: String,
-    pub revision: i64,
-    pub workspace: Option<String>,
-    pub after: String,
-    pub feature_id: Option<String>,
-    pub bbox: Option<[f64; 4]>,
-    pub limit: i64,
-}
-#[derive(Clone, Copy)]
-pub struct ConflictQuery<'a> {
-    pub project: &'a str,
-    pub workspace: &'a str,
-    pub base: i64,
-    pub head: i64,
-    pub after_dataset: &'a str,
-    pub after_key: &'a str,
-    pub limit: i64,
-}
-/// All methods are scoped by a validated project; authorization remains in Application.
-/// begin_merge/stage_merge are transaction-local staging, never durable publication.
-pub trait RepositoryTransaction: Send {
-    /// Serialize global credential mutations and their audit/receipt writes until commit.
-    fn lock_credentials(&mut self) -> Result<()>;
-    fn auth_user(&mut self, id: &str) -> Result<Option<crate::authentication::UserRecord>>;
-    fn auth_username(
-        &mut self,
-        username: &str,
-    ) -> Result<Option<crate::authentication::UserRecord>>;
-    fn auth_users(&mut self, after: &str, limit: i64, status: &str) -> Result<Vec<crate::User>>;
-    fn auth_insert_user(&mut self, user: &crate::authentication::UserRecord) -> Result<()>;
-    fn auth_update_user(&mut self, user: &crate::authentication::UserRecord) -> Result<()>;
-    fn auth_admin_count(&mut self) -> Result<i64>;
-    fn auth_membership_target(&mut self, id: &str) -> Result<bool>;
-    fn auth_user_count(&mut self) -> Result<i64>;
-    fn auth_key(&mut self, id: &str) -> Result<Option<crate::ApiKey>>;
-    fn auth_key_digest(&mut self, digest: &str, now: &str) -> Result<Option<crate::ApiKey>>;
-    fn auth_keys(&mut self, user: &str, after: &str, limit: i64) -> Result<Vec<crate::ApiKey>>;
-    fn auth_insert_key(&mut self, key: &crate::ApiKey, digest: &str) -> Result<()>;
-    fn auth_update_key(&mut self, key: &crate::ApiKey) -> Result<()>;
-    fn auth_delete_key(&mut self, id: &str) -> Result<()>;
-    fn auth_touch_key(&mut self, id: &str, now: &str, before: &str) -> Result<()>;
-    fn auth_session(
-        &mut self,
-        digest: &str,
-    ) -> Result<Option<crate::authentication::SessionRecord>>;
-    fn auth_insert_session(
-        &mut self,
-        session: &crate::authentication::SessionRecord,
-        digest: &str,
-    ) -> Result<()>;
-    fn auth_touch_session(&mut self, id: &str, now: &str, before: &str) -> Result<()>;
-    fn auth_delete_session(&mut self, id: &str) -> Result<()>;
-    fn auth_invalidate_user(&mut self, id: &str, now: &str, keys: bool) -> Result<()>;
-    fn auth_audit(&mut self, actor: &str, action: &str, resource: &str, now: &str) -> Result<()>;
+//! Backend extension contract. All capabilities borrow one transaction and share its snapshot,
+//! locks, deadline and response budget. Implementations roll back on Drop; only the owner commits.
+mod audit;
+mod authentication;
+mod backend;
+mod dataset;
+mod history;
+mod project;
+mod publication;
+mod query;
+mod row;
+mod tables;
+mod workspace;
 
+use crate::Result;
+pub use audit::AuditRepository;
+pub use authentication::CredentialRepository;
+pub use backend::{StorageBackend, StorageMaintenance};
+pub use dataset::DatasetRepository;
+pub use history::HistoryRepository;
+pub use project::ProjectRepository;
+pub use publication::{ConflictQuery, PublicationRepository};
+pub use query::{FeatureQuery, FeatureRepository};
+pub use row::{Cell, Decode, Row};
+pub use tables::PostgisTables;
+pub use workspace::{DraftDelta, WorkspaceRepository};
+
+/// Encoded response budget shared by every capability of a transaction.
+pub trait ResponseBudget: Send {
     fn set_response_limit(&mut self, bytes: usize);
+
     fn response_limit(&self) -> usize;
+
     fn set_response_reservation(&mut self, reservation: Option<crate::ResponseReservation>);
+
     fn response_reservation(&self) -> Option<crate::ResponseReservation>;
-    /// (role, project state) for an active member of a project that is not deleted.
-    fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>>;
-    fn project_head(&mut self, project: &str, lock: bool) -> Result<Option<Row>>;
-    /// Keep project state stable while independent workspaces are edited concurrently.
-    fn project_head_for_edit(&mut self, project: &str) -> Result<Option<Row>> {
-        self.project_head(project, true)
-    }
-    fn workspace_state(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        subject: &str,
-        write: bool,
-    ) -> Result<Option<Row>>;
-    fn feature_page(&mut self, query: &FeatureQuery) -> Result<Vec<Row>>;
-    /// Check the same snapshot, cursor and filters for a match, ignoring the page limit.
-    /// Backends should override this to avoid loading feature payloads for lookahead.
-    fn feature_exists(&mut self, query: &FeatureQuery) -> Result<bool> {
-        let mut query = query.clone();
-        query.limit = 1;
-        Ok(!self.feature_page(&query)?.is_empty())
-    }
-    fn feature_at(
-        &mut self,
-        project: &str,
-        dataset: &str,
-        key: &str,
-        revision: i64,
-    ) -> Result<Option<Row>>;
-    fn dataset_exists(&mut self, project: &str, dataset: &str) -> Result<Option<Row>>;
-    /// Assign IDs in project commit order so audit cursors never skip a pending event.
-    fn append_audit(
-        &mut self,
-        project: &str,
-        subject: &str,
-        action: &str,
-        detail: &str,
-    ) -> Result<()>;
-    fn advance_workspace(&mut self, project: &str, workspace: &str, status: &str) -> Result<Row>;
-    fn insert_project(&mut self, project: &str, name: &str) -> Result<()>;
-    fn insert_owner(&mut self, project: &str, subject: &str) -> Result<()>;
-    /// (project, name, head, state, role) for active memberships of projects that are not deleted.
-    fn list_projects(&mut self, subject: &str, after: &str, limit: i64) -> Result<Vec<Row>>;
-    /// (name, head, state).
-    fn project_info(&mut self, project: &str) -> Result<Row>;
-    /// (name, head, state) of a project that is not deleted; `lock` serializes lifecycle changes.
-    fn live_project(&mut self, project: &str, lock: bool) -> Result<Option<Row>>;
-    /// (subject, role) of active members ordered by subject.
-    fn list_members(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>>;
-    /// Deactivate a membership; history and audit rows keep referencing it.
-    fn remove_member(&mut self, project: &str, subject: &str) -> Result<()>;
-    /// One of active, archived, deleted.
-    fn set_project_state(&mut self, project: &str, state: &str) -> Result<()>;
-    /// Lock creation for this subject through commit and count their active owned projects.
-    fn owned_projects(&mut self, subject: &str) -> Result<Row>;
-    /// Ensure an (inactive, if new) member row exists so audit events can reference `subject`.
-    fn ensure_identity(&mut self, project: &str, subject: &str) -> Result<()>;
-    fn owner_summary(&mut self, project: &str, subject: &str) -> Result<Row>;
-    fn set_member(&mut self, project: &str, subject: &str, role: &str) -> Result<()>;
-    fn insert_dataset(
-        &mut self,
-        project: &str,
-        dataset: &str,
-        name: &str,
-        geometry_type: &str,
-        coordinate_dimension: i32,
-        crs: &str,
-    ) -> Result<()>;
-    /// Validate and lock a business table; returns (geometry family, dimension).
-    fn inspect_postgis_table(&mut self, source: &crate::PostgisTable) -> Result<Row>;
-    /// Source rows (id, properties JSON, geometry JSON), ordered by id with C collation.
-    fn postgis_table_page(&mut self, source: &crate::PostgisTable, after: &str)
-    -> Result<Vec<Row>>;
-    fn bind_postgis_table(
-        &mut self,
-        project: &str,
-        dataset: &str,
-        source: &crate::PostgisTable,
-    ) -> Result<()>;
-    fn rename_project(&mut self, project: &str, name: &str) -> Result<()>;
-    fn rename_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()>;
-    /// Purge the selected dataset, or all project data. Caller holds the project lock.
-    /// Shared commits/workspaces retain other datasets; audit records remain immutable.
-    fn purge_data(&mut self, project: &str, dataset: Option<&str>) -> Result<()>;
-    fn list_datasets(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>>;
-    fn insert_workspace(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        subject: &str,
-        base: i64,
-    ) -> Result<()>;
-    fn list_workspaces(
-        &mut self,
-        project: &str,
-        subject: &str,
-        after: &str,
-        limit: i64,
-    ) -> Result<Vec<Row>>;
-    /// Apply a bounded batch, preserving any prior resolution pins on upsert.
-    fn put_deltas(&mut self, project: &str, workspace: &str, deltas: &[DraftDelta]) -> Result<()>;
-    fn invalidate_resolutions(&mut self, project: &str, workspace: &str) -> Result<()>;
-    /// Resolution flag and feature at the workspace base; absent features have null fields.
-    fn edit_base(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        dataset: &str,
-        key: &str,
-        base: i64,
-    ) -> Result<Row>;
-    fn remove_delta(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        dataset: &str,
-        key: &str,
-    ) -> Result<()>;
-    fn count_deltas(&mut self, project: &str, workspace: &str) -> Result<Row>;
-    fn workspace_summary(&mut self, project: &str, workspace: &str, base: i64) -> Result<Vec<Row>>;
-    fn commit_summary(&mut self, project: &str, revision: i64) -> Result<Vec<Row>>;
-    fn diff_page(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        base: i64,
-        after_dataset: &str,
-        after_key: &str,
-        limit: i64,
-    ) -> Result<Vec<Row>>;
-    /// Key-only continuation probes use this transaction's read snapshot and
-    /// must not materialize unreturned feature properties, geometry or audit detail.
-    fn diff_has_after(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        after_dataset: &str,
-        after_key: &str,
-    ) -> Result<bool>;
-    fn history_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>>;
-    fn history_has_after(&mut self, project: &str, after: i64) -> Result<bool>;
-    fn commit_exists(&mut self, project: &str, revision: i64) -> Result<Option<Row>>;
-    fn commit_page(
-        &mut self,
-        project: &str,
-        revision: i64,
-        after_dataset: &str,
-        after_key: &str,
-        limit: i64,
-    ) -> Result<Vec<Row>>;
-    fn commit_has_after(
-        &mut self,
-        project: &str,
-        revision: i64,
-        after_dataset: &str,
-        after_key: &str,
-    ) -> Result<bool>;
-    fn audit_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>>;
-    fn audit_has_after(&mut self, project: &str, after: i64) -> Result<bool>;
-    /// Transactional conflict index for exactly one workspace/version/HEAD tuple.
-    /// Its rows are derived data and must not grant access without application authorization.
-    fn cached_conflict_count(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        base: i64,
-        version: i64,
-        head: i64,
-    ) -> Result<Option<i64>>;
-    fn reset_conflict_cache(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        base: i64,
-        version: i64,
-        head: i64,
-    ) -> Result<()>;
-    fn cache_conflict_keys(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        keys: &[(String, String)],
-    ) -> Result<()>;
-    fn complete_conflict_cache(&mut self, project: &str, workspace: &str, total: i64)
-    -> Result<()>;
-    fn cached_conflict_page(&mut self, query: &ConflictQuery<'_>) -> Result<Vec<Row>>;
-    fn begin_merge(&mut self) -> Result<()>;
-    fn merge_page(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        base: i64,
-        current: i64,
-        after_dataset: &str,
-        after_key: &str,
-    ) -> Result<Vec<Row>>;
-    fn stage_merge(
-        &mut self,
-        dataset: &str,
-        key: &str,
-        before: &Option<String>,
-        after: &Option<String>,
-    ) -> Result<()>;
-    fn publication_receipt(
-        &mut self,
-        project: &str,
-        subject: &str,
-        request_id: &str,
-    ) -> Result<Option<Row>>;
-    fn append_commit(
-        &mut self,
-        project: &str,
-        revision: i64,
-        workspace: &str,
-        subject: &str,
-        message: &str,
-    ) -> Result<()>;
-    fn append_changes(&mut self, project: &str, revision: i64) -> Result<()>;
-    fn close_history(&mut self, project: &str, revision: i64) -> Result<()>;
-    fn append_history(&mut self, project: &str, revision: i64) -> Result<()>;
-    fn advance_head(&mut self, project: &str, revision: i64) -> Result<()>;
-    fn save_receipt(
-        &mut self,
-        project: &str,
-        subject: &str,
-        request_id: &str,
-        payload: &str,
-        result: &str,
-    ) -> Result<()>;
-    fn mark_resolved(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        dataset: &str,
-        key: &str,
-        head: i64,
-    ) -> Result<()>;
-    fn stage_resolution(&mut self, dataset: &str, key: &str, after: &Option<String>) -> Result<()>;
-    fn clear_deltas(&mut self, project: &str, workspace: &str) -> Result<()>;
-    fn replace_deltas_with_merge(&mut self, project: &str, workspace: &str) -> Result<()>;
-    fn advance_base(&mut self, project: &str, workspace: &str, revision: i64) -> Result<()>;
-    fn count_commit_changes(&mut self, project: &str, revision: i64) -> Result<Row>;
-    fn restore_deltas(&mut self, project: &str, revision: i64, workspace: &str) -> Result<()>;
+}
+
+/// Transaction ownership and atomic commit. Domain handlers take only the capabilities they use.
+/// Every supertrait must operate on this same transaction, including staging, receipts and audit.
+pub trait RepositoryTransaction:
+    ResponseBudget
+    + CredentialRepository
+    + ProjectRepository
+    + DatasetRepository
+    + WorkspaceRepository
+    + FeatureRepository
+    + HistoryRepository
+    + PublicationRepository
+    + AuditRepository
+    + PostgisTables
+{
     fn commit(self: Box<Self>) -> Result<()>;
 }

@@ -19,11 +19,13 @@ mod errors;
 pub mod fuzzing;
 mod session;
 use geoledger_core::{Cell, Record, merge::merge_record};
+use repository::Row;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
-use session::Row;
 pub mod repository;
-use repository::{RepositoryTransaction, StorageBackend};
+#[cfg(test)]
+use repository::RepositoryTransaction;
+use repository::StorageBackend;
 pub use session::pgtls::{PgTlsSummary, SslMode, summarize as postgres_tls_summary};
 
 use std::{
@@ -117,6 +119,7 @@ pub struct PoolStats {
     /// Acquisitions that gave up because no connection became free before the deadline.
     pub wait_timeouts: u64,
 }
+#[cfg(test)]
 type Transaction = Box<dyn RepositoryTransaction>;
 impl Application {
     pub fn new(storage: Storage) -> Self {
@@ -244,7 +247,9 @@ impl Application {
         }
         let mut t = self.storage.begin(read_only, remaining)?;
         let trusted_user = identity
-            .map(|identity| authentication::business_identity(&mut t, identity, verified_password))
+            .map(|identity| {
+                authentication::business_identity(t.as_mut(), identity, verified_password)
+            })
             .transpose()?;
         let subject = trusted_user
             .as_ref()
@@ -260,36 +265,36 @@ impl Application {
         t.set_response_limit(self.response_limit);
         t.set_response_reservation(self.response_reservation.clone());
         let result = match command {
-            Command::CreateProject(r) => create_project(&mut t, subject, policy, r),
-            Command::ListProjects(r) => list_projects(&mut t, subject, r),
-            Command::GetProject(r) => get_project(&mut t, subject, policy, r),
-            Command::SetMember(r) => set_member(&mut t, subject, policy, r),
-            Command::RemoveMember(r) => remove_member(&mut t, subject, policy, r),
-            Command::ListMembers(r) => list_members(&mut t, subject, policy, r),
-            Command::ArchiveProject(r) => archive_project(&mut t, subject, policy, r),
-            Command::DeleteProject(r) => delete_project(&mut t, subject, policy, r),
-            Command::RenameProject(r) => rename_project(&mut t, subject, policy, r),
-            Command::RenameDataset(r) => rename_dataset(&mut t, subject, r),
-            Command::DeleteDataset(r) => delete_dataset(&mut t, subject, policy, r),
-            Command::CreateDataset(r) => create_dataset(&mut t, subject, policy, r),
-            Command::ListDatasets(r) => list_datasets(&mut t, subject, r),
-            Command::CreateWorkspace(r) => create_workspace(&mut t, subject, r),
-            Command::ListWorkspaces(r) => list_workspaces(&mut t, subject, r),
-            Command::GetWorkspace(r) => get_workspace(&mut t, subject, r),
-            Command::Save(r) => save(&mut t, subject, r),
-            Command::Discard(r) => discard(&mut t, subject, r),
-            Command::Features(r) => features(&mut t, subject, r),
-            Command::WorkspaceSummary(r) => workspace_summary(&mut t, subject, r),
-            Command::CommitSummary(r) => commit_summary(&mut t, subject, r),
-            Command::Diff(r) => diff(&mut t, subject, r),
-            Command::Conflicts(r) => list_conflicts(&mut t, subject, r),
-            Command::Resolve(r) => resolve(&mut t, subject, r),
-            Command::History(r) => history(&mut t, subject, r),
-            Command::Audit(r) => audit_events(&mut t, subject, r),
-            Command::Commit(r) => commit_detail(&mut t, subject, r),
-            Command::Publish(r) => publish(&mut t, subject, r),
-            Command::Rebase(r) => rebase(&mut t, subject, r),
-            Command::Restore(r) => restore(&mut t, subject, r),
+            Command::CreateProject(r) => create_project(t.as_mut(), subject, policy, r),
+            Command::ListProjects(r) => list_projects(t.as_mut(), subject, r),
+            Command::GetProject(r) => get_project(t.as_mut(), subject, policy, r),
+            Command::SetMember(r) => set_member(t.as_mut(), subject, policy, r),
+            Command::RemoveMember(r) => remove_member(t.as_mut(), subject, policy, r),
+            Command::ListMembers(r) => list_members(t.as_mut(), subject, policy, r),
+            Command::ArchiveProject(r) => archive_project(t.as_mut(), subject, policy, r),
+            Command::DeleteProject(r) => delete_project(t.as_mut(), subject, policy, r),
+            Command::RenameProject(r) => rename_project(t.as_mut(), subject, policy, r),
+            Command::RenameDataset(r) => rename_dataset(t.as_mut(), subject, r),
+            Command::DeleteDataset(r) => delete_dataset(t.as_mut(), subject, policy, r),
+            Command::CreateDataset(r) => create_dataset(t.as_mut(), subject, policy, r),
+            Command::ListDatasets(r) => list_datasets(t.as_mut(), subject, r),
+            Command::CreateWorkspace(r) => create_workspace(t.as_mut(), subject, r),
+            Command::ListWorkspaces(r) => list_workspaces(t.as_mut(), subject, r),
+            Command::GetWorkspace(r) => get_workspace(t.as_mut(), subject, r),
+            Command::Save(r) => save(t.as_mut(), subject, r),
+            Command::Discard(r) => discard(t.as_mut(), subject, r),
+            Command::Features(r) => features(t.as_mut(), subject, r),
+            Command::WorkspaceSummary(r) => workspace_summary(t.as_mut(), subject, r),
+            Command::CommitSummary(r) => commit_summary(t.as_mut(), subject, r),
+            Command::Diff(r) => diff(t.as_mut(), subject, r),
+            Command::Conflicts(r) => list_conflicts(t.as_mut(), subject, r),
+            Command::Resolve(r) => resolve(t.as_mut(), subject, r),
+            Command::History(r) => history(t.as_mut(), subject, r),
+            Command::Audit(r) => audit_events(t.as_mut(), subject, r),
+            Command::Commit(r) => commit_detail(t.as_mut(), subject, r),
+            Command::Publish(r) => publish(t.as_mut(), subject, r),
+            Command::Rebase(r) => rebase(t.as_mut(), subject, r),
+            Command::Restore(r) => restore(t.as_mut(), subject, r),
         }?;
         let encoded = codec::encode_limited(
             &result,
@@ -365,6 +370,7 @@ mod tests {
             atomic::{AtomicBool, Ordering},
         };
         struct ProbeBackend(AtomicBool);
+        impl crate::repository::StorageMaintenance for ProbeBackend {}
         impl StorageBackend for ProbeBackend {
             fn name(&self) -> &'static str {
                 "probe"

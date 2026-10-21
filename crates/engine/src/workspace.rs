@@ -1,4 +1,8 @@
 use super::*;
+use crate::repository::{
+    AuditRepository, CredentialRepository, DatasetRepository, PostgisTables, ProjectRepository,
+    PublicationRepository, WorkspaceRepository,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,7 +79,12 @@ pub(super) struct Version {
     pub(super) expected_workspace_version: i64,
 }
 /// Data access for an active member. Writes need editor/owner and an active project.
-pub(super) fn membership(t: &mut Transaction, p: &str, s: &str, write: bool) -> Result<String> {
+pub(super) fn membership(
+    t: &mut (impl ProjectRepository + ?Sized),
+    p: &str,
+    s: &str,
+    write: bool,
+) -> Result<String> {
     id(p)?;
     let row = t.member_role(p, s)?.ok_or_else(missing)?;
     let role: String = row.get(0usize)?;
@@ -95,7 +104,7 @@ pub(super) fn membership(t: &mut Transaction, p: &str, s: &str, write: bool) -> 
 /// platform administrators. Returns (role, state); administrators without
 /// membership report role "admin".
 pub(super) fn manage(
-    t: &mut Transaction,
+    t: &mut (impl CredentialRepository + ProjectRepository + ?Sized),
     p: &str,
     s: &str,
     _policy: &Policy,
@@ -125,7 +134,12 @@ pub(super) fn manage(
     Ok((role, row.get(2usize)?))
 }
 /// Read access to project metadata: any active member or an administrator.
-fn visible(t: &mut Transaction, p: &str, s: &str, _policy: &Policy) -> Result<String> {
+fn visible(
+    t: &mut (impl CredentialRepository + ProjectRepository + ?Sized),
+    p: &str,
+    s: &str,
+    _policy: &Policy,
+) -> Result<String> {
     id(p)?;
     if let Some(row) = t.member_role(p, s)? {
         return row.get(0usize);
@@ -139,7 +153,7 @@ fn visible(t: &mut Transaction, p: &str, s: &str, _policy: &Policy) -> Result<St
     Err(missing())
 }
 pub(super) fn audit(
-    t: &mut Transaction,
+    t: &mut (impl AuditRepository + ?Sized),
     p: &str,
     s: &str,
     action: &str,
@@ -148,12 +162,12 @@ pub(super) fn audit(
     t.append_audit(p, s, action, &detail.to_string())?;
     Ok(())
 }
-pub(super) fn head(t: &mut Transaction, p: &str, lock: bool) -> Result<i64> {
+pub(super) fn head(t: &mut (impl ProjectRepository + ?Sized), p: &str, lock: bool) -> Result<i64> {
     id(p)?;
     t.project_head(p, lock)?.ok_or_else(missing)?.get(0usize)
 }
 pub(super) fn workspace(
-    t: &mut Transaction,
+    t: &mut (impl ProjectRepository + WorkspaceRepository + ?Sized),
     s: &str,
     p: &str,
     w: &str,
@@ -175,11 +189,16 @@ pub(super) fn workspace(
     }
     Ok((r.get(0usize)?, v, status))
 }
-pub(super) fn bump(t: &mut Transaction, p: &str, w: &str, status: &str) -> Result<i64> {
+pub(super) fn bump(
+    t: &mut (impl WorkspaceRepository + ?Sized),
+    p: &str,
+    w: &str,
+    status: &str,
+) -> Result<i64> {
     t.advance_workspace(p, w, status)?.get(0usize)
 }
 pub(super) fn create_project(
-    t: &mut Transaction,
+    t: &mut (impl AuditRepository + CredentialRepository + ProjectRepository + ?Sized),
     s: &str,
     policy: &Policy,
     r: Name,
@@ -205,19 +224,23 @@ pub(super) fn create_project(
     audit(t, &p, s, "create_project", json!({}))?;
     Ok(json!({"project":p,"name":r.name,"head":0,"role":"owner","state":"active"}))
 }
-pub(super) fn list_projects(t: &mut Transaction, s: &str, r: Page) -> Result<Value> {
+pub(super) fn list_projects(
+    t: &mut (impl ProjectRepository + ?Sized),
+    s: &str,
+    r: Page,
+) -> Result<Value> {
     r.check()?;
     let rows = t.list_projects(s, &r.after, r.limit)?;
     Ok(json!(rows.iter().map(|x|Ok(json!({"project":x.get::<_,String>(0usize)?,"name":x.get::<_,String>(1usize)?,"head":x.get::<_,i64>(2usize)?,"state":x.get::<_,String>(3usize)?,"role":x.get::<_,String>(4usize)?}))).collect::<Result<Vec<_>>>()?))
 }
-fn project_json(t: &mut Transaction, p: &str, role: &str) -> Result<Value> {
+fn project_json(t: &mut (impl ProjectRepository + ?Sized), p: &str, role: &str) -> Result<Value> {
     let row = t.project_info(p)?;
     Ok(
         json!({"project":p,"name":row.get::<_,String>(0usize)?,"head":row.get::<_,i64>(1usize)?,"role":role,"state":row.get::<_,String>(2usize)?}),
     )
 }
 pub(super) fn get_project(
-    t: &mut Transaction,
+    t: &mut (impl CredentialRepository + ProjectRepository + ?Sized),
     s: &str,
     policy: &Policy,
     r: Project,
@@ -244,7 +267,7 @@ pub(super) struct DeleteProject {
     pub(super) confirm_name: String,
 }
 pub(super) fn list_members(
-    t: &mut Transaction,
+    t: &mut (impl CredentialRepository + ProjectRepository + ?Sized),
     s: &str,
     policy: &Policy,
     r: ProjectPage,
@@ -261,7 +284,7 @@ pub(super) fn list_members(
     ))
 }
 pub(super) fn remove_member(
-    t: &mut Transaction,
+    t: &mut (impl AuditRepository + CredentialRepository + ProjectRepository + ?Sized),
     s: &str,
     policy: &Policy,
     r: MemberRef,
@@ -291,7 +314,7 @@ pub(super) fn remove_member(
     Ok(json!({"ok":true}))
 }
 pub(super) fn archive_project(
-    t: &mut Transaction,
+    t: &mut (impl AuditRepository + CredentialRepository + ProjectRepository + ?Sized),
     s: &str,
     policy: &Policy,
     r: Archive,
@@ -317,7 +340,7 @@ pub(super) fn archive_project(
     project_json(t, &r.project, &role)
 }
 pub(super) fn delete_project(
-    t: &mut Transaction,
+    t: &mut (impl AuditRepository + CredentialRepository + ProjectRepository + ?Sized),
     s: &str,
     policy: &Policy,
     r: DeleteProject,
@@ -334,7 +357,7 @@ pub(super) fn delete_project(
     Ok(json!({"ok":true}))
 }
 pub(super) fn set_member(
-    t: &mut Transaction,
+    t: &mut (impl AuditRepository + CredentialRepository + ProjectRepository + ?Sized),
     s: &str,
     policy: &Policy,
     r: Member,
@@ -364,7 +387,16 @@ pub(super) fn set_member(
     Ok(json!({"ok":true}))
 }
 pub(super) fn create_dataset(
-    t: &mut Transaction,
+    t: &mut (
+             impl AuditRepository
+             + CredentialRepository
+             + DatasetRepository
+             + PostgisTables
+             + ProjectRepository
+             + PublicationRepository
+             + WorkspaceRepository
+             + ?Sized
+         ),
     s: &str,
     _policy: &Policy,
     r: CreateDataset,
@@ -463,7 +495,11 @@ pub(super) fn create_dataset(
         json!({"dataset":d,"name":r.name,"geometry_type":family,"coordinate_dimension":dimension,"crs":crs,"postgis_table":r.postgis_table}),
     )
 }
-pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Result<Value> {
+pub(super) fn list_datasets(
+    t: &mut (impl DatasetRepository + ProjectRepository + ?Sized),
+    s: &str,
+    r: ProjectPage,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     r.page()?;
     let rows = t.list_datasets(&r.project, &r.after, r.limit)?;
@@ -475,7 +511,11 @@ pub(super) fn list_datasets(t: &mut Transaction, s: &str, r: ProjectPage) -> Res
             .collect::<Result<Vec<_>>>()?
     ))
 }
-pub(super) fn create_workspace(t: &mut Transaction, s: &str, r: Project) -> Result<Value> {
+pub(super) fn create_workspace(
+    t: &mut (impl AuditRepository + ProjectRepository + WorkspaceRepository + ?Sized),
+    s: &str,
+    r: Project,
+) -> Result<Value> {
     // Project -> membership is the lock order for every project mutation.
     // Validate lifecycle state only after waiting for the project lock.
     id(&r.project)?;
@@ -486,7 +526,12 @@ pub(super) fn create_workspace(t: &mut Transaction, s: &str, r: Project) -> Resu
     membership(t, &r.project, s, true)?;
     new_workspace(t, s, &r.project, base)
 }
-pub(super) fn new_workspace(t: &mut Transaction, s: &str, p: &str, base: i64) -> Result<Value> {
+pub(super) fn new_workspace(
+    t: &mut (impl AuditRepository + WorkspaceRepository + ?Sized),
+    s: &str,
+    p: &str,
+    base: i64,
+) -> Result<Value> {
     let w = Uuid::new_v4().to_string();
     t.insert_workspace(p, &w, s, base)?;
     audit(
@@ -498,11 +543,19 @@ pub(super) fn new_workspace(t: &mut Transaction, s: &str, p: &str, base: i64) ->
     )?;
     Ok(json!({"workspace":w,"base_revision":base,"version":0,"status":"open"}))
 }
-pub(super) fn get_workspace(t: &mut Transaction, s: &str, r: Workspace) -> Result<Value> {
+pub(super) fn get_workspace(
+    t: &mut (impl ProjectRepository + WorkspaceRepository + ?Sized),
+    s: &str,
+    r: Workspace,
+) -> Result<Value> {
     let (b, v, status) = workspace(t, s, &r.project, &r.workspace, None)?;
     Ok(json!({"workspace":r.workspace,"base_revision":b,"version":v,"status":status}))
 }
-pub(super) fn list_workspaces(t: &mut Transaction, s: &str, r: ProjectPage) -> Result<Value> {
+pub(super) fn list_workspaces(
+    t: &mut (impl ProjectRepository + WorkspaceRepository + ?Sized),
+    s: &str,
+    r: ProjectPage,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     r.page()?;
     let rows = t.list_workspaces(&r.project, s, &r.after, r.limit)?;
@@ -531,7 +584,7 @@ pub(super) struct Save {
     pub(super) edits: Vec<Edit>,
 }
 fn draft_delta(
-    t: &mut Transaction,
+    t: &mut (impl DatasetRepository + ?Sized),
     p: &str,
     d: &str,
     key: &str,
@@ -548,7 +601,7 @@ fn draft_delta(
     })
 }
 pub(super) fn put_delta(
-    t: &mut Transaction,
+    t: &mut (impl DatasetRepository + WorkspaceRepository + ?Sized),
     p: &str,
     w: &str,
     d: &str,
@@ -558,7 +611,13 @@ pub(super) fn put_delta(
     let delta = draft_delta(t, p, d, key, v)?;
     t.put_deltas(p, w, &[delta])
 }
-pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
+pub(super) fn save(
+    t: &mut (
+             impl AuditRepository + DatasetRepository + ProjectRepository + WorkspaceRepository + ?Sized
+         ),
+    s: &str,
+    r: Save,
+) -> Result<Value> {
     let (base, _, _) = workspace(
         t,
         s,
@@ -630,7 +689,11 @@ pub(super) fn save(t: &mut Transaction, s: &str, r: Save) -> Result<Value> {
     )?;
     Ok(json!({"version":version,"changes":count,"warnings":warnings}))
 }
-pub(super) fn discard(t: &mut Transaction, s: &str, r: Version) -> Result<Value> {
+pub(super) fn discard(
+    t: &mut (impl AuditRepository + ProjectRepository + WorkspaceRepository + ?Sized),
+    s: &str,
+    r: Version,
+) -> Result<Value> {
     workspace(
         t,
         s,
@@ -677,7 +740,7 @@ pub(super) struct DeleteDataset {
     confirm_name: String,
 }
 pub(super) fn rename_project(
-    t: &mut Transaction,
+    t: &mut (impl AuditRepository + CredentialRepository + ProjectRepository + ?Sized),
     s: &str,
     policy: &Policy,
     r: NamedProject,
@@ -689,7 +752,11 @@ pub(super) fn rename_project(
     audit(t, &r.project, s, "rename_project", json!({"name":r.name}))?;
     project_json(t, &r.project, &role)
 }
-pub(super) fn rename_dataset(t: &mut Transaction, s: &str, r: RenameDataset) -> Result<Value> {
+pub(super) fn rename_dataset(
+    t: &mut (impl AuditRepository + DatasetRepository + ProjectRepository + ?Sized),
+    s: &str,
+    r: RenameDataset,
+) -> Result<Value> {
     head(t, &r.project, true)?;
     membership(t, &r.project, s, true)?;
     dataset(t, &r.project, &r.dataset)?;
@@ -710,7 +777,9 @@ pub(super) fn rename_dataset(t: &mut Transaction, s: &str, r: RenameDataset) -> 
     )
 }
 pub(super) fn delete_dataset(
-    t: &mut Transaction,
+    t: &mut (
+             impl AuditRepository + CredentialRepository + DatasetRepository + ProjectRepository + ?Sized
+         ),
     s: &str,
     policy: &Policy,
     r: DeleteDataset,

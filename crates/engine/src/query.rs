@@ -1,4 +1,8 @@
 use super::*;
+use crate::repository::{
+    AuditRepository, DatasetRepository, FeatureRepository, HistoryRepository, ProjectRepository,
+    ResponseBudget, WorkspaceRepository,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -14,7 +18,18 @@ pub(super) struct Features {
     #[serde(default = "page_size")]
     limit: i64,
 }
-pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Value> {
+pub(super) fn features(
+    t: &mut (
+             impl DatasetRepository
+             + FeatureRepository
+             + ProjectRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Features,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     dataset(t, &r.project, &r.dataset)?;
     let crs: String = t
@@ -107,7 +122,11 @@ pub(super) struct Diff {
     #[serde(default = "page_size")]
     pub(super) limit: i64,
 }
-pub(super) fn diff(t: &mut Transaction, s: &str, r: Diff) -> Result<Value> {
+pub(super) fn diff(
+    t: &mut (impl ProjectRepository + ResponseBudget + WorkspaceRepository + ?Sized),
+    s: &str,
+    r: Diff,
+) -> Result<Value> {
     let (base, version, _) = workspace(t, s, &r.project, &r.workspace, None)?;
     Page {
         after: r.after.clone(),
@@ -160,7 +179,11 @@ pub(super) struct History {
     #[serde(default = "page_size")]
     limit: i64,
 }
-pub(super) fn history(t: &mut Transaction, s: &str, r: History) -> Result<Value> {
+pub(super) fn history(
+    t: &mut (impl HistoryRepository + ProjectRepository + ?Sized),
+    s: &str,
+    r: History,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     if r.after < 0 || !(1..=1000).contains(&r.limit) {
         return Err(bad());
@@ -186,7 +209,11 @@ pub(super) struct Commit {
     #[serde(default = "page_size")]
     limit: i64,
 }
-pub(super) fn commit_detail(t: &mut Transaction, s: &str, r: Commit) -> Result<Value> {
+pub(super) fn commit_detail(
+    t: &mut (impl HistoryRepository + ProjectRepository + ResponseBudget + ?Sized),
+    s: &str,
+    r: Commit,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     Page {
         after: r.after.clone(),
@@ -260,7 +287,11 @@ pub(super) struct Audit {
     #[serde(default = "page_size")]
     limit: i64,
 }
-pub(super) fn audit_events(t: &mut Transaction, subject: &str, r: Audit) -> Result<Value> {
+pub(super) fn audit_events(
+    t: &mut (impl AuditRepository + ProjectRepository + ResponseBudget + ?Sized),
+    subject: &str,
+    r: Audit,
+) -> Result<Value> {
     if membership(t, &r.project, subject, false)? != "owner" {
         return Err(missing());
     }
@@ -292,13 +323,21 @@ pub(super) struct SummaryCommit {
     project: String,
     revision: i64,
 }
-pub(super) fn workspace_summary(t: &mut Transaction, s: &str, r: Workspace) -> Result<Value> {
+pub(super) fn workspace_summary(
+    t: &mut (impl ProjectRepository + WorkspaceRepository + ?Sized),
+    s: &str,
+    r: Workspace,
+) -> Result<Value> {
     let (base, version, _) = workspace(t, s, &r.project, &r.workspace, None)?;
     let mut result = change_summary(t.workspace_summary(&r.project, &r.workspace, base)?)?;
     result["version"] = json!(version);
     Ok(result)
 }
-pub(super) fn commit_summary(t: &mut Transaction, s: &str, r: SummaryCommit) -> Result<Value> {
+pub(super) fn commit_summary(
+    t: &mut (impl HistoryRepository + ProjectRepository + ?Sized),
+    s: &str,
+    r: SummaryCommit,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     t.commit_exists(&r.project, r.revision)?
         .ok_or_else(missing)?;

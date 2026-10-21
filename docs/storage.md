@@ -8,12 +8,35 @@
 
 `geoledger-server` 负责传输、认证和资源上限；`geoledger-engine::Application` 负责授权、校验、三方合并与操作编排；[repository.rs](../crates/engine/src/repository.rs) 定义存储语义。SQL、PostgreSQL 客户端和 SQLite 连接都封装在 [session 适配器](../crates/engine/src/session.rs) 中。
 
-新增后端实现两个 trait：
+存储接口按能力划分，均从 `geoledger_engine::repository` 导出：
 
-- `StorageBackend: Send + Sync`：名称、初始化、健康检查，以及按期限创建读/写事务。
-- `RepositoryTransaction: Send`：项目、成员、工作区、要素、历史、发布暂存区、幂等收据、审计和原子提交。
+| 能力 | 职责 | SQL 实现 |
+|---|---|---|
+| `StorageBackend` | 名称、初始化、健康检查、连接池指标与事务准入 | [backend](../crates/engine/src/session/backend.rs) |
+| `StorageMaintenance` | 一致快照导出、原子导入、数据库备份；未支持的操作默认返回原有 409 错误 | [backend](../crates/engine/src/session/backend.rs) |
+| `CredentialRepository` | 用户、密码记录、API Key、Session、凭证锁及全局身份审计 | [authentication](../crates/engine/src/session/authentication.rs) |
+| `ProjectRepository` | 项目状态、成员角色、项目锁和生命周期清理；授权决策仍在 Application | [project](../crates/engine/src/session/project.rs) |
+| `DatasetRepository` | 数据集元数据及事务内缓存 | [dataset](../crates/engine/src/session/dataset.rs) |
+| `WorkspaceRepository` | 工作区所有权、乐观版本、草稿与 diff 分页 | [workspace](../crates/engine/src/session/workspace.rs) |
+| `FeatureRepository` | 指定修订/工作区的要素分页、续页探测和单要素读取 | [query](../crates/engine/src/session/query.rs) |
+| `HistoryRepository` | commit 历史、变更分页与统计 | [history](../crates/engine/src/session/history.rs) |
+| `PublicationRepository` | 同事务 merge 暂存、冲突缓存、发布、历史写入、HEAD 与原请求收据 | [publication](../crates/engine/src/session/publication.rs) |
+| `AuditRepository` | 项目审计写入、分页与续页探测 | [audit](../crates/engine/src/session/audit.rs) |
+| `PostgisTables` | PostGIS 业务表检查、分页和绑定；未支持时默认返回原有 400 错误 | [tables](../crates/engine/src/session/tables.rs) |
+| `ResponseBudget` | 当前事务共享的响应字节上限与动态预算 | [session](../crates/engine/src/session.rs) |
+| `RepositoryTransaction` | 组合上述事务能力，仅声明消耗事务所有权的 `commit` | [session](../crates/engine/src/session.rs) |
+
+`StorageBackend::begin` 返回 `Box<dyn RepositoryTransaction>`。Application 负责创建事务、配置预算、编码响应和唯一一次提交；业务函数借用 `t.as_mut()`，参数只约束实际使用的能力。例如历史列表依赖 `HistoryRepository + ProjectRepository`，身份解析只依赖 `CredentialRepository`，`at_revision` 只依赖 `FeatureRepository`；单领域测试替身无需实现其他接口。需要多个能力的操作使用 `&mut (impl ProjectRepository + AuditRepository + ?Sized)` 这类组合约束，不另造事务或连接。
+
+SQLite/SpatiaLite 与 PostGIS 继续共用一个 `SqlTransaction`。各能力直接在同一类型上实现，持有同一个 Client、截止时间和 TransactionState；数据集/HEAD 缓存、merge 缓冲及响应预算不会因能力切换而复制。项目清理横跨数据集、历史和工作区，保留为 `ProjectRepository::purge_data` 一个语义操作，避免调用方自行拼装删除 SQL。事务所有者可以调用组合接口，领域函数不依赖所有者接口，也不能单独提交。
 
 通过 `Application::with_backend(Arc<dyn StorageBackend>)` 注入。接口接收项目、数据集、修订、游标等业务参数，由适配器封装 SQL、数据库连接和传输细节。可接入 SQL 或其他具备必要事务能力的存储；服务端配置工厂增加后端选择即可，SDK 与业务规则保持一致。
+
+### 扩展接口迁移
+
+这是 Rust 存储扩展接口的源码兼容性变更，服务的 HTTP/gRPC 协议、SDK、SQL 和当前存储格式 16 保持不变。已有自定义后端将原 `impl RepositoryTransaction` 的方法按上表迁入对应能力的 `impl`，在 `impl RepositoryTransaction` 中只保留 `commit`；原方法签名、默认分页行为和事务保证不变。`StorageBackend` 的 `export`、`import`、`backup` 移到 `StorageMaintenance`，仅提供生命周期的后端增加空实现 `impl StorageMaintenance for MyBackend {}` 即可。未接入业务表的后端可用空的 `impl PostgisTables` 保留明确的未支持错误。
+
+调用方仍从 `repository` 导入 `Cell`、`Decode`、`Row`、`DraftDelta`、`FeatureQuery` 和 `ConflictQuery`；这些类型由领域接口自己定义，不依赖 SQL 模块。跨多个能力的实现必须借用同一个事务，禁止在能力方法中另开连接、提前提交或拆分回滚。新增能力只修改所属接口及使用它的调用方；完整后端仍需实现所有必要能力并通过同一 conformance 套件。
 
 ## 必须实现的保证
 
@@ -39,7 +62,7 @@
 | workspace_state | base_revision:i64, version:i64, status:text |
 | feature_page | feature_id:text, properties:text, geometry:text? |
 | feature_at | properties:text?, geometry:text? |
-| dataset_exists | geometry_type:text, name:text, coordinate_dimension:i32 |
+| dataset_exists | geometry_type:text, name:text, coordinate_dimension:i32, postgis_source:text?, crs:text |
 | commit_exists | 存在时返回单行标记 |
 | advance_workspace | version:i64 |
 | list_projects | project:text, name:text, head:i64, state:text, role:text |
@@ -47,12 +70,12 @@
 | list_members | subject:text, role:text（仅有效成员，按 subject 排序） |
 | owned_projects | count:i64（subject 为有效 owner 且未删除的项目数） |
 | owner_summary | owner_count:i64, target_is_owner:i64（0/1） |
-| list_datasets | dataset:text, name:text, geometry_type:text, coordinate_dimension:i32 |
+| list_datasets | dataset:text, name:text, geometry_type:text, coordinate_dimension:i32, postgis_source:text?, crs:text |
 | list_workspaces | workspace:text, base_revision:i64, version:i64, status:text |
 | edit_base | resolved: bool, properties?, geometry_json? |
 | count_deltas / count_commit_changes | count:i64 |
 | diff_page | dataset:text, key:text, draft_properties:text?, draft_geometry:text?, base_properties:text?, base_geometry:text? |
-| history_page | revision:i64, subject:text, message:text, created_at:text, source_workspace:text |
+| history_page | revision:i64, subject:text, message:text, created_at:text, source_workspace:text, source_base_revision:i64 |
 | commit_page | dataset:text, key:text, before_properties:text?, before_geometry:text?, after_properties:text?, after_geometry:text? |
 | audit_page | id:i64, subject:text, action:text, detail:text, created_at:text |
 | merge_page | dataset:text, key:text, draft_properties:text?, draft_geometry:text?, resolved_head:i64?, resolution_stale:bool, base_properties:text?, base_geometry:text?, current_properties:text?, current_geometry:text? |
@@ -68,7 +91,7 @@ SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读�
 
 PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。`geom` 使用原生 `geometry` 类型（派生索引 SRID 0，兼容 XY/XYZ；原坐标系保存在数据集 `crs`），直接创建 GiST 索引；bbox 直接查询几何列，不在查询时解析 GeoJSON。几何结构在共同应用层校验，自相交等拓扑问题仍作为警告，保持原始坐标。
 
-当前格式为 16，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageBackend::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
+当前格式为 16，正式要素与历史快照统一读取 `gl_history`。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageMaintenance::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护历史有效期的关闭规则。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
 
 SQLite 必须加载 SpatiaLite 5 扩展，使用注册的 `geom`（XY）和 `geom_z`（XYZ）几何 BLOB 列与各自的标准 RTree 索引；两个维度共用业务表，单个要素按维度写入对应列。数据集创建时声明不可变的 `coordinate_dimension`（2 或 3，默认 2），所有要素坐标必须匹配，混合维度返回明确的参数错误。嵌套集合和集合中的多部件几何仅在派生的空间表示中展平，快照保持原样。扩展加载失败时启动失败。默认加载 `mod_spatialite`，可通过 `GL_SPATIALITE_EXTENSION` 指定管理员安装的可信库路径。扩展加载后立即关闭动态加载权限。加载器只提供读取进程配置的入口，不接受调用方传入扩展路径；原生库及其依赖、搜索路径属于可信部署配置，加载器不认证库文件；进程配置必须来自可信管理员。
 
@@ -84,7 +107,7 @@ SQLite 必须加载 SpatiaLite 5 扩展，使用注册的 `geom`（XY）和 `geo
 
 删除项目清除全部数据集、工作区、版本、历史快照和发布收据，保留项目删除标记、成员引用与不可变审计记录。删除数据集仅清除对应记录：共享版本保留其他数据集的变更，共享工作区保留并递增版本、失效旧冲突解决标记；仅因此变空的版本和工作区会移除。未涉及的空工作区不受影响。项目 head 保留为已分配版本号的高水位，版本号可以有空缺，不重新编号或复用。已删除版本的发布收据会清除，幸存版本的原始请求收据保持不变。
 
-`RepositoryTransaction::purge_data` 在项目锁保护下启用并清除事务内的 `gl_purge` 标记，允许指定项目删除不可变数据记录。其他写入仍受不可变触发器约束；审计不允许删除。此标记不导出、不持久保留，失败事务同时回滚标记与数据删除。
+`ProjectRepository::purge_data` 在项目锁保护下启用并清除事务内的 `gl_purge` 标记，允许指定项目删除不可变数据记录。其他写入仍受不可变触发器约束；审计不允许删除。此标记不导出、不持久保留，失败事务同时回滚标记与数据删除。
 
 ## 已有业务表
 
@@ -104,7 +127,7 @@ SQLite/SpatiaLite 将要素、原生几何和历史保存在当前数据库；�
 
 格式 16 将用户基本信息、密码哈希、API Key 摘要及元数据、Session 摘要及元数据分离存储。用户 UUID 是成员、工作区和审计的稳定身份。用户名唯一约束及凭证摘要索引由数据库维护；认证读取摘要和有效用户，不使用正向缓存。用户状态分页使用 `(status,id)` 索引，并为有状态筛选与全量分页选择独立的参数化查询；用户列表仅读取基本信息。Session 活动时间更新在 SQL 条件中检查一分钟间隔，API Key 最近使用时间按五分钟间隔更新。
 
-身份管理写操作使用 RepositoryTransaction / SqlTransaction 的语义操作与数据库事务，SQL 保留在 session 适配器内。认证请求在各阶段共享一个截止时间，事务准入使用剩余预算；响应编码与预算检查在写事务提交前完成，HTTP 响应体持有共享预算直到消费完成或释放。最后一位有效管理员的禁用、删除或降级在事务锁内检查，SQLite 与 PostGIS 保持相同语义。全局身份审计和项目审计保留；完整备份包含身份数据，逻辑项目导出只包含业务数据。逻辑导入保留历史 UUID，但新数据库的用户独立创建；管理员需重新分配当前成员权限。需要原样恢复用户及凭证时使用完整数据库备份。
+身份管理写操作使用 CredentialRepository / SqlTransaction 的语义操作与数据库事务，SQL 保留在 session 适配器内。认证请求在各阶段共享一个截止时间，事务准入使用剩余预算；响应编码与预算检查在写事务提交前完成，HTTP 响应体持有共享预算直到消费完成或释放。最后一位有效管理员的禁用、删除或降级在事务锁内检查，SQLite 与 PostGIS 保持相同语义。全局身份审计和项目审计保留；完整备份包含身份数据，逻辑项目导出只包含业务数据。逻辑导入保留历史 UUID，但新数据库的用户独立创建；管理员需重新分配当前成员权限。需要原样恢复用户及凭证时使用完整数据库备份。
 
 ## 格式 13 派生状态与查询预算
 

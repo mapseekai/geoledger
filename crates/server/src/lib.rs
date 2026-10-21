@@ -322,6 +322,7 @@ mod tests {
     use std::{future::Future, sync::atomic::AtomicUsize, task::Poll};
 
     struct CountingStorage(AtomicUsize);
+    impl geoledger_engine::repository::StorageMaintenance for CountingStorage {}
     impl StorageBackend for CountingStorage {
         fn name(&self) -> &'static str {
             "test"

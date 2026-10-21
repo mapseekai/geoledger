@@ -219,7 +219,7 @@ Browser sessions use random Session IDs inside encrypted HttpOnly cookies, with 
 | `web` | Next.js console, browser endpoints, and map workspace. |
 | `deploy`, `scripts` | Deployment templates, verification scripts, and release gates. |
 
-SQLite uses WAL, SpatiaLite geometry, and RTree spatial indexes. PostGIS uses `geometry` columns and GiST indexes. See [Storage Extensions](docs/storage.md) for transaction boundaries and backend conformance requirements.
+SQLite uses WAL, SpatiaLite geometry, and RTree spatial indexes. PostGIS uses `geometry` columns and GiST indexes. Storage capabilities separate credentials, projects, workspaces, reads, and publication while sharing one transaction. See [Storage Extensions](docs/storage.md) for transaction boundaries and backend conformance requirements.
 
 ## Build and Verification
 

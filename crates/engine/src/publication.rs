@@ -1,4 +1,8 @@
 use super::*;
+use crate::repository::{
+    AuditRepository, DatasetRepository, FeatureRepository, HistoryRepository, ProjectRepository,
+    PublicationRepository, ResponseBudget, WorkspaceRepository,
+};
 
 struct MergedRow {
     d: Delta,
@@ -88,7 +92,7 @@ pub(super) enum MergeMode {
     CacheKeys,
 }
 pub(super) fn merge_plan(
-    t: &mut Transaction,
+    t: &mut (impl DatasetRepository + PublicationRepository + ResponseBudget + ?Sized),
     p: &str,
     w: &str,
     base: i64,
@@ -192,7 +196,18 @@ pub(super) fn conflicts(head: i64, version: i64, plan: MergePlan) -> Error {
     error.body["conflicts"] = Value::Array(plan.conflicts);
     error
 }
-pub(super) fn list_conflicts(t: &mut Transaction, s: &str, r: Diff) -> Result<Value> {
+pub(super) fn list_conflicts(
+    t: &mut (
+             impl DatasetRepository
+             + ProjectRepository
+             + PublicationRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Diff,
+) -> Result<Value> {
     Page {
         after: r.after.clone(),
         limit: r.limit,
@@ -275,7 +290,19 @@ fn replay_receipt(row: Row, request: &Publish) -> Result<Value> {
     }
     codec::stored(&row.get::<_, String>(1usize)?)
 }
-pub(super) fn publish(t: &mut Transaction, s: &str, r: Publish) -> Result<Value> {
+pub(super) fn publish(
+    t: &mut (
+             impl AuditRepository
+             + DatasetRepository
+             + ProjectRepository
+             + PublicationRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Publish,
+) -> Result<Value> {
     text(&r.message, 2048)?;
     id(&r.project)?;
     let request_id = r.request_id.to_string();
@@ -338,7 +365,19 @@ pub(super) struct Rebase {
     expected_head: i64,
     resolutions: Vec<Edit>,
 }
-pub(super) fn resolve(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> {
+pub(super) fn resolve(
+    t: &mut (
+             impl AuditRepository
+             + DatasetRepository
+             + ProjectRepository
+             + PublicationRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Rebase,
+) -> Result<Value> {
     let current = head(t, &r.project, true)?;
     let (base, _, _) = workspace(
         t,
@@ -395,7 +434,20 @@ pub(super) fn resolve(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> 
     Ok(json!({"head":current,"version":version,"remaining_conflicts":remaining.len()}))
 }
 
-pub(super) fn rebase(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> {
+pub(super) fn rebase(
+    t: &mut (
+             impl AuditRepository
+             + DatasetRepository
+             + FeatureRepository
+             + ProjectRepository
+             + PublicationRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Rebase,
+) -> Result<Value> {
     let current = head(t, &r.project, true)?;
     let (base, version, _) = workspace(
         t,
@@ -456,7 +508,18 @@ pub(super) struct Restore {
     project: String,
     revision: i64,
 }
-pub(super) fn restore(t: &mut Transaction, s: &str, r: Restore) -> Result<Value> {
+pub(super) fn restore(
+    t: &mut (
+             impl AuditRepository
+             + HistoryRepository
+             + ProjectRepository
+             + PublicationRepository
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Restore,
+) -> Result<Value> {
     head(t, &r.project, true)?;
     membership(t, &r.project, s, true)?;
     t.commit_exists(&r.project, r.revision)?

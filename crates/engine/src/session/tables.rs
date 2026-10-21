@@ -469,3 +469,41 @@ impl SqlTransaction {
         Ok(())
     }
 }
+
+use super::Cell;
+use crate::repository::PostgisTables;
+
+impl PostgisTables for SqlTransaction {
+    fn inspect_postgis_table(&mut self, source: &crate::PostgisTable) -> Result<Row> {
+        let metadata = self.inspect_source(source)?;
+        Ok(Row::new(vec![
+            Cell::Text(metadata.family),
+            Cell::Integer(metadata.dimension.into()),
+            Cell::Text(metadata.crs),
+        ]))
+    }
+
+    fn postgis_table_page(
+        &mut self,
+        source: &crate::PostgisTable,
+        after: &str,
+    ) -> Result<Vec<Row>> {
+        self.source_page(source, after)
+    }
+
+    fn bind_postgis_table(
+        &mut self,
+        project: &str,
+        dataset: &str,
+        source: &crate::PostgisTable,
+    ) -> Result<()> {
+        let source_metadata = self.inspect_source(source)?;
+        let metadata = serde_json::to_string(&source_metadata).map_err(Error::stored_json)?;
+        self.execute(
+            "UPDATE gl_datasets SET postgis_source=$3 WHERE project=$1 AND id=$2",
+            &[&project, &dataset, &metadata],
+        )?;
+        self.1.datasets.clear();
+        self.guard_source(source, source_metadata.srid)
+    }
+}

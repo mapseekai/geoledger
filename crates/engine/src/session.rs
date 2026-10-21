@@ -1,9 +1,17 @@
 //! Portable transaction boundary; SQL is shared, locking and spatial indexes are explicit dialect choices.
+mod audit;
+mod backend;
+mod dataset;
+mod history;
 pub(crate) mod pgtls;
 pub(crate) mod portable;
 pub(crate) mod postgres;
+mod project;
+mod publication;
+mod query;
 mod tables;
-use crate::repository::{RepositoryTransaction, StorageBackend};
+mod workspace;
+use crate::repository::*;
 use crate::{Error, FORMAT_VERSION, Result, Storage};
 use rusqlite::functions::FunctionFlags;
 use serde_json::value::RawValue;
@@ -15,14 +23,6 @@ use std::{
 
 pub(crate) trait Parameter {
     fn value(&self) -> Cell;
-}
-#[derive(Clone)]
-pub enum Cell {
-    Null,
-    Text(String),
-    Integer(i64),
-    Real(f64),
-    Bool(bool),
 }
 impl Parameter for str {
     fn value(&self) -> Cell {
@@ -62,64 +62,6 @@ impl Parameter for bool {
 impl Parameter for f64 {
     fn value(&self) -> Cell {
         Cell::Real(*self)
-    }
-}
-pub trait Decode: Sized {
-    fn decode(cell: &Cell) -> Option<Self>;
-}
-impl Decode for String {
-    fn decode(c: &Cell) -> Option<Self> {
-        if let Cell::Text(v) = c {
-            Some(v.clone())
-        } else {
-            None
-        }
-    }
-}
-impl Decode for i64 {
-    fn decode(c: &Cell) -> Option<Self> {
-        if let Cell::Integer(v) = c {
-            Some(*v)
-        } else {
-            None
-        }
-    }
-}
-impl Decode for i32 {
-    fn decode(c: &Cell) -> Option<Self> {
-        i64::decode(c).and_then(|v| i32::try_from(v).ok())
-    }
-}
-impl Decode for bool {
-    fn decode(c: &Cell) -> Option<Self> {
-        match c {
-            Cell::Bool(v) => Some(*v),
-            Cell::Integer(v) => Some(*v != 0),
-            _ => None,
-        }
-    }
-}
-impl<T: Decode> Decode for Option<T> {
-    fn decode(c: &Cell) -> Option<Self> {
-        if matches!(c, Cell::Null) {
-            Some(None)
-        } else {
-            T::decode(c).map(Some)
-        }
-    }
-}
-#[derive(Clone)]
-pub struct Row(Vec<Cell>);
-impl Row {
-    pub fn new(values: Vec<Cell>) -> Self {
-        Self(values)
-    }
-
-    pub fn get<I: Into<usize>, T: Decode>(&self, index: I) -> Result<T> {
-        self.0
-            .get(index.into())
-            .and_then(T::decode)
-            .ok_or_else(|| Error::new(500, "storage row violates repository contract"))
     }
 }
 enum Backend {
@@ -517,33 +459,6 @@ struct TransactionState {
 }
 pub(crate) struct SqlTransaction(Client, TransactionState);
 impl SqlTransaction {
-    fn flush_stage(&mut self) -> Result<()> {
-        if self.1.stage.is_empty() {
-            return Ok(());
-        }
-        let rows = std::mem::take(&mut self.1.stage);
-        self.1.stage_bytes = 0;
-        let tuples: Vec<_> = (0..rows.len())
-            .map(|i| {
-                format!(
-                    "(${},${},${},${})",
-                    i * 4 + 1,
-                    i * 4 + 2,
-                    i * 4 + 3,
-                    i * 4 + 4
-                )
-            })
-            .collect();
-        let mut params: Vec<&dyn Parameter> = Vec::with_capacity(rows.len() * 4);
-        for (dataset, key, before, after) in &rows {
-            params.extend([dataset as &dyn Parameter, key, before, after]);
-        }
-        self.execute(
-            &format!("INSERT INTO gl_merge_stage VALUES {}", tuples.join(",")),
-            &params,
-        )
-    }
-
     pub(crate) fn query(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<Vec<Row>> {
         self.0.query(s, p)
     }
@@ -586,178 +501,6 @@ impl SqlTransaction {
             }
         }
     }
-    fn feature_rows(
-        &mut self,
-        r: &crate::repository::FeatureQuery,
-        include_payload: bool,
-    ) -> Result<Vec<Row>> {
-        let bbox = r.bbox.unwrap_or([-180., -90., 180., 90.]);
-        if r.bbox.is_some()
-            && matches!(self.0.backend, Backend::Postgis(_))
-            && !self.1.custom_spatial_plan
-        {
-            // Bbox selectivity varies by orders of magnitude. Keep parameter-aware
-            // plans for this transaction without disabling prepared statements globally.
-            self.batch_execute("SET LOCAL plan_cache_mode=force_custom_plan")?;
-            self.1.custom_spatial_plan = true;
-        }
-        let latest = self.1.heads.get(&r.project) == Some(&r.revision);
-        let visible = if latest {
-            "h.valid_to IS NULL"
-        } else {
-            "(h.valid_to IS NULL OR h.valid_to>$3)"
-        };
-        // Bound both UNION branches before geometry/JSON expansion and final
-        // sorting. A top-level LIMIT alone let PostgreSQL scan and serialize
-        // the entire remaining dataset for each 32-row page.
-        let key_filter = if r.feature_id.is_some() {
-            "feature_id=$6"
-        } else {
-            "CAST($6 AS text) IS NULL"
-        };
-        let sparse_history = self.sparse_spatial_candidates("history", r)?;
-        let sparse_draft = self.sparse_spatial_candidates("workspace_changes", r)?;
-        let spatial_filter = self.spatial_filter("h", "history", r.bbox.is_some(), sparse_history);
-        let draft_spatial_filter =
-            self.spatial_filter("", "workspace_changes", r.bbox.is_some(), sparse_draft);
-        let (spatial_lookup, draft_lookup) = if matches!(self.0.backend, Backend::Sqlite(_)) {
-            (
-                if latest {
-                    " INDEXED BY history_live"
-                } else {
-                    " INDEXED BY sqlite_autoindex_gl_history_1"
-                },
-                " INDEXED BY sqlite_autoindex_gl_workspace_changes_1",
-            )
-        } else {
-            ("", "")
-        };
-        let base_payload = if include_payload {
-            ",h.properties,h.geometry_json"
-        } else {
-            ""
-        };
-        let draft_payload = if include_payload {
-            ",properties,geometry_json"
-        } else {
-            ""
-        };
-        let sql = format!("WITH base AS MATERIALIZED (
-            SELECT h.feature_id{base_payload} FROM gl_history h{spatial_lookup}
-            WHERE h.project=$1 AND h.dataset=$2
-              AND h.valid_from<=$3 AND {visible}
-              AND h.properties IS NOT NULL AND h.feature_id>$5 AND {key_filter}
-              AND ({spatial_filter})
-              AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c
-                WHERE c.project=h.project AND c.dataset=h.dataset AND c.feature_id=h.feature_id AND c.workspace=$4)
-            ORDER BY h.feature_id LIMIT $12
-          ), draft AS MATERIALIZED (
-            SELECT feature_id{draft_payload} FROM gl_workspace_changes{draft_lookup}
-            WHERE project=$1 AND dataset=$2 AND workspace=$4
-              AND properties IS NOT NULL AND feature_id>$5 AND {key_filter}
-              AND ({draft_spatial_filter})
-            ORDER BY feature_id LIMIT $12
-          ), page AS MATERIALIZED (
-            SELECT * FROM base UNION ALL SELECT * FROM draft ORDER BY feature_id LIMIT $12
-          ) SELECT * FROM page ORDER BY feature_id");
-        self.query(
-            &sql,
-            &[
-                &r.project,
-                &r.dataset,
-                &r.revision,
-                &r.workspace,
-                &r.after,
-                &r.feature_id,
-                &r.bbox.is_some(),
-                &bbox[0],
-                &bbox[1],
-                &bbox[2],
-                &bbox[3],
-                &r.limit,
-            ],
-        )
-    }
-    fn sparse_spatial_candidates(
-        &mut self,
-        table: &str,
-        r: &crate::repository::FeatureQuery,
-    ) -> Result<bool> {
-        let Some(bbox) = r.bbox else { return Ok(false) };
-        if r.feature_id.is_some() || !matches!(self.0.backend, Backend::Sqlite(_)) {
-            return Ok(false);
-        }
-        // Small Rtree results avoid even the bounded feature-key probe below.
-        let cap = r.limit.saturating_mul(4);
-        let count: i64 = self.query_one(&format!("SELECT count(*) FROM (
-            SELECT pkid FROM idx_gl_{table}_geom WHERE xmin<=$3 AND xmax>=$1 AND ymin<=$4 AND ymax>=$2
-            UNION ALL SELECT pkid FROM idx_gl_{table}_geom_z WHERE xmin<=$3 AND xmax>=$1 AND ymin<=$4 AND ymax>=$2 LIMIT $5
-        )"), &[&bbox[0], &bbox[1], &bbox[2], &bbox[3], &cap])?.get(0usize)?;
-        if count < cap {
-            return Ok(true);
-        }
-        // Global Rtree density says nothing about this dataset or cursor. Use
-        // key order when a bounded prefix fills the page or exhausts the remaining
-        // keys, so terminal lookahead does not enumerate a dense global Rtree.
-        let (scope, visible, visibility_columns) = if table == "history" {
-            (
-                "project=$1 AND dataset=$2 AND feature_id>$5",
-                "valid_from<=$3 AND (valid_to IS NULL OR valid_to>$3) AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c INDEXED BY sqlite_autoindex_gl_workspace_changes_1 WHERE c.project=$1 AND c.workspace=$4 AND c.dataset=$2 AND c.feature_id=prefix.feature_id)",
-                ",valid_from,valid_to",
-            )
-        } else {
-            (
-                "project=$1 AND workspace=$4 AND dataset=$2 AND feature_id>$5",
-                "CAST($3 AS bigint) IS NOT NULL",
-                "",
-            )
-        };
-        let row = self.query_one(
-            &format!("WITH prefix AS MATERIALIZED (SELECT feature_id,properties IS NOT NULL AS present,geom,geom_z{visibility_columns} FROM gl_{table} INDEXED BY sqlite_autoindex_gl_{table}_1 WHERE {scope} ORDER BY feature_id LIMIT $10) SELECT (SELECT count(*) FROM (SELECT 1 FROM prefix WHERE present AND ({visible}) AND (ST_Intersects(geom,BuildMbr($6,$7,$8,$9,0))=1 OR ST_Intersects(geom_z,BuildMbr($6,$7,$8,$9,0))=1) LIMIT $11)), (SELECT count(*) FROM prefix)"),
-            &[&r.project, &r.dataset, &r.revision, &r.workspace, &r.after, &bbox[0], &bbox[1], &bbox[2], &bbox[3], &cap, &r.limit],
-        )?;
-        let matches: i64 = row.get(0usize)?;
-        let remaining: i64 = row.get(1usize)?;
-        Ok(matches < r.limit && remaining >= cap)
-    }
-    pub(crate) fn spatial_filter(
-        &self,
-        alias: &str,
-        table: &str,
-        enabled: bool,
-        candidates: bool,
-    ) -> String {
-        // Cast unused parameters too: PostgreSQL prepares a single typed parameter vector.
-        if !enabled {
-            return "NOT $7 AND CAST($8 AS double precision) IS NOT NULL AND CAST($9 AS double precision) IS NOT NULL AND CAST($10 AS double precision) IS NOT NULL AND CAST($11 AS double precision) IS NOT NULL".into();
-        }
-        let a = if alias.is_empty() {
-            String::new()
-        } else {
-            format!("{alias}.")
-        };
-        match self.0.backend {
-            Backend::Postgis(_) => {
-                format!("$7 AND ST_Intersects({a}geom,ST_MakeEnvelope($8,$9,$10,$11,0))")
-            }
-            Backend::Sqlite(_) if !candidates => format!(
-                "$7 AND (ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,0))=1 OR ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,0))=1)"
-            ),
-            // +0 retains scalar rowid point lookup even after a stale one-row ANALYZE estimate.
-            Backend::Sqlite(_) => format!(
-                "$7 AND {a}feature_id IN (SELECT (SELECT feature_id FROM gl_{table} WHERE rowid=spatial_candidates.pkid+0) FROM (SELECT pkid FROM idx_gl_{table}_geom WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9 UNION ALL SELECT pkid FROM idx_gl_{table}_geom_z WHERE xmin<=$10 AND xmax>=$8 AND ymin<=$11 AND ymax>=$9) spatial_candidates) AND (ST_Intersects({a}geom,BuildMbr($8,$9,$10,$11,0))=1 OR ST_Intersects({a}geom_z,BuildMbr($8,$9,$10,$11,0))=1)"
-            ),
-        }
-    }
-    fn workspace_key_table(&self) -> &'static str {
-        match self.0.backend {
-            // ANALYZE on a new database can retain a one-row estimate after drafts grow.
-            Backend::Sqlite(_) => {
-                "gl_workspace_changes INDEXED BY sqlite_autoindex_gl_workspace_changes_1"
-            }
-            Backend::Postgis(_) => "gl_workspace_changes",
-        }
-    }
     pub(crate) fn commit(mut self) -> Result<()> {
         self.0.batch_execute("COMMIT")?;
         self.0.transaction = false;
@@ -783,895 +526,31 @@ fn sqlite_error(source: rusqlite::Error) -> Error {
 }
 
 mod authentication;
-impl crate::repository::RepositoryTransaction for SqlTransaction {
-    fn lock_credentials(&mut self) -> Result<()> {
-        if matches!(self.0.backend, Backend::Postgis(_)) {
-            self.query_one("SELECT pg_advisory_xact_lock(7885)::text", &[])?;
-        }
-        Ok(())
-    }
-    fn auth_user(&mut self, id: &str) -> Result<Option<crate::authentication::UserRecord>> {
-        self.query_opt(
-            &format!("{} WHERE u.id=$1", authentication::USER_SELECT),
-            &[&id],
-        )?
-        .map(authentication::user_row)
-        .transpose()
-    }
-    fn auth_username(
-        &mut self,
-        username: &str,
-    ) -> Result<Option<crate::authentication::UserRecord>> {
-        self.query_opt(
-            &format!("{} WHERE u.username=$1", authentication::USER_SELECT),
-            &[&username],
-        )?
-        .map(authentication::user_row)
-        .transpose()
-    }
-    fn auth_users(&mut self, after: &str, limit: i64, status: &str) -> Result<Vec<crate::User>> {
-        let select = "SELECT id,username,display_name,status,is_admin,must_change_password,created_at FROM gl_users";
-        let rows = if status.is_empty() {
-            self.query(
-                &format!("{select} WHERE id>$1 ORDER BY id LIMIT $2"),
-                &[&after, &limit],
-            )?
-        } else {
-            self.query(
-                &format!("{select} WHERE status=$3 AND id>$1 ORDER BY id LIMIT $2"),
-                &[&after, &limit, &status],
-            )?
-        };
-        rows.into_iter()
-            .map(|r| authentication::public_user_row(&r))
-            .collect()
-    }
-    fn auth_insert_user(&mut self, r: &crate::authentication::UserRecord) -> Result<()> {
-        let u = &r.user;
-        self.execute("INSERT INTO gl_users(id,username,display_name,status,is_admin,must_change_password,created_at,credential_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", &[&u.id,&u.username,&u.display_name,&u.status,&u.is_admin,&u.must_change_password,&u.created_at,&r.credential_version])?;
-        self.execute(
-            "INSERT INTO gl_passwords(user_id,password_hash) VALUES($1,$2)",
-            &[&u.id, &r.password_hash],
-        )
-    }
-    fn auth_update_user(&mut self, r: &crate::authentication::UserRecord) -> Result<()> {
-        let u = &r.user;
-        self.execute("UPDATE gl_users SET username=$2,display_name=$3,status=$4,is_admin=$5,must_change_password=$6,credential_version=$7 WHERE id=$1", &[&u.id,&u.username,&u.display_name,&u.status,&u.is_admin,&u.must_change_password,&r.credential_version])?;
-        self.execute(
-            "UPDATE gl_passwords SET password_hash=$2 WHERE user_id=$1",
-            &[&u.id, &r.password_hash],
-        )
-    }
-    fn auth_admin_count(&mut self) -> Result<i64> {
-        self.query_one(
-            "SELECT count(*) FROM gl_users WHERE status='active' AND is_admin",
-            &[],
-        )?
-        .get(0usize)
-    }
-    fn auth_membership_target(&mut self, id: &str) -> Result<bool> {
-        let suffix = if matches!(self.0.backend, Backend::Postgis(_)) {
-            " FOR SHARE"
-        } else {
-            ""
-        };
-        Ok(self
-            .query_opt(
-                &format!("SELECT id FROM gl_users WHERE id=$1 AND status='active'{suffix}"),
-                &[&id],
-            )?
-            .is_some())
-    }
-    fn auth_user_count(&mut self) -> Result<i64> {
-        self.query_one("SELECT count(*) FROM gl_users", &[])?
-            .get(0usize)
-    }
-    fn auth_key(&mut self, id: &str) -> Result<Option<crate::ApiKey>> {
-        self.query_opt(
-            &format!("{} WHERE id=$1", authentication::KEY_SELECT),
-            &[&id],
-        )?
-        .map(authentication::key_row)
-        .transpose()
-    }
-    fn auth_key_digest(&mut self, digest: &str, now: &str) -> Result<Option<crate::ApiKey>> {
-        self.query_opt(&format!("{} WHERE digest=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>$2)",authentication::KEY_SELECT), &[&digest,&now])?.map(authentication::key_row).transpose()
-    }
-    fn auth_keys(&mut self, user: &str, after: &str, limit: i64) -> Result<Vec<crate::ApiKey>> {
-        self.query(
-            &format!(
-                "{} WHERE user_id=$1 AND id>$2 ORDER BY id LIMIT $3",
-                authentication::KEY_SELECT
-            ),
-            &[&user, &after, &limit],
-        )?
-        .into_iter()
-        .map(authentication::key_row)
-        .collect()
-    }
-    fn auth_insert_key(&mut self, k: &crate::ApiKey, digest: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_api_keys(id,user_id,digest,name,key_prefix,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)", &[&k.id,&k.user_id,&digest,&k.name,&k.key_prefix,&k.created_at,&k.expires_at])
-    }
-    fn auth_update_key(&mut self, k: &crate::ApiKey) -> Result<()> {
-        self.execute(
-            "UPDATE gl_api_keys SET name=$2,expires_at=$3,revoked_at=$4 WHERE id=$1",
-            &[&k.id, &k.name, &k.expires_at, &k.revoked_at],
-        )
-    }
-    fn auth_delete_key(&mut self, id: &str) -> Result<()> {
-        self.execute("DELETE FROM gl_api_keys WHERE id=$1", &[&id])
-    }
-    fn auth_touch_key(&mut self, id: &str, now: &str, before: &str) -> Result<()> {
-        self.execute("UPDATE gl_api_keys SET last_used_at=$2 WHERE id=$1 AND (last_used_at IS NULL OR last_used_at<$3)", &[&id,&now,&before])
-    }
-    fn auth_session(
-        &mut self,
-        digest: &str,
-    ) -> Result<Option<crate::authentication::SessionRecord>> {
-        self.query_opt("SELECT id,user_id,source_key_id,credential_version,created_at,last_seen_at,expires_at FROM gl_sessions WHERE digest=$1", &[&digest])?.map(|r| Ok(crate::authentication::SessionRecord {id:r.get(0usize)?,user_id:r.get(1usize)?,source_key_id:r.get(2usize)?,credential_version:r.get(3usize)?,created_at:r.get(4usize)?,last_seen_at:r.get(5usize)?,expires_at:r.get(6usize)?})).transpose()
-    }
-    fn auth_insert_session(
-        &mut self,
-        s: &crate::authentication::SessionRecord,
-        digest: &str,
-    ) -> Result<()> {
-        // Bound cleanup work per login; the expiry index avoids scanning live sessions.
-        self.execute(
-            "DELETE FROM gl_sessions WHERE id IN (SELECT id FROM gl_sessions WHERE expires_at<=$1 ORDER BY expires_at LIMIT 100)",
-            &[&s.created_at],
-        )?;
-        self.execute("INSERT INTO gl_sessions(id,user_id,digest,source_key_id,credential_version,created_at,last_seen_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", &[&s.id,&s.user_id,&digest,&s.source_key_id,&s.credential_version,&s.created_at,&s.last_seen_at,&s.expires_at])
-    }
-    fn auth_touch_session(&mut self, id: &str, now: &str, before: &str) -> Result<()> {
-        self.execute(
-            "UPDATE gl_sessions SET last_seen_at=$2 WHERE id=$1 AND last_seen_at<$3",
-            &[&id, &now, &before],
-        )
-    }
-    fn auth_delete_session(&mut self, id: &str) -> Result<()> {
-        self.execute("DELETE FROM gl_sessions WHERE id=$1", &[&id])
-    }
-    fn auth_invalidate_user(&mut self, id: &str, now: &str, keys: bool) -> Result<()> {
-        if keys {
-            self.execute(
-                "UPDATE gl_api_keys SET revoked_at=$2 WHERE user_id=$1 AND revoked_at IS NULL",
-                &[&id, &now],
-            )?;
-        }
-        self.execute("DELETE FROM gl_sessions WHERE user_id=$1", &[&id])
-    }
-    fn auth_audit(&mut self, actor: &str, action: &str, resource: &str, now: &str) -> Result<()> {
-        self.execute(
-            "INSERT INTO gl_auth_audit(id,actor,action,resource,created_at) VALUES($1,$2,$3,$4,$5)",
-            &[
-                &uuid::Uuid::new_v4().to_string(),
-                &actor,
-                &action,
-                &resource,
-                &now,
-            ],
-        )
-    }
-
+impl ResponseBudget for SqlTransaction {
     fn set_response_limit(&mut self, bytes: usize) {
         self.0.result_limit = bytes;
         if let Backend::Postgis(c) = &mut self.0.backend {
             c.set_result_limit(bytes);
         }
     }
+
     fn response_limit(&self) -> usize {
         self.0.result_limit
     }
+
     fn set_response_reservation(&mut self, reservation: Option<crate::ResponseReservation>) {
         self.0.response_reservation = reservation.clone();
         if let Backend::Postgis(c) = &mut self.0.backend {
             c.set_response_reservation(reservation);
         }
     }
+
     fn response_reservation(&self) -> Option<crate::ResponseReservation> {
         self.0.response_reservation.clone()
     }
+}
 
-    fn member_role(&mut self, project: &str, subject: &str) -> Result<Option<Row>> {
-        self.query_opt(
-            &self.lock_sql(
-                "SELECT m.role,p.state FROM gl_project_members m JOIN gl_projects p ON p.id=m.project WHERE m.project=$1 AND m.subject=$2 AND NOT m.removed AND p.state<>'deleted'",
-                "FOR SHARE OF m",
-            ),
-            &[&project, &subject],
-        )
-    }
-    fn project_head(&mut self, project: &str, lock: bool) -> Result<Option<Row>> {
-        let sql = "SELECT head FROM gl_projects WHERE id=$1";
-        let row = self.query_opt(
-            &self.lock_sql(sql, if lock { "FOR NO KEY UPDATE" } else { "" }),
-            &[&project],
-        )?;
-        if let Some(row) = &row {
-            self.1.heads.insert(project.to_owned(), row.get(0usize)?);
-        }
-        Ok(row)
-    }
-    fn project_head_for_edit(&mut self, project: &str) -> Result<Option<Row>> {
-        let row = self.query_opt(
-            &self.lock_sql("SELECT head FROM gl_projects WHERE id=$1", "FOR SHARE"),
-            &[&project],
-        )?;
-        if let Some(row) = &row {
-            self.1.heads.insert(project.to_owned(), row.get(0usize)?);
-        }
-        Ok(row)
-    }
-    fn workspace_state(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        subject: &str,
-        write: bool,
-    ) -> Result<Option<Row>> {
-        self.query_opt(&self.lock_sql("SELECT base_revision,version,status FROM gl_workspaces WHERE project=$1 AND id=$2 AND owner=$3",if write {"FOR UPDATE"}else{"FOR SHARE"}), &[&project,&workspace,&subject])
-    }
-    fn feature_page(&mut self, r: &crate::repository::FeatureQuery) -> Result<Vec<Row>> {
-        self.feature_rows(r, true)
-    }
-    fn feature_exists(&mut self, r: &crate::repository::FeatureQuery) -> Result<bool> {
-        let query = crate::repository::FeatureQuery {
-            limit: 1,
-            ..r.clone()
-        };
-        Ok(!self.feature_rows(&query, false)?.is_empty())
-    }
-    fn feature_at(
-        &mut self,
-        project: &str,
-        dataset: &str,
-        key: &str,
-        revision: i64,
-    ) -> Result<Option<Row>> {
-        self.query_opt("SELECT properties,geometry_json FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=$3 AND valid_from<=$4 AND (valid_to IS NULL OR valid_to>$4) ORDER BY valid_from DESC LIMIT 1", &[&project, &dataset, &key, &revision])
-    }
-    fn dataset_exists(&mut self, project: &str, dataset: &str) -> Result<Option<Row>> {
-        let key = (project.to_owned(), dataset.to_owned());
-        if let Some(row) = self.1.datasets.get(&key) {
-            return Ok(Some(row.clone()));
-        }
-        let row = self.query_opt(
-            "SELECT geometry_type,name,coordinate_dimension,postgis_source,crs FROM gl_datasets WHERE project=$1 AND id=$2",
-            &[&project, &dataset],
-        )?;
-        if let Some(row) = &row {
-            if self.1.datasets.len() >= 128 {
-                self.1.datasets.clear();
-            }
-            self.1.datasets.insert(key, row.clone());
-        }
-        Ok(row)
-    }
-    fn append_audit(
-        &mut self,
-        project: &str,
-        subject: &str,
-        action: &str,
-        detail: &str,
-    ) -> Result<()> {
-        if matches!(self.0.backend, Backend::Postgis(_)) {
-            // Hold through commit so project cursors cannot skip a lower, uncommitted ID.
-            self.query_one(
-                "SELECT pg_advisory_xact_lock(hashtextextended($1,7882))::text",
-                &[&project],
-            )?;
-        }
-        self.execute(
-            "INSERT INTO gl_audit_events(project,subject,action,detail) VALUES($1,$2,$3,$4)",
-            &[&project, &subject, &action, &detail],
-        )
-    }
-    fn advance_workspace(&mut self, project: &str, workspace: &str, status: &str) -> Result<Row> {
-        self.query_one("UPDATE gl_workspaces SET version=version+1,status=$3 WHERE project=$1 AND id=$2 RETURNING version", &[&project, &workspace, &status])
-    }
-    fn insert_project(&mut self, project: &str, name: &str) -> Result<()> {
-        self.execute(
-            "INSERT INTO gl_projects(id,name) VALUES($1,$2)",
-            &[&project, &name],
-        )
-    }
-    fn insert_owner(&mut self, project: &str, subject: &str) -> Result<()> {
-        self.execute(
-            "INSERT INTO gl_project_members(project,subject,role) VALUES($1,$2,'owner')",
-            &[&project, &subject],
-        )
-    }
-    fn list_projects(&mut self, subject: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
-        self.query("SELECT p.id,p.name,p.head,p.state,m.role FROM gl_projects p JOIN gl_project_members m ON m.project=p.id WHERE m.subject=$1 AND NOT m.removed AND p.state<>'deleted' AND p.id>$2 ORDER BY p.id LIMIT $3", &[&subject, &after, &limit])
-    }
-    fn project_info(&mut self, project: &str) -> Result<Row> {
-        self.query_one(
-            "SELECT name,head,state FROM gl_projects WHERE id=$1",
-            &[&project],
-        )
-    }
-    fn owner_summary(&mut self, project: &str, subject: &str) -> Result<Row> {
-        self.query_one("SELECT count(*) FILTER (WHERE role='owner'), coalesce(max(CASE WHEN subject=$2 AND role='owner' THEN 1 ELSE 0 END),0) FROM gl_project_members WHERE project=$1 AND NOT removed", &[&project, &subject])
-    }
-    fn set_member(&mut self, project: &str, subject: &str, role: &str) -> Result<()> {
-        self.execute("INSERT INTO gl_project_members(project,subject,role) VALUES($1,$2,$3) ON CONFLICT(project,subject) DO UPDATE SET role=excluded.role,removed=false", &[&project, &subject, &role])
-    }
-    fn live_project(&mut self, project: &str, lock: bool) -> Result<Option<Row>> {
-        let sql = "SELECT name,head,state FROM gl_projects WHERE id=$1 AND state<>'deleted'";
-        if lock {
-            self.query_opt(&self.lock_sql(sql, "FOR UPDATE"), &[&project])
-        } else {
-            self.query_opt(sql, &[&project])
-        }
-    }
-    fn list_members(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
-        self.query("SELECT subject,role FROM gl_project_members WHERE project=$1 AND NOT removed AND subject>$2 ORDER BY subject LIMIT $3", &[&project, &after, &limit])
-    }
-    fn remove_member(&mut self, project: &str, subject: &str) -> Result<()> {
-        self.execute(
-            "UPDATE gl_project_members SET removed=true WHERE project=$1 AND subject=$2",
-            &[&project, &subject],
-        )
-    }
-    fn set_project_state(&mut self, project: &str, state: &str) -> Result<()> {
-        self.execute(
-            "UPDATE gl_projects SET state=$2 WHERE id=$1",
-            &[&project, &state],
-        )
-    }
-    fn owned_projects(&mut self, subject: &str) -> Result<Row> {
-        if matches!(self.0.backend, Backend::Postgis(_)) {
-            // Serialize quota checks through commit, including when the subject has no projects.
-            self.query_one(
-                "SELECT pg_advisory_xact_lock(hashtextextended($1,7883))::text",
-                &[&subject],
-            )?;
-        }
-        self.query_one("SELECT count(*) FROM gl_project_members m JOIN gl_projects p ON p.id=m.project WHERE m.subject=$1 AND m.role='owner' AND NOT m.removed AND p.state<>'deleted'", &[&subject])
-    }
-    fn ensure_identity(&mut self, project: &str, subject: &str) -> Result<()> {
-        // Audit rows reference a member row; administrators acting without
-        // membership get an inactive placeholder that grants nothing.
-        self.execute("INSERT INTO gl_project_members(project,subject,role,removed) VALUES($1,$2,'viewer',true) ON CONFLICT(project,subject) DO NOTHING", &[&project, &subject])
-    }
-    fn insert_dataset(
-        &mut self,
-        project: &str,
-        dataset: &str,
-        name: &str,
-        geometry_type: &str,
-        coordinate_dimension: i32,
-        crs: &str,
-    ) -> Result<()> {
-        self.execute(
-            "INSERT INTO gl_datasets(project,id,name,geometry_type,coordinate_dimension,crs) VALUES($1,$2,$3,$4,$5,$6)",
-            &[
-                &project,
-                &dataset,
-                &name,
-                &geometry_type,
-                &coordinate_dimension,
-                &crs,
-            ],
-        )
-    }
-    fn inspect_postgis_table(&mut self, source: &crate::PostgisTable) -> Result<Row> {
-        let metadata = self.inspect_source(source)?;
-        Ok(Row::new(vec![
-            Cell::Text(metadata.family),
-            Cell::Integer(metadata.dimension.into()),
-            Cell::Text(metadata.crs),
-        ]))
-    }
-    fn postgis_table_page(
-        &mut self,
-        source: &crate::PostgisTable,
-        after: &str,
-    ) -> Result<Vec<Row>> {
-        self.source_page(source, after)
-    }
-    fn bind_postgis_table(
-        &mut self,
-        project: &str,
-        dataset: &str,
-        source: &crate::PostgisTable,
-    ) -> Result<()> {
-        let source_metadata = self.inspect_source(source)?;
-        let metadata = serde_json::to_string(&source_metadata).map_err(Error::stored_json)?;
-        self.execute(
-            "UPDATE gl_datasets SET postgis_source=$3 WHERE project=$1 AND id=$2",
-            &[&project, &dataset, &metadata],
-        )?;
-        self.1.datasets.clear();
-        self.guard_source(source, source_metadata.srid)
-    }
-    fn rename_project(&mut self, project: &str, name: &str) -> Result<()> {
-        self.execute(
-            "UPDATE gl_projects SET name=$2 WHERE id=$1",
-            &[&project, &name],
-        )
-    }
-    fn rename_dataset(&mut self, project: &str, dataset: &str, name: &str) -> Result<()> {
-        self.1.datasets.clear();
-        self.execute(
-            "UPDATE gl_datasets SET name=$3 WHERE project=$1 AND id=$2",
-            &[&project, &dataset, &name],
-        )
-    }
-    fn purge_data(&mut self, project: &str, dataset: Option<&str>) -> Result<()> {
-        self.1.datasets.clear();
-        self.release_sources(project, dataset)?;
-        self.execute("INSERT INTO gl_purge VALUES($1)", &[&project])?;
-        if let Some(dataset) = dataset {
-            // Capture only workspaces touched by this dataset, including published drafts.
-            let affected = self.query("SELECT workspace FROM gl_workspace_changes WHERE project=$1 AND dataset=$2 UNION SELECT c.workspace FROM gl_commits c JOIN gl_commit_changes d ON c.project=d.project AND c.revision=d.revision WHERE d.project=$1 AND d.dataset=$2", &[&project, &dataset])?;
-            let commits = self.query(
-                "SELECT DISTINCT revision FROM gl_commit_changes WHERE project=$1 AND dataset=$2",
-                &[&project, &dataset],
-            )?;
-            for table in ["gl_workspace_changes", "gl_history", "gl_commit_changes"] {
-                self.execute(
-                    &format!("DELETE FROM {table} WHERE project=$1 AND dataset=$2"),
-                    &[&project, &dataset],
-                )?;
-            }
-            for row in commits {
-                let revision: i64 = row.get(0usize)?;
-                let remaining: i64 = self
-                    .query_one(
-                        "SELECT count(*) FROM gl_commit_changes WHERE project=$1 AND revision=$2",
-                        &[&project, &revision],
-                    )?
-                    .get(0usize)?;
-                if remaining == 0 {
-                    let revision_text = revision.to_string();
-                    self.execute("DELETE FROM gl_idempotency WHERE project=$1 AND gl_json_field(result,'revision')=$2", &[&project, &revision_text])?;
-                    self.execute(
-                        "DELETE FROM gl_commits WHERE project=$1 AND revision=$2",
-                        &[&project, &revision],
-                    )?;
-                }
-            }
-            for row in affected {
-                let workspace: String = row.get(0usize)?;
-                let remaining: i64 = self.query_one("SELECT (SELECT count(*) FROM gl_workspace_changes WHERE project=$1 AND workspace=$2)+(SELECT count(*) FROM gl_commits WHERE project=$1 AND workspace=$2)", &[&project, &workspace])?.get(0usize)?;
-                if remaining == 0 {
-                    self.execute("DELETE FROM gl_idempotency WHERE project=$1 AND gl_json_field(payload,'workspace')=$2", &[&project, &workspace])?;
-                    self.execute(
-                        "DELETE FROM gl_workspaces WHERE project=$1 AND id=$2",
-                        &[&project, &workspace],
-                    )?;
-                } else {
-                    self.invalidate_resolutions(project, &workspace)?;
-                    self.execute(
-                        "UPDATE gl_workspaces SET version=version+1 WHERE project=$1 AND id=$2",
-                        &[&project, &workspace],
-                    )?;
-                }
-            }
-            self.execute(
-                "DELETE FROM gl_datasets WHERE project=$1 AND id=$2",
-                &[&project, &dataset],
-            )?;
-        } else {
-            for table in [
-                "gl_workspace_changes",
-                "gl_history",
-                "gl_commit_changes",
-                "gl_idempotency",
-                "gl_commits",
-                "gl_workspaces",
-                "gl_datasets",
-            ] {
-                self.execute(
-                    &format!("DELETE FROM {table} WHERE project=$1"),
-                    &[&project],
-                )?;
-            }
-        }
-        // The guard is transaction-local in lifetime; errors roll it and all deletes back.
-        self.execute("DELETE FROM gl_purge WHERE project=$1", &[&project])
-    }
-    fn list_datasets(&mut self, project: &str, after: &str, limit: i64) -> Result<Vec<Row>> {
-        self.query(
-            "SELECT id,name,geometry_type,coordinate_dimension,postgis_source,crs FROM gl_datasets WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3",
-            &[&project, &after, &limit],
-        )
-    }
-    fn insert_workspace(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        subject: &str,
-        base: i64,
-    ) -> Result<()> {
-        self.execute(
-            "INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES($1,$2,$3,$4)",
-            &[&project, &workspace, &subject, &base],
-        )
-    }
-    fn list_workspaces(
-        &mut self,
-        project: &str,
-        subject: &str,
-        after: &str,
-        limit: i64,
-    ) -> Result<Vec<Row>> {
-        self.query("SELECT id,base_revision,version,status FROM gl_workspaces WHERE project=$1 AND owner=$2 AND id>$3 ORDER BY id LIMIT $4", &[&project, &subject, &after, &limit])
-    }
-    fn put_deltas(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        deltas: &[crate::repository::DraftDelta],
-    ) -> Result<()> {
-        if deltas.is_empty() {
-            return Ok(());
-        }
-        let updates = self
-            .geometry_columns()
-            .split(',')
-            .map(|c| format!("{c}=excluded.{c}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let mut params: Vec<&dyn Parameter> = vec![&project, &workspace];
-        let mut values = Vec::with_capacity(deltas.len());
-        for (i, delta) in deltas.iter().enumerate() {
-            let n = i * 4 + 3;
-            values.push(format!(
-                "($1,$2,${n},${},${},${},{})",
-                n + 1,
-                n + 2,
-                n + 3,
-                self.geometry_values(&format!("${}", n + 3))
-            ));
-            params.extend([
-                &delta.dataset as &dyn Parameter,
-                &delta.key,
-                &delta.properties,
-                &delta.geometry,
-            ]);
-        }
-        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) VALUES {values} ON CONFLICT(project,workspace,dataset,feature_id) DO UPDATE SET properties=excluded.properties,geometry_json=excluded.geometry_json,{updates}", columns=self.geometry_columns(), values=values.join(",")), &params)
-    }
-    fn invalidate_resolutions(&mut self, project: &str, workspace: &str) -> Result<()> {
-        self.execute("UPDATE gl_workspace_changes SET resolution_stale=true WHERE project=$1 AND workspace=$2 AND resolved_head IS NOT NULL AND NOT resolution_stale", &[&project, &workspace])
-    }
-    fn edit_base(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        dataset: &str,
-        key: &str,
-        base: i64,
-    ) -> Result<Row> {
-        // Stale SQLite statistics must not turn a single-key lookup into a history scan.
-        let history = match self.0.backend {
-            Backend::Sqlite(_) => "gl_history h INDEXED BY sqlite_autoindex_gl_history_1",
-            Backend::Postgis(_) => "gl_history h",
-        };
-        self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL),h.properties,h.geometry_json FROM (SELECT 1) seed LEFT JOIN (SELECT properties,geometry_json FROM {history} WHERE h.project=$1 AND h.dataset=$3 AND h.feature_id=$4 AND h.valid_from<=$5 AND (h.valid_to IS NULL OR h.valid_to>$5) ORDER BY h.valid_from DESC LIMIT 1) h ON true", self.workspace_key_table()), &[&project, &workspace, &dataset, &key, &base])
-    }
-    fn remove_delta(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        dataset: &str,
-        key: &str,
-    ) -> Result<()> {
-        self.execute(
-            &format!(
-                "DELETE FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",
-                self.workspace_key_table()
-            ),
-            &[&project, &workspace, &dataset, &key],
-        )
-    }
-    fn count_deltas(&mut self, project: &str, workspace: &str) -> Result<Row> {
-        self.query_one(
-            "SELECT coalesce((SELECT changes FROM gl_workspace_sizes WHERE project=$1 AND workspace=$2),0)",
-            &[&project, &workspace],
-        )
-    }
-    fn workspace_summary(&mut self, project: &str, workspace: &str, base: i64) -> Result<Vec<Row>> {
-        // Aggregate in primary-key dataset order before joining names. Grouping by
-        // names too makes SQLite sort full feature payloads into a temporary B-tree.
-        self.query("WITH counts AS MATERIALIZED (SELECT c.dataset,SUM(CASE WHEN b.properties IS NULL AND c.properties IS NOT NULL THEN 1 ELSE 0 END) AS added,SUM(CASE WHEN b.properties IS NOT NULL AND c.properties IS NULL THEN 1 ELSE 0 END) AS deleted,SUM(CASE WHEN b.properties IS NOT NULL AND c.properties IS NOT NULL THEN 1 ELSE 0 END) AS modified FROM gl_workspace_changes c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) WHERE c.project=$1 AND c.workspace=$2 AND (c.properties IS NOT NULL OR b.properties IS NOT NULL) GROUP BY c.dataset) SELECT c.dataset,d.name,c.added,c.deleted,c.modified FROM counts c JOIN gl_datasets d ON d.project=$1 AND d.id=c.dataset ORDER BY c.dataset", &[&project,&workspace,&base])
-    }
-    fn commit_summary(&mut self, project: &str, revision: i64) -> Result<Vec<Row>> {
-        self.query("WITH counts AS MATERIALIZED (SELECT dataset,SUM(CASE WHEN before_value IS NULL AND after_value IS NOT NULL THEN 1 ELSE 0 END) AS added,SUM(CASE WHEN before_value IS NOT NULL AND after_value IS NULL THEN 1 ELSE 0 END) AS deleted,SUM(CASE WHEN before_value IS NOT NULL AND after_value IS NOT NULL THEN 1 ELSE 0 END) AS modified FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (before_value IS NOT NULL OR after_value IS NOT NULL) GROUP BY dataset) SELECT c.dataset,d.name,c.added,c.deleted,c.modified FROM counts c JOIN gl_datasets d ON d.project=$1 AND d.id=c.dataset ORDER BY c.dataset", &[&project,&revision])
-    }
-    fn diff_page(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        base: i64,
-        after_dataset: &str,
-        after_key: &str,
-        limit: i64,
-    ) -> Result<Vec<Row>> {
-        self.query("WITH batch AS MATERIALIZED (SELECT project,dataset,feature_id,properties,geometry_json,resolved_head,resolution_stale FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($4,$5) ORDER BY dataset,feature_id LIMIT $6) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,b.properties,b.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &after_dataset, &after_key, &limit])
-    }
-    fn diff_has_after(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        after_dataset: &str,
-        after_key: &str,
-    ) -> Result<bool> {
-        self.query_one("SELECT EXISTS(SELECT 1 FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($3,$4))", &[&project, &workspace, &after_dataset, &after_key])?.get(0usize)
-    }
-    fn history_has_after(&mut self, project: &str, after: i64) -> Result<bool> {
-        self.query_one("SELECT EXISTS(SELECT 1 FROM gl_commits c JOIN gl_workspaces w ON w.project=c.project AND w.id=c.workspace WHERE c.project=$1 AND c.revision>$2)", &[&project, &after])?.get(0usize)
-    }
-    fn history_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>> {
-        self.query("SELECT c.revision,c.subject,c.message,c.created_at,c.workspace,w.base_revision FROM gl_commits c JOIN gl_workspaces w ON w.project=c.project AND w.id=c.workspace WHERE c.project=$1 AND c.revision>$2 ORDER BY c.revision LIMIT $3", &[&project, &after, &limit])
-    }
-    fn commit_exists(&mut self, project: &str, revision: i64) -> Result<Option<Row>> {
-        self.query_opt(
-            "SELECT 1 FROM gl_commits WHERE project=$1 AND revision=$2",
-            &[&project, &revision],
-        )
-    }
-    fn commit_page(
-        &mut self,
-        project: &str,
-        revision: i64,
-        after_dataset: &str,
-        after_key: &str,
-        limit: i64,
-    ) -> Result<Vec<Row>> {
-        self.query("SELECT dataset,feature_id,(gl_json_field(before_value,'properties')),gl_json_field(before_value,'geometry'),(gl_json_field(after_value,'properties')),gl_json_field(after_value,'geometry') FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT $5", &[&project, &revision, &after_dataset, &after_key, &limit])
-    }
-    fn commit_has_after(
-        &mut self,
-        project: &str,
-        revision: i64,
-        after_dataset: &str,
-        after_key: &str,
-    ) -> Result<bool> {
-        self.query_one("SELECT EXISTS(SELECT 1 FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4))", &[&project, &revision, &after_dataset, &after_key])?.get(0usize)
-    }
-    fn audit_has_after(&mut self, project: &str, after: i64) -> Result<bool> {
-        self.query_one(
-            "SELECT EXISTS(SELECT 1 FROM gl_audit_events WHERE project=$1 AND id>$2)",
-            &[&project, &after],
-        )?
-        .get(0usize)
-    }
-    fn audit_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>> {
-        self.query("SELECT id,subject,action,detail,created_at FROM gl_audit_events WHERE project=$1 AND id>$2 ORDER BY id LIMIT $3", &[&project, &after, &limit])
-    }
-    fn cached_conflict_count(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        base: i64,
-        version: i64,
-        head: i64,
-    ) -> Result<Option<i64>> {
-        self.query_opt("SELECT total FROM gl_conflict_cache WHERE project=$1 AND workspace=$2 AND base_revision=$3 AND workspace_version=$4 AND head=$5 AND complete", &[&project,&workspace,&base,&version,&head])?.map(|r|r.get(0usize)).transpose()
-    }
-    fn reset_conflict_cache(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        base: i64,
-        version: i64,
-        head: i64,
-    ) -> Result<()> {
-        self.execute(
-            "DELETE FROM gl_conflict_cache WHERE project=$1 AND workspace=$2",
-            &[&project, &workspace],
-        )?;
-        self.execute("INSERT INTO gl_conflict_cache(project,workspace,base_revision,workspace_version,head) VALUES($1,$2,$3,$4,$5)", &[&project,&workspace,&base,&version,&head])
-    }
-    fn cache_conflict_keys(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        keys: &[(String, String)],
-    ) -> Result<()> {
-        if keys.is_empty() {
-            return Ok(());
-        }
-        let mut params: Vec<&dyn Parameter> = vec![&project, &workspace];
-        let mut tuples = Vec::with_capacity(keys.len());
-        for (i, (dataset, key)) in keys.iter().enumerate() {
-            tuples.push(format!("($1,$2,${},${})", i * 2 + 3, i * 2 + 4));
-            params.extend([dataset as &dyn Parameter, key]);
-        }
-        self.execute(
-            &format!("INSERT INTO gl_conflict_keys VALUES {}", tuples.join(",")),
-            &params,
-        )
-    }
-    fn complete_conflict_cache(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        total: i64,
-    ) -> Result<()> {
-        self.execute(
-            "UPDATE gl_conflict_cache SET total=$3,complete=true WHERE project=$1 AND workspace=$2",
-            &[&project, &workspace, &total],
-        )
-    }
-    fn cached_conflict_page(
-        &mut self,
-        query: &crate::repository::ConflictQuery<'_>,
-    ) -> Result<Vec<Row>> {
-        let crate::repository::ConflictQuery {
-            project,
-            workspace,
-            base,
-            head,
-            after_dataset,
-            after_key,
-            limit,
-        } = *query;
-        self.query("WITH keys AS MATERIALIZED (SELECT dataset,feature_id FROM gl_conflict_keys WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT $7), batch AS MATERIALIZED (SELECT c.* FROM keys k JOIN gl_workspace_changes c ON c.project=$1 AND c.workspace=$2 AND c.dataset=k.dataset AND c.feature_id=k.feature_id) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,c.resolved_head,c.resolution_stale,b.properties,b.geometry_json,o.properties,o.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project,&workspace,&base,&head,&after_dataset,&after_key,&limit])
-    }
-    fn begin_merge(&mut self) -> Result<()> {
-        self.1.stage.clear();
-        self.1.stage_bytes = 0;
-        // Pooled PostgreSQL sessions reuse the staging relation and its prepared plans.
-        // Transactional deletion keeps repeated merges and rollback isolated.
-        self.batch_execute(match self.0.backend {
-            Backend::Postgis(_) => "CREATE TEMP TABLE IF NOT EXISTS gl_merge_stage(dataset text, feature_id text, before_value text, after_value text, PRIMARY KEY(dataset,feature_id)) ON COMMIT DELETE ROWS; DELETE FROM gl_merge_stage",
-            Backend::Sqlite(_) => "DROP TABLE IF EXISTS gl_merge_stage; CREATE TEMP TABLE gl_merge_stage(dataset text, feature_id text, before_value text, after_value text, PRIMARY KEY(dataset,feature_id))",
-        })
-    }
-    fn merge_page(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        base: i64,
-        current: i64,
-        after_dataset: &str,
-        after_key: &str,
-    ) -> Result<Vec<Row>> {
-        self.query("WITH batch AS MATERIALIZED (SELECT project,dataset,feature_id,properties,geometry_json,resolved_head,resolution_stale FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT 32) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,c.resolved_head,c.resolution_stale,b.properties,b.geometry_json,o.properties,o.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &current, &after_dataset, &after_key])
-    }
-    fn stage_merge(
-        &mut self,
-        dataset: &str,
-        key: &str,
-        before: &Option<String>,
-        after: &Option<String>,
-    ) -> Result<()> {
-        let bytes = dataset
-            .len()
-            .saturating_add(key.len())
-            .saturating_add(before.as_ref().map_or(0, String::len))
-            .saturating_add(after.as_ref().map_or(0, String::len));
-        if self.1.stage_bytes.saturating_add(bytes) > 1024 * 1024 {
-            self.flush_stage()?;
-        }
-        self.1.stage.push((
-            dataset.to_owned(),
-            key.to_owned(),
-            before.clone(),
-            after.clone(),
-        ));
-        self.1.stage_bytes = self.1.stage_bytes.saturating_add(bytes);
-        if self.1.stage.len() >= 32 || self.1.stage_bytes >= 1024 * 1024 {
-            self.flush_stage()?;
-        }
-        Ok(())
-    }
-    fn publication_receipt(
-        &mut self,
-        project: &str,
-        subject: &str,
-        request_id: &str,
-    ) -> Result<Option<Row>> {
-        self.query_opt("SELECT payload,result FROM gl_idempotency WHERE project=$1 AND subject=$2 AND request_id=$3", &[&project, &subject, &request_id])
-    }
-    fn append_commit(
-        &mut self,
-        project: &str,
-        revision: i64,
-        workspace: &str,
-        subject: &str,
-        message: &str,
-    ) -> Result<()> {
-        self.execute("INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES($1,$2,$3,$4,$5)", &[&project, &revision, &workspace, &subject, &message])
-    }
-    fn append_changes(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.flush_stage()?;
-        self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,NULLIF(before_value,'null'),after_value FROM gl_merge_stage", &[&project, &revision])
-    }
-    fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.flush_stage()?;
-        if matches!(self.0.backend, Backend::Postgis(_)) {
-            // Pooled sessions retain the old batch's statistics after commit
-            // clears the temp table. Refresh its cardinality for this batch.
-            self.batch_execute("ANALYZE gl_merge_stage")?;
-        }
-        self.sync_sources(project)?;
-        // Drive both backends from changed keys, even when a new project's
-        // history is underestimated by statistics dominated by another project.
-        let sql = match self.0.backend {
-            Backend::Sqlite(_) => {
-                "UPDATE gl_history SET valid_to=$2 WHERE rowid IN (SELECT h.rowid FROM gl_merge_stage m CROSS JOIN gl_history h INDEXED BY history_live ON h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL)"
-            }
-            Backend::Postgis(_) => {
-                // LIMIT keeps each live-key lookup correlated with the staged
-                // row. The TID is consumed in this statement while the project
-                // publication lock protects the history rows.
-                "UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m CROSS JOIN LATERAL (SELECT ctid FROM gl_history WHERE project=$1 AND dataset=m.dataset AND feature_id=m.feature_id AND valid_to IS NULL LIMIT 1) live WHERE h.ctid=live.ctid"
-            }
-        };
-        self.execute(sql, &[&project, &revision])
-    }
-    fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.flush_stage()?;
-        self.execute(&format!("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,{columns}) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry'),{values} FROM gl_merge_stage", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(after_value,'geometry')")), &[&project, &revision])
-    }
-    fn advance_head(&mut self, project: &str, revision: i64) -> Result<()> {
-        self.execute(
-            "UPDATE gl_projects SET head=$2 WHERE id=$1",
-            &[&project, &revision],
-        )
-    }
-    fn save_receipt(
-        &mut self,
-        project: &str,
-        subject: &str,
-        request_id: &str,
-        payload: &str,
-        result: &str,
-    ) -> Result<()> {
-        self.execute(
-            "INSERT INTO gl_idempotency VALUES($1,$2,$3,$4,$5)",
-            &[&project, &subject, &request_id, &payload, &result],
-        )
-    }
-    fn mark_resolved(
-        &mut self,
-        project: &str,
-        workspace: &str,
-        dataset: &str,
-        key: &str,
-        head: i64,
-    ) -> Result<()> {
-        self.execute(&format!("UPDATE {} SET resolved_head=$5,resolution_stale=false WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4", self.workspace_key_table()), &[&project, &workspace, &dataset, &key, &head])
-    }
-    fn stage_resolution(&mut self, dataset: &str, key: &str, after: &Option<String>) -> Result<()> {
-        self.execute(
-            "INSERT INTO gl_merge_stage(dataset,feature_id,after_value) VALUES($1,$2,$3)",
-            &[&dataset, &key, &after],
-        )
-    }
-    fn clear_deltas(&mut self, project: &str, workspace: &str) -> Result<()> {
-        self.execute(
-            &format!(
-                "DELETE FROM {} WHERE project=$1 AND workspace=$2",
-                self.workspace_key_table()
-            ),
-            &[&project, &workspace],
-        )
-    }
-    fn replace_deltas_with_merge(&mut self, project: &str, workspace: &str) -> Result<()> {
-        self.flush_stage()?;
-        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) SELECT $1,$2,dataset,feature_id,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry'),{values} FROM gl_merge_stage", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(after_value,'geometry')")), &[&project, &workspace])
-    }
-    fn advance_base(&mut self, project: &str, workspace: &str, revision: i64) -> Result<()> {
-        self.execute(
-            "UPDATE gl_workspaces SET base_revision=$3 WHERE project=$1 AND id=$2",
-            &[&project, &workspace, &revision],
-        )
-    }
-    fn count_commit_changes(&mut self, project: &str, revision: i64) -> Result<Row> {
-        self.query_one(
-            "SELECT count(*) FROM gl_commit_changes WHERE project=$1 AND revision=$2",
-            &[&project, &revision],
-        )
-    }
-    fn restore_deltas(&mut self, project: &str, revision: i64, workspace: &str) -> Result<()> {
-        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) SELECT project,$3,dataset,feature_id,gl_json_field(before_value,'properties'),gl_json_field(before_value,'geometry'),{values} FROM gl_commit_changes WHERE project=$1 AND revision=$2", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(before_value,'geometry')")), &[&project, &revision, &workspace])
-    }
+impl RepositoryTransaction for SqlTransaction {
     fn commit(self: Box<Self>) -> Result<()> {
         SqlTransaction::commit(*self)
     }
@@ -1694,126 +573,8 @@ impl tokio_postgres::types::ToSql for AnyNull {
     }
     tokio_postgres::types::to_sql_checked!();
 }
-pub(crate) struct SqlStorage {
-    pub(crate) storage: Storage,
-    pub(crate) pool: std::sync::Arc<postgres::Pool>,
-}
-impl StorageBackend for SqlStorage {
-    fn name(&self) -> &'static str {
-        match self.storage {
-            Storage::Sqlite(_) => "sqlite",
-            Storage::Postgis(_) => "postgis",
-        }
-    }
-    fn initialize(&self, timeout: Duration) -> Result<()> {
-        Client::open(&self.storage, &self.pool, timeout)?.migrate()
-    }
-    fn health(&self, timeout: Duration) -> Result<()> {
-        let mut c = Client::open(&self.storage, &self.pool, timeout)?;
-        if c.query_one("SELECT version FROM gl_format WHERE singleton=true", &[])?
-            .get::<_, i32>(0usize)?
-            != FORMAT_VERSION
-        {
-            return Err(Error::new(409, "unsupported storage format"));
-        }
-        Ok(())
-    }
-    fn begin(&self, read_only: bool, timeout: Duration) -> Result<Box<dyn RepositoryTransaction>> {
-        Ok(Box::new(
-            Client::open(&self.storage, &self.pool, timeout)?.transaction(read_only)?,
-        ))
-    }
-    fn pool_stats(&self) -> Option<crate::PoolStats> {
-        matches!(self.storage, Storage::Postgis(_)).then(|| self.pool.stats())
-    }
-    fn export(
-        &self,
-        out: &mut dyn std::io::Write,
-        timeout: Duration,
-    ) -> Result<crate::DataSummary> {
-        let missing = || Error::new(404, "no GeoLedger database to export");
-        if matches!(&self.storage, Storage::Sqlite(path) if !path.is_file()) {
-            return Err(missing());
-        }
-        let mut t = Client::open(&self.storage, &self.pool, timeout)?.transaction(true)?;
-        let exists = match self.storage {
-            Storage::Sqlite(_) => t
-                .query_opt(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_format'",
-                    &[],
-                )?
-                .is_some(),
-            Storage::Postgis(_) => t
-                .query_one("SELECT to_regclass('public.gl_format') IS NOT NULL", &[])?
-                .get::<_, bool>(0usize)?,
-        };
-        if !exists {
-            return Err(missing());
-        }
-        portable::export(&mut t, self.name(), out)
-    }
-    fn import(
-        &self,
-        input: &mut dyn std::io::BufRead,
-        timeout: Duration,
-    ) -> Result<crate::DataSummary> {
-        Client::open(&self.storage, &self.pool, timeout)?.migrate()?;
-        portable::import(Client::open(&self.storage, &self.pool, timeout)?, input)
-    }
-    fn backup(&self, target: &std::path::Path, timeout: Duration) -> Result<()> {
-        let Storage::Sqlite(source) = &self.storage else {
-            return Err(Error::new(
-                409,
-                "PostgreSQL backups use pg_dump or WAL archiving (see docs/production.md); `geoledger-server export` gives a portable logical copy",
-            ));
-        };
-        let missing = || Error::new(404, "no GeoLedger database to back up");
-        if !source.is_file() {
-            return Err(missing());
-        }
-        let target_text = target
-            .to_str()
-            .ok_or_else(|| Error::new(400, "backup path must be valid UTF-8"))?
-            .to_owned();
-        // Reserve the target as a new private file (VACUUM INTO accepts an empty
-        // file), so a backup is never readable by others and never overwrites.
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        options.open(target).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
-                Error::new(409, "backup target already exists")
-            } else {
-                Error::new(500, "cannot create backup file").caused_by(e)
-            }
-        })?;
-        let result = (|| {
-            let mut c = Client::open(&self.storage, &self.pool, timeout)?;
-            let exists = c
-                .query_opt(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_format'",
-                    &[],
-                )?
-                .is_some();
-            if !exists {
-                return Err(missing());
-            }
-            // VACUUM INTO reads one consistent snapshot while writers continue (WAL).
-            c.execute("VACUUM INTO $1", &[&target_text])?;
-            drop(c);
-            verify_sqlite_file(target, timeout)
-        })();
-        if result.is_err() {
-            // Never leave a file that looks like a usable backup.
-            let _ = std::fs::remove_file(target);
-        }
-        result
-    }
-}
+pub(crate) use backend::SqlStorage;
+
 /// Check that a SQLite file is an intact GeoLedger database at the current format.
 pub(crate) fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> Result<()> {
     if !path.is_file() {
@@ -1859,6 +620,152 @@ pub(crate) fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> R
 )]
 mod tests {
     use super::*;
+
+    fn capability_atomicity(storage: Storage) -> Result<()> {
+        let timeout = Duration::from_secs(30);
+        let backend = SqlStorage {
+            storage,
+            pool: Arc::new(postgres::Pool::default()),
+        };
+        backend.initialize(timeout)?;
+        let project = uuid::Uuid::new_v4().to_string();
+        let dataset = uuid::Uuid::new_v4().to_string();
+        let workspace = uuid::Uuid::new_v4().to_string();
+        let subject = uuid::Uuid::new_v4().to_string();
+        let request = uuid::Uuid::new_v4().to_string();
+        let user = crate::authentication::UserRecord {
+            user: crate::User {
+                id: subject.clone(),
+                username: subject.clone(),
+                display_name: "Atomic capabilities".into(),
+                status: "active".into(),
+                is_admin: false,
+                must_change_password: true,
+                created_at: "2026-10-21T00:00:00Z".into(),
+            },
+            password_hash: "unused test hash".into(),
+            credential_version: 0,
+        };
+        for outcome in ["drop", "error", "commit"] {
+            let mut owner = backend.begin(false, timeout)?;
+            let credentials: &mut dyn CredentialRepository = owner.as_mut();
+            credentials.lock_credentials()?;
+            credentials.auth_insert_user(&user)?;
+            credentials.auth_audit(&subject, "test", &subject, &user.user.created_at)?;
+            let projects: &mut dyn ProjectRepository = owner.as_mut();
+            projects.insert_project(&project, "Atomic capabilities")?;
+            projects.insert_owner(&project, &subject)?;
+            let datasets: &mut dyn DatasetRepository = owner.as_mut();
+            datasets.insert_dataset(&project, &dataset, "Features", "point", 2, "EPSG:4326")?;
+            let drafts: &mut dyn WorkspaceRepository = owner.as_mut();
+            drafts.insert_workspace(&project, &workspace, &subject, 0)?;
+            let publication: &mut dyn PublicationRepository = owner.as_mut();
+            publication.begin_merge()?;
+            publication.stage_merge(
+                &dataset,
+                "one",
+                &None,
+                &Some(r#"{"properties":{"value":1},"geometry":null}"#.into()),
+            )?;
+            publication.append_commit(&project, 1, &workspace, &subject, "Atomic publication")?;
+            publication.append_changes(&project, 1)?;
+            publication.append_history(&project, 1)?;
+            publication.advance_head(&project, 1)?;
+            publication.save_receipt(&project, &subject, &request, "{}", "{}")?;
+            owner.advance_workspace(&project, &workspace, "published")?;
+            let audit: &mut dyn AuditRepository = owner.as_mut();
+            audit.append_audit(&project, &subject, "test", "{}")?;
+            if outcome == "error" {
+                // Fail after all capabilities wrote; the missing member violates the audit FK.
+                assert!(
+                    audit
+                        .append_audit(&project, "missing-member", "test", "{}")
+                        .is_err()
+                );
+            }
+            if outcome == "commit" {
+                owner.commit()?;
+            } else {
+                drop(owner);
+            }
+            let committed = outcome == "commit";
+            let mut reader = backend.begin(true, timeout)?;
+            assert_eq!(
+                reader
+                    .project_head(&project, false)?
+                    .map(|row| row.get::<_, i64>(0usize))
+                    .transpose()?,
+                committed.then_some(1)
+            );
+            assert_eq!(
+                reader.dataset_exists(&project, &dataset)?.is_some(),
+                committed
+            );
+            assert_eq!(reader.auth_user(&subject)?.is_some(), committed);
+            assert_eq!(
+                reader.feature_at(&project, &dataset, "one", 1)?.is_some(),
+                committed
+            );
+            assert_eq!(
+                reader.history_page(&project, 0, 10)?.len(),
+                usize::from(committed)
+            );
+            assert_eq!(
+                reader.audit_page(&project, 0, 10)?.len(),
+                usize::from(committed)
+            );
+            assert_eq!(
+                reader
+                    .publication_receipt(&project, &subject, &request)?
+                    .is_some(),
+                committed
+            );
+            assert_eq!(
+                reader
+                    .workspace_state(&project, &workspace, &subject, false)?
+                    .map(|row| row.get::<_, String>(2usize))
+                    .transpose()?,
+                committed.then(|| "published".to_owned())
+            );
+            reader.commit()?;
+            let mut monitor = Client::open(&backend.storage, &backend.pool, timeout)?;
+            assert_eq!(
+                monitor
+                    .query_one(
+                        "SELECT count(*) FROM gl_auth_audit WHERE actor=$1",
+                        &[&subject]
+                    )?
+                    .get::<_, i64>(0usize)?,
+                i64::from(committed)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_capabilities_share_commit_error_and_drop_rollback() -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        capability_atomicity(Storage::Sqlite(dir.path().join("capabilities.db")))
+    }
+
+    #[test]
+    #[ignore = "requires isolated geoledger_test PostGIS database"]
+    fn postgis_capabilities_share_commit_error_and_drop_rollback() -> Result<()> {
+        let dsn = std::env::var("GL_TEST_DATABASE_URL").unwrap();
+        let pool = Arc::new(postgres::Pool::default());
+        let mut monitor = Client::open(
+            &Storage::Postgis(dsn.clone()),
+            &pool,
+            Duration::from_secs(30),
+        )?;
+        assert_eq!(
+            monitor
+                .query_one("SELECT current_database()::text", &[])?
+                .get::<_, String>(0usize)?,
+            "geoledger_test"
+        );
+        capability_atomicity(Storage::Postgis(dsn))
+    }
 
     #[test]
     fn sqlite_json_field_preserves_raw_json_and_unquotes_strings() -> Result<()> {
