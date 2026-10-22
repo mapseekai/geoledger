@@ -8,6 +8,22 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import tomllib
+
+
+def download_cargo_lock(repository: str, source_sha: str, destination: Path) -> None:
+    """Read data at the release commit; keep executing the current gate policy."""
+    if not re.fullmatch(r'[0-9a-f]{40}', source_sha):
+        raise ValueError('Cargo.lock baseline requires an immutable source SHA')
+    content = subprocess.check_output([
+        'gh', 'api', f'repos/{repository}/contents/Cargo.lock?ref={source_sha}',
+        '--header', 'Accept: application/vnd.github.raw+json',
+    ], timeout=60)
+    lock = tomllib.loads(content.decode('utf-8'))
+    if not lock.get('package'):
+        raise ValueError('release Cargo.lock package inventory is empty')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(content)
 
 
 def validate_inventories(records, source_sha=None):
@@ -54,6 +70,12 @@ def main() -> None:
         files = sorted(manifests.glob('*-images.json'))
         records = [json.loads(p.read_text()) for p in files]
         validate_inventories(records, source_sha)
+        cargo_lock = args.output / 'source' / 'Cargo.lock'
+        download_cargo_lock(args.repository, source_sha, cargo_lock)
+        status = {'tag': tag, 'source_sha': source_sha, 'cargo_lock': 'source/Cargo.lock',
+                  'cargo_lock_sha256': gate.digest_file(cargo_lock), 'images': records,
+                  'status': 'incomplete', 'reason': 'image scan has not completed'}
+        (args.output / 'audit-status.json').write_text(json.dumps(status, indent=2) + '\n')
         failures = []
         for record in records:
             image = record['image']
@@ -66,12 +88,17 @@ def main() -> None:
                 digest, _ = gate.inventory(layout)
                 if digest != image.rsplit('@', 1)[1]:
                     raise ValueError('pulled image digest differs from release inventory')
-                gate.scan(layout, args.output / kind, kind, gate.DEFAULT_PLATFORMS, record['source_sha'])
+                gate.scan(layout, args.output / kind, kind, gate.DEFAULT_PLATFORMS, record['source_sha'], cargo_lock=cargo_lock)
+                gate.verify(layout, args.output / kind, record['source_sha'], kind, cargo_lock=cargo_lock)
             except (ValueError, OSError, subprocess.SubprocessError) as error:
                 failures.append(f'{kind}: {error}')
         if failures:
+            status.update(status='failed', reason='; '.join(failures))
+            (args.output / 'audit-status.json').write_text(json.dumps(status, indent=2) + '\n')
             raise RuntimeError('; '.join(failures))
-    (args.output / 'audit-status.json').write_text(json.dumps({'tag': tag, 'status': 'passed'}, indent=2))
+    status.update(status='passed')
+    status.pop('reason')
+    (args.output / 'audit-status.json').write_text(json.dumps(status, indent=2) + '\n')
     print(f'PASS published {tag}: combined image digest and both architectures audited')
 
 
