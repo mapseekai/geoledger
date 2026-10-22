@@ -106,7 +106,7 @@ jobs:
           PYTHON
       - name: Retain build-stage scan evidence even on failure
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: build-scan-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/build-reports
@@ -135,14 +135,14 @@ jobs:
           python3 scripts/image-gate.py scan --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind "$IMAGE_KIND" --platform "$PLATFORM"
       - name: Retain scan evidence even on failure
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: scan-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/checked/reports
           if-no-files-found: ignore
           retention-days: 30
       - name: Hand off only passed immutable artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: checked-oci-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/checked
@@ -157,7 +157,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: checked-oci-geoledger-*
           path: ${{ runner.temp }}/native
@@ -172,14 +172,14 @@ jobs:
           python3 scripts/image-gate.py verify --layout "$RUNNER_TEMP/checked/layout" --output "$RUNNER_TEMP/checked/reports" --source-sha "$SOURCE_SHA" --kind combined
       - name: Retain merged scan evidence even on failure
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: scan-geoledger
           path: ${{ runner.temp }}/checked/reports
           if-no-files-found: ignore
           retention-days: 30
       - name: Hand off only the passed complete image
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: checked-oci-geoledger
           path: ${{ runner.temp }}/checked
@@ -202,7 +202,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: checked-oci-${{ matrix.name }}
           path: ${{ runner.temp }}/checked
@@ -243,7 +243,7 @@ jobs:
         run: |
           image=$(python3 -c 'import json,os; print(json.load(open(os.environ["INVENTORY"]))["image"])')
           cosign sign --yes "$image"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: image-inventory-${{ matrix.name }}
           path: ${{ runner.temp }}/${{ matrix.name }}-images.json
