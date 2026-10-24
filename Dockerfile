@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Both services share musl; retain APK inventories for native dependency scans.
 FROM rust:1.98-alpine3.24@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS server-build
-RUN apk upgrade --no-cache && apk add --no-cache build-base cmake pkgconf openssl-dev protobuf-dev protobuf libspatialite
+RUN apk upgrade --no-cache && apk add --no-cache build-base cmake pkgconf openssl-dev protobuf-dev protobuf libspatialite 'brotli-libs>=1.2.1-r0'
 # Dynamic CRT is required for SpatiaLite extension loading.
 ENV CARGO_BUILD_JOBS=2 RUSTFLAGS="-C target-feature=-crt-static" GL_SPATIALITE_EXTENSION=/usr/lib/mod_spatialite.so.8
 WORKDIR /src
@@ -14,8 +14,10 @@ RUN mkdir -p /src/build-evidence && \
     cargo build --release --locked --offline --bins --message-format=json > /src/build-evidence/cargo-artifacts.jsonl && \
     rustc -vV > /src/build-evidence/rustc.txt && \
     rm -rf /usr/local/cargo/registry /usr/local/cargo/git
-FROM node:22-alpine3.24@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS node-runtime
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS toolchain
+# Node 22.23.4 backports CVE-2026-111497; its bundled Brotli still reports 1.1.0.
+FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS node-runtime
+RUN node -e 'require("node:assert/strict").equal(process.versions.node, "22.23.4")'
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS toolchain
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libstdc++
 COPY --from=node-runtime /usr/local/bin/node /nodejs/bin/node
 SHELL ["/bin/sh", "-ec"]
@@ -69,8 +71,8 @@ COPY --from=console-build /app /app
 COPY --from=console-build /output /output
 # A standalone lock avoids scanner workspace-resolution gaps in build images.
 COPY Cargo.lock /usr/share/geoledger/Cargo.lock
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime
-RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libssl3 libcrypto3 libgcc libstdc++ libspatialite tini && \
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libssl3 libcrypto3 libgcc libstdc++ libspatialite tini 'brotli-libs>=1.2.1-r0' && \
     addgroup -g 10001 geoledger && adduser -D -u 10001 -G geoledger geoledger && \
     mkdir /data && chown 10001:10001 /data
 COPY --from=node-runtime /usr/local/bin/node /nodejs/bin/node

@@ -16,7 +16,8 @@ const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file
 async function download(record, file) {
   assert.match(record.sha256, /^[a-f0-9]{64}$/);
   assert(record.url.startsWith('https://go.dev/dl/') || record.url.startsWith('https://codeload.github.com/microsoft/typescript-go/tar.gz/'));
-  const response = await fetch(record.url, { signal: AbortSignal.timeout(180000) });
+  // Pinned Go SDKs are about 70 MB; tolerate slow links within a bounded window.
+  const response = await fetch(record.url, { signal: AbortSignal.timeout(record.bytes ? 1800000 : 180000) });
   if (!response.ok || !response.body) throw new Error(`Build source download failed: HTTP ${response.status}`);
   let bytes = 0;
   const hash = crypto.createHash('sha256');
