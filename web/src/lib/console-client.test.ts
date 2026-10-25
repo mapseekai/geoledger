@@ -52,7 +52,7 @@ test("private transport sends only Session header and preserves exact business m
       /"expected_workspace_version":9007199254740993/,
     );
     response =
-      '{"type":"FeatureCollection","crs":"EPSG:4326","revision":2,"workspace_version":null,"next_after":null,"features":[{"type":"Feature","id":"f","properties":{"snake_case":18446744073709551615,"exact":1.00000000000000001e18,"__proto__":{"safe":1}},"geometry":null}]}';
+      '{"type":"FeatureCollection","crs":"EPSG:4326","revision":2,"workspace_version":null,"next_after":null,"features":[{"type":"Feature","id":"f","properties":{"snake_case":18446744073709551615,"exact":1.00000000000000001e18,"__proto__":{"safe":1},"numericLike":{"isLosslessNumber":true,"value":"7"}},"geometry":{"type":"LineString","coordinates":[[104,35],[106,37]]}}]}';
     const features = await execute(client, {
       action: "features",
       project: "p",
@@ -62,6 +62,8 @@ test("private transport sends only Session header and preserves exact business m
     assert.match(raw, /"snake_case":18446744073709551615/);
     assert.match(raw, /"exact":1.00000000000000001e18/);
     assert.match(raw, /"__proto__":/);
+    assert.match(raw, /"numericLike":\{"isLosslessNumber":true,"value":"7"\}/);
+    assert.match(raw, /"coordinates":\[\[104,35\],\[106,37\]\]/);
     response =
       '{"commits":[{"revision":9007199254740993}],"next_after":9007199254740993}';
     assert.equal((await client.history("p")).nextAfter, 9007199254740993n);
@@ -89,12 +91,21 @@ test("private transport sends only Session header and preserves exact business m
           dataset: "d",
           featureId: "f",
           feature:
-            '{"type":"Feature","id":"f","properties":{"exact":1.00000000000000001e18},"geometry":null}',
+            '{"type":"Feature","id":"f","properties":{"exact":1.00000000000000001e18,"big":18446744073709551615,"numericLike":{"isLosslessNumber":true,"value":"7"}},"geometry":{"type":"LineString","coordinates":[[104,35],[106,37]]}}',
         },
       ],
     });
     assert.match(requests.at(-1)!.body, /"feature_id":"f"/);
     assert.match(requests.at(-1)!.body, /"exact":1.00000000000000001e18/);
+    assert.match(requests.at(-1)!.body, /"big":18446744073709551615/);
+    assert.match(
+      requests.at(-1)!.body,
+      /"numericLike":\{"isLosslessNumber":true,"value":"7"\}/,
+    );
+    assert.match(
+      requests.at(-1)!.body,
+      /"coordinates":\[\[104,35\],\[106,37\]\]/,
+    );
     await execute(client, {
       action: "setMember",
       project: "p",
