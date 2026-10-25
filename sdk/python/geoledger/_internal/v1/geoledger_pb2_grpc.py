@@ -122,6 +122,11 @@ class GeoLedgerStub(object):
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
                 response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesReply.FromString,
                 _registered_method=True)
+        self.Schema = channel.unary_unary(
+                '/geoledger.v1.GeoLedger/Schema',
+                request_serializer=geoledger_dot_v1_dot_geoledger__pb2.SchemaRequest.SerializeToString,
+                response_deserializer=geoledger_dot_v1_dot_geoledger__pb2.SchemaReply.FromString,
+                _registered_method=True)
         self.FeaturesStream = channel.unary_stream(
                 '/geoledger.v1.GeoLedger/FeaturesStream',
                 request_serializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
@@ -313,6 +318,12 @@ class GeoLedgerServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Schema(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def FeaturesStream(self, request, context):
         """Concatenated chunks encode one snapshot-consistent FeaturesReply.
         """
@@ -497,6 +508,11 @@ def add_GeoLedgerServicer_to_server(servicer, server):
                     servicer.Features,
                     request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.FromString,
                     response_serializer=geoledger_dot_v1_dot_geoledger__pb2.FeaturesReply.SerializeToString,
+            ),
+            'Schema': grpc.unary_unary_rpc_method_handler(
+                    servicer.Schema,
+                    request_deserializer=geoledger_dot_v1_dot_geoledger__pb2.SchemaRequest.FromString,
+                    response_serializer=geoledger_dot_v1_dot_geoledger__pb2.SchemaReply.SerializeToString,
             ),
             'FeaturesStream': grpc.unary_stream_rpc_method_handler(
                     servicer.FeaturesStream,
@@ -1041,6 +1057,33 @@ class GeoLedger(object):
             '/geoledger.v1.GeoLedger/Features',
             geoledger_dot_v1_dot_geoledger__pb2.FeaturesRequest.SerializeToString,
             geoledger_dot_v1_dot_geoledger__pb2.FeaturesReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Schema(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/geoledger.v1.GeoLedger/Schema',
+            geoledger_dot_v1_dot_geoledger__pb2.SchemaRequest.SerializeToString,
+            geoledger_dot_v1_dot_geoledger__pb2.SchemaReply.FromString,
             options,
             channel_credentials,
             insecure,

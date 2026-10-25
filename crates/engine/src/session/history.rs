@@ -2,7 +2,7 @@ use super::*;
 
 impl HistoryRepository for SqlTransaction {
     fn commit_summary(&mut self, project: &str, revision: i64) -> Result<Vec<Row>> {
-        self.query("WITH counts AS MATERIALIZED (SELECT dataset,SUM(CASE WHEN before_value IS NULL AND after_value IS NOT NULL THEN 1 ELSE 0 END) AS added,SUM(CASE WHEN before_value IS NOT NULL AND after_value IS NULL THEN 1 ELSE 0 END) AS deleted,SUM(CASE WHEN before_value IS NOT NULL AND after_value IS NOT NULL THEN 1 ELSE 0 END) AS modified FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (before_value IS NOT NULL OR after_value IS NOT NULL) GROUP BY dataset) SELECT c.dataset,d.name,c.added,c.deleted,c.modified FROM counts c JOIN gl_datasets d ON d.project=$1 AND d.id=c.dataset ORDER BY c.dataset", &[&project,&revision])
+        self.query("WITH counts AS MATERIALIZED (SELECT dataset,SUM(CASE WHEN NOT had_before AND has_after THEN 1 ELSE 0 END) AS added,SUM(CASE WHEN had_before AND NOT has_after THEN 1 ELSE 0 END) AS deleted,SUM(CASE WHEN had_before AND has_after THEN 1 ELSE 0 END) AS modified FROM gl_commit_changes WHERE project=$1 AND revision=$2 GROUP BY dataset) SELECT c.dataset,d.name,c.added,c.deleted,c.modified FROM counts c JOIN gl_datasets d ON d.project=$1 AND d.id=c.dataset ORDER BY c.dataset", &[&project,&revision])
     }
 
     fn history_page(&mut self, project: &str, after: i64, limit: i64) -> Result<Vec<Row>> {
@@ -28,7 +28,25 @@ impl HistoryRepository for SqlTransaction {
         after_key: &str,
         limit: i64,
     ) -> Result<Vec<Row>> {
-        self.query("SELECT dataset,feature_id,(gl_json_field(before_value,'properties')),gl_json_field(before_value,'geometry'),(gl_json_field(after_value,'properties')),gl_json_field(after_value,'geometry') FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT $5", &[&project, &revision, &after_dataset, &after_key, &limit])
+        let keys = self.query("SELECT dataset,feature_id FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT $5", &[&project, &revision, &after_dataset, &after_key, &limit])?;
+        let mut rows = Vec::with_capacity(keys.len());
+        for key in keys {
+            let dataset: String = key.get(0usize)?;
+            let feature_id: String = key.get(1usize)?;
+            let before =
+                FeatureRepository::feature_at(self, project, &dataset, &feature_id, revision - 1)?;
+            let after =
+                FeatureRepository::feature_at(self, project, &dataset, &feature_id, revision)?;
+            rows.push(Row::new(vec![
+                Cell::Text(dataset),
+                Cell::Text(feature_id),
+                before.as_ref().map_or(Cell::Null, |r| r.0[0].clone()),
+                before.as_ref().map_or(Cell::Null, |r| r.0[1].clone()),
+                after.as_ref().map_or(Cell::Null, |r| r.0[0].clone()),
+                after.as_ref().map_or(Cell::Null, |r| r.0[1].clone()),
+            ]));
+        }
+        Ok(rows)
     }
 
     fn commit_has_after(

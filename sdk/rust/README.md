@@ -20,3 +20,7 @@ let mut error = Error::new("unavailable", "service unavailable");
 error.uncertain = true;
 assert_eq!(error.code, "unavailable");
 ```
+
+## Versioned schemas
+
+`Client::schema(project, dataset, SchemaQuery)` reads fields at a published revision or workspace version. `Workspace::schema(dataset)` selects its own workspace. `Workspace::save_changes(edits, schema_edits)` atomically saves feature edits and the complete schema intent against the same optimistic version: `None` preserves the existing intent and `Some(&[])` clears it relative to the workspace baseline. `save_batch` keeps schema intent unchanged. Diff, commit and summary models expose `schema_changes` separately from feature changes. See the [API contract](../../docs/api.md#版本化字段定义与原子保存).

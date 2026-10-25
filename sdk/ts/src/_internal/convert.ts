@@ -10,6 +10,8 @@ import {
   type SaveResult,
   type DiscardResult,
   type FeaturePage,
+  type DatasetSchema,
+  type SchemaChange,
   type Change,
   type Diff,
   type Conflict,
@@ -131,11 +133,28 @@ export function decodeChange(v: wire.Change): Change {
     after: feature(v.after),
   };
 }
+export function decodeDatasetSchema(v: wire.SchemaReply): DatasetSchema {
+  return {
+    revision: BigInt(v.revision),
+    fields: v.fields.map((field) => ({ ...field })),
+    ...(v.workspaceVersion === undefined
+      ? {}
+      : { workspaceVersion: BigInt(v.workspaceVersion) }),
+  };
+}
+function decodeSchemaChange(v: wire.SchemaChange): SchemaChange {
+  return {
+    dataset: v.dataset,
+    before: v.before.map((field) => ({ ...field })),
+    after: v.after.map((field) => ({ ...field })),
+  };
+}
 export function decodeDiff(v: wire.DiffReply): Diff {
   return {
     baseRevision: BigInt(v.baseRevision),
     version: BigInt(v.version),
     changes: v.changes.map((item) => decodeChange(item)),
+    schemaChanges: v.schemaChanges.map(decodeSchemaChange),
     ...(v.nextAfter === undefined ? {} : { nextAfter: v.nextAfter }),
   };
 }
@@ -182,6 +201,7 @@ export function decodeHistoryPage(v: wire.HistoryReply): HistoryPage {
 }
 export function decodeCommitChanges(v: wire.CommitReply): CommitChanges {
   return {
+    schemaChanges: v.schemaChanges.map(decodeSchemaChange),
     revision: BigInt(v.revision),
     changes: v.changes.map((item) => decodeChange(item)),
     ...(v.nextAfter === undefined ? {} : { nextAfter: v.nextAfter }),
@@ -239,6 +259,7 @@ export function decodeChangeSummary(
   if (!v.total) throw new Error("Missing summary total");
   return {
     total: counts(v.total),
+    schemaChanges: v.schemaChanges.map(decodeSchemaChange),
     datasets: v.datasets.map((d) => ({ id: d.id, name: d.name, ...counts(d) })),
     ...(v.version === undefined ? {} : { version: BigInt(v.version) }),
     ...(v.revision === undefined ? {} : { revision: BigInt(v.revision) }),

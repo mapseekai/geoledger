@@ -4,6 +4,9 @@ pub mod authentication;
 pub use authentication::{ApiKey, AuthenticatedIdentity, User};
 mod workspace;
 use workspace::*;
+mod schema;
+use schema::*;
+pub use schema::{AddField, DatasetSchema, SchemaEdit, SchemaField};
 mod feature;
 mod geometry;
 pub use feature::Feature;
@@ -35,7 +38,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 16;
+pub const FORMAT_VERSION: i32 = 19;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
@@ -229,6 +232,7 @@ impl Application {
                 | "list_workspaces"
                 | "get_workspace"
                 | "features"
+                | "schema"
                 | "diff"
                 | "workspace_summary"
                 | "commit_summary"
@@ -284,6 +288,7 @@ impl Application {
             Command::Save(r) => save(t.as_mut(), subject, r),
             Command::Discard(r) => discard(t.as_mut(), subject, r),
             Command::Features(r) => features(t.as_mut(), subject, r),
+            Command::Schema(r) => schema_query(t.as_mut(), subject, r),
             Command::WorkspaceSummary(r) => workspace_summary(t.as_mut(), subject, r),
             Command::CommitSummary(r) => commit_summary(t.as_mut(), subject, r),
             Command::Diff(r) => diff(t.as_mut(), subject, r),
@@ -423,6 +428,7 @@ enum Command {
     Save(Save),
     Discard(Version),
     Features(Features),
+    Schema(SchemaQuery),
     WorkspaceSummary(Workspace),
     CommitSummary(SummaryCommit),
     Diff(Diff),

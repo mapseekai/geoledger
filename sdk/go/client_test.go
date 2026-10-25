@@ -2,6 +2,7 @@ package geoledger
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -131,4 +132,38 @@ func (s *datasetRPC) CreateDataset(_ context.Context, request *pb.DatasetRequest
 		return nil, s.err
 	}
 	return &pb.DatasetReply{Dataset: "dataset", Name: request.Name, GeometryType: "line", CoordinateDimension: 3, Crs: "EPSG:3857", PostgisTable: request.PostgisTable}, nil
+}
+
+func TestSchemaChangesSurviveDiffAndCommitConversion(t *testing.T) {
+	change := &pb.SchemaChange{Dataset: "d", Before: []*pb.SchemaField{}, After: []*pb.SchemaField{{Name: "note", Type: "text", Nullable: true, Editable: true}}}
+	var diff Diff
+	if err := decode(&pb.DiffReply{SchemaChanges: []*pb.SchemaChange{change}}, &diff); err != nil {
+		t.Fatal(err)
+	}
+	var commit CommitChanges
+	if err := decode(&pb.CommitReply{SchemaChanges: []*pb.SchemaChange{change}}, &commit); err != nil {
+		t.Fatal(err)
+	}
+	if len(diff.SchemaChanges) != 1 || len(commit.SchemaChanges) != 1 || diff.SchemaChanges[0].After[0].Type != "text" {
+		t.Fatal("schema-only changes were hidden")
+	}
+}
+
+func TestSchemaCollectionsMarshalAsEmptyArrays(t *testing.T) {
+	var schema DatasetSchema
+	if err := decode(&pb.SchemaReply{}, &schema); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil || !strings.Contains(string(raw), `"fields":[]`) {
+		t.Fatalf("empty schema fields became null: %s %v", raw, err)
+	}
+	var diff Diff
+	if err := decode(&pb.DiffReply{SchemaChanges: []*pb.SchemaChange{{Dataset: "d"}}}, &diff); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(diff)
+	if err != nil || !strings.Contains(string(raw), `"before":[]`) || !strings.Contains(string(raw), `"after":[]`) {
+		t.Fatalf("schema change arrays became null: %s %v", raw, err)
+	}
 }

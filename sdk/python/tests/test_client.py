@@ -16,6 +16,32 @@ class ContractTests(unittest.TestCase):
         client._stub = stub
         return client
 
+    def test_schema_query_and_save_intent_presence(self):
+        sent = []
+        def save(request, **kwargs):
+            sent.append(request)
+            return wire.SaveReply(version=request.expected_workspace_version+1, changes=1)
+        def schema(request, **kwargs):
+            self.assertEqual(request.dataset, "d")
+            return wire.SchemaReply(revision=request.revision if request.HasField("revision") else 1,
+                                    **({"workspace_version": 4} if request.HasField("workspace") else {}),
+                                    fields=[wire.SchemaField(name="id", type="int8", nullable=False, editable=False)])
+        client = self.client(SimpleNamespace(Save=save, Schema=schema))
+        workspace = Workspace(client, "p", WorkspaceInfo("w", 1, 4, "open"))
+        workspace.save_changes([], [geoledger.SchemaEdit("d", [geoledger.AddField("note", "string")])])
+        workspace.save_batch([])
+        workspace.save_changes([], [])
+        self.assertEqual(sent[0].schema_edits.edits[0].add[0].type, "string")
+        self.assertFalse(sent[1].HasField("schema_edits"))
+        self.assertTrue(sent[2].HasField("schema_edits"))
+        self.assertEqual(list(sent[2].schema_edits.edits), [])
+        self.assertEqual([r.expected_workspace_version for r in sent], [4, 5, 6])
+        self.assertEqual(workspace.schema("d")["workspace_version"], 4)
+        result = client.schema("p", "d", revision=7)
+        self.assertEqual(result["revision"], 7)
+        self.assertIsNone(result["workspace_version"])
+        self.assertFalse(result["fields"][0]["editable"])
+
     def test_register_table_preserves_create_dataset_wire_contract(self):
         source = dict(schema="business", table="roads", id_column="road_id", geometry_column="shape")
         sent = []

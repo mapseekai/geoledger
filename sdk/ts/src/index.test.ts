@@ -318,3 +318,38 @@ test("first access failure and retry conflict release intent", async () => {
     assert.equal(workspace.pendingPublication, undefined);
   }
 });
+
+test("schema query and save preserve exact versions and omitted versus empty intent", async () => {
+  const wire = require("../dist/_internal/geoledger/v1/geoledger");
+  const sent = [];
+  const originalSave = wire.GeoLedgerClient.prototype.save;
+  const originalSchema = wire.GeoLedgerClient.prototype.schema;
+  wire.GeoLedgerClient.prototype.save = (request, callback) => {
+    sent.push(wire.SaveRequest.decode(wire.SaveRequest.encode(request).finish()));
+    callback(null, {version:String(BigInt(request.expectedWorkspaceVersion)+1n), changes:"1", warnings:[]});
+  };
+  wire.GeoLedgerClient.prototype.schema = (request, callback) => callback(null, {
+    revision:request.revision??"1", workspaceVersion:request.workspace===undefined?undefined:"4",
+    fields:[{name:"id",type:"int8",nullable:false,editable:false}],
+  });
+  const client = new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  try {
+    const workspace = new Workspace(client,"p",{id:"w",version:4n,baseRevision:1n,status:"open"});
+    await workspace.saveChanges([],[{dataset:"d",add:[{name:"note",type:"string"}]}]);
+    await workspace.saveBatch([]);
+    await workspace.saveChanges([],[]);
+    assert.equal(sent[0].schemaEdits.edits[0].add[0].type,"string");
+    assert.equal(sent[1].schemaEdits,undefined);
+    assert.deepEqual(sent[2].schemaEdits.edits,[]);
+    assert.deepEqual(sent.map(r=>r.expectedWorkspaceVersion),["4","5","6"]);
+    assert.equal((await workspace.schema("d")).workspaceVersion,4n);
+    const result=await client.schema("p","d",{revision:9007199254740993n});
+    assert.equal(result.revision,9007199254740993n);
+    assert.equal(result.workspaceVersion,undefined);
+    assert.equal(result.fields[0].editable,false);
+  } finally {
+    client.close();
+    wire.GeoLedgerClient.prototype.save=originalSave;
+    wire.GeoLedgerClient.prototype.schema=originalSchema;
+  }
+});

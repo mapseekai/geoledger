@@ -11,6 +11,19 @@ impl WorkspaceRepository for SqlTransaction {
         self.query_opt(&self.lock_sql("SELECT base_revision,version,status FROM gl_workspaces WHERE project=$1 AND id=$2 AND owner=$3",if write {"FOR UPDATE"}else{"FOR SHARE"}), &[&project,&workspace,&subject])
     }
 
+    fn workspace_publication_revision(
+        &mut self,
+        project: &str,
+        workspace: &str,
+    ) -> Result<Option<i64>> {
+        self.query_opt(
+            "SELECT revision FROM gl_commits WHERE project=$1 AND workspace=$2",
+            &[&project, &workspace],
+        )?
+        .map(|row| row.get(0usize))
+        .transpose()
+    }
+
     fn advance_workspace(&mut self, project: &str, workspace: &str, status: &str) -> Result<Row> {
         self.query_one("UPDATE gl_workspaces SET version=version+1,status=$3 WHERE project=$1 AND id=$2 RETURNING version", &[&project, &workspace, &status])
     }
@@ -86,12 +99,19 @@ impl WorkspaceRepository for SqlTransaction {
         key: &str,
         base: i64,
     ) -> Result<Row> {
-        // Stale SQLite statistics must not turn a single-key lookup into a history scan.
-        let history = match self.0.backend {
-            Backend::Sqlite(_) => "gl_history h INDEXED BY sqlite_autoindex_gl_history_1",
-            Backend::Postgis(_) => "gl_history h",
-        };
-        self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL),h.properties,h.geometry_json FROM (SELECT 1) seed LEFT JOIN (SELECT properties,geometry_json FROM {history} WHERE h.project=$1 AND h.dataset=$3 AND h.feature_id=$4 AND h.valid_from<=$5 AND (h.valid_to IS NULL OR h.valid_to>$5) ORDER BY h.valid_from DESC LIMIT 1) h ON true", self.workspace_key_table()), &[&project, &workspace, &dataset, &key, &base])
+        let resolved: bool = self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL)",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?.get(0usize)?;
+        let value = super::query::version_cells(FeatureRepository::feature_at(
+            self, project, dataset, key, base,
+        )?);
+        let draft = self.query_opt(&format!("SELECT properties,geometry_json FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?;
+        Ok(Row::new(vec![
+            Cell::Bool(resolved),
+            value[0].clone(),
+            value[1].clone(),
+            draft.as_ref().map_or(Cell::Null, |r| r.0[0].clone()),
+            draft.as_ref().map_or(Cell::Null, |r| r.0[1].clone()),
+            Cell::Bool(draft.is_some()),
+        ]))
     }
 
     fn remove_delta(
@@ -118,9 +138,69 @@ impl WorkspaceRepository for SqlTransaction {
     }
 
     fn workspace_summary(&mut self, project: &str, workspace: &str, base: i64) -> Result<Vec<Row>> {
-        // Aggregate in primary-key dataset order before joining names. Grouping by
-        // names too makes SQLite sort full feature payloads into a temporary B-tree.
-        self.query("WITH counts AS MATERIALIZED (SELECT c.dataset,SUM(CASE WHEN b.properties IS NULL AND c.properties IS NOT NULL THEN 1 ELSE 0 END) AS added,SUM(CASE WHEN b.properties IS NOT NULL AND c.properties IS NULL THEN 1 ELSE 0 END) AS deleted,SUM(CASE WHEN b.properties IS NOT NULL AND c.properties IS NOT NULL THEN 1 ELSE 0 END) AS modified FROM gl_workspace_changes c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) WHERE c.project=$1 AND c.workspace=$2 AND (c.properties IS NOT NULL OR b.properties IS NOT NULL) GROUP BY c.dataset) SELECT c.dataset,d.name,c.added,c.deleted,c.modified FROM counts c JOIN gl_datasets d ON d.project=$1 AND d.id=c.dataset ORDER BY c.dataset", &[&project,&workspace,&base])
+        let (status, revision) = self.workspace_terminal(project, workspace)?;
+        if status == "discarded" {
+            return Ok(Vec::new());
+        }
+        let (changes, scope, draft) = if status == "published" {
+            if revision.is_none() {
+                return Err(Error::new(500, "missing workspace publication"));
+            }
+            // Workspace Diff compares with its base, not the commit's preceding HEAD.
+            (
+                "gl_commit_changes",
+                "c.revision=(SELECT revision FROM gl_commits WHERE project=$1 AND workspace=$2)",
+                "c.has_after",
+            )
+        } else {
+            (
+                "gl_workspace_changes",
+                "c.workspace=$2",
+                "c.properties IS NOT NULL",
+            )
+        };
+        let mut result = Vec::new();
+        let datasets=self.query(&format!("SELECT DISTINCT c.dataset,d.name FROM {changes} c JOIN gl_datasets d ON d.project=c.project AND d.id=c.dataset WHERE c.project=$1 AND {scope} ORDER BY c.dataset"),&[&project,&workspace])?;
+        for dataset in datasets {
+            let id: String = dataset.get(0usize)?;
+            let name: String = dataset.get(1usize)?;
+            let metadata = self
+                .dataset_exists(project, &id)?
+                .ok_or_else(|| Error::new(500, "missing dataset"))?;
+            let current = if let Some(table) = metadata.get::<_, Option<String>>(5usize)? {
+                super::dataset::check_table_name(&table)?;
+                format!(
+                    "EXISTS(SELECT 1 FROM {table} t WHERE t.feature_id=c.feature_id AND t.valid_from<=$3)"
+                )
+            } else {
+                let source: String = metadata
+                    .get::<_, Option<String>>(3usize)?
+                    .ok_or_else(|| Error::new(500, "missing source"))?;
+                let source: super::tables::Source = crate::codec::stored(&source)?;
+                self.ensure_source_clean(project, &id, &source)?;
+                let table = super::tables::relation(&source.table);
+                let key = super::tables::quote(&source.table.id_column);
+                let column = source.table.id_column.replace('\'', "''");
+                let start: i64 = metadata.get(6usize)?;
+                format!(
+                    "EXISTS(SELECT 1 FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$4 AND v.feature_id=t.{key}::text COLLATE \"C\" WHERE t.{key}=(jsonb_populate_record(NULL::{table},jsonb_build_object('{column}',c.feature_id))).{key} AND coalesce(v.valid_from,{start})<=$3)"
+                )
+            };
+            let row=self.query_one(&format!("WITH changes AS MATERIALIZED (SELECT c.feature_id,{draft} AS draft,(EXISTS(SELECT 1 FROM gl_history h WHERE h.project=$1 AND h.dataset=$4 AND h.feature_id=c.feature_id AND h.valid_from<=$3 AND h.valid_to>$3 AND h.properties IS NOT NULL) OR {current}) AS before FROM {changes} c WHERE c.project=$1 AND {scope} AND c.dataset=$4) SELECT coalesce(sum(CASE WHEN NOT before AND draft THEN 1 ELSE 0 END),0),coalesce(sum(CASE WHEN before AND NOT draft THEN 1 ELSE 0 END),0),coalesce(sum(CASE WHEN before AND draft THEN 1 ELSE 0 END),0) FROM changes"), &[&project,&workspace,&base,&id])?;
+            let added: i64 = row.get(0usize)?;
+            let deleted: i64 = row.get(1usize)?;
+            let modified: i64 = row.get(2usize)?;
+            if added + deleted + modified > 0 {
+                result.push(Row::new(vec![
+                    Cell::Text(id),
+                    Cell::Text(name),
+                    Cell::Integer(added),
+                    Cell::Integer(deleted),
+                    Cell::Integer(modified),
+                ]));
+            }
+        }
+        Ok(result)
     }
 
     fn diff_page(
@@ -132,7 +212,50 @@ impl WorkspaceRepository for SqlTransaction {
         after_key: &str,
         limit: i64,
     ) -> Result<Vec<Row>> {
-        self.query("WITH batch AS MATERIALIZED (SELECT project,dataset,feature_id,properties,geometry_json,resolved_head,resolution_stale FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($4,$5) ORDER BY dataset,feature_id LIMIT $6) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,b.properties,b.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &after_dataset, &after_key, &limit])
+        let (status, revision) = self.workspace_terminal(project, workspace)?;
+        if status == "discarded" {
+            return Ok(Vec::new());
+        }
+        if status == "published" {
+            let Some(revision) = revision else {
+                return Ok(Vec::new());
+            };
+            let keys = self.query("SELECT dataset,feature_id FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT $5", &[&project,&revision,&after_dataset,&after_key,&limit])?;
+            let mut rows = Vec::with_capacity(keys.len());
+            for key in keys {
+                let dataset: String = key.get(0usize)?;
+                let feature_id: String = key.get(1usize)?;
+                let published = super::query::version_cells(FeatureRepository::feature_at(
+                    self,
+                    project,
+                    &dataset,
+                    &feature_id,
+                    revision,
+                )?);
+                let original = super::query::version_cells(FeatureRepository::feature_at(
+                    self,
+                    project,
+                    &dataset,
+                    &feature_id,
+                    base,
+                )?);
+                let mut row = Row::new(vec![Cell::Text(dataset), Cell::Text(feature_id)]);
+                row.0.extend(published);
+                row.0.extend(original);
+                rows.push(row);
+            }
+            return Ok(rows);
+        }
+        let mut rows = self.query("SELECT dataset,feature_id,properties,geometry_json FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT $5", &[&project,&workspace,&after_dataset,&after_key,&limit])?;
+        for row in &mut rows {
+            let dataset: String = row.get(0usize)?;
+            let key: String = row.get(1usize)?;
+            row.0
+                .extend(super::query::version_cells(FeatureRepository::feature_at(
+                    self, project, &dataset, &key, base,
+                )?));
+        }
+        Ok(rows)
     }
 
     fn diff_has_after(
@@ -142,6 +265,17 @@ impl WorkspaceRepository for SqlTransaction {
         after_dataset: &str,
         after_key: &str,
     ) -> Result<bool> {
+        let (status, revision) = self.workspace_terminal(project, workspace)?;
+        if status == "discarded" {
+            return Ok(false);
+        }
+        if status == "published" {
+            return if let Some(revision) = revision {
+                self.query_one("SELECT EXISTS(SELECT 1 FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4))", &[&project,&revision,&after_dataset,&after_key])?.get(0usize)
+            } else {
+                Ok(false)
+            };
+        }
         self.query_one("SELECT EXISTS(SELECT 1 FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($3,$4))", &[&project, &workspace, &after_dataset, &after_key])?.get(0usize)
     }
 
@@ -175,6 +309,15 @@ impl WorkspaceRepository for SqlTransaction {
 }
 
 impl SqlTransaction {
+    fn workspace_terminal(
+        &mut self,
+        project: &str,
+        workspace: &str,
+    ) -> Result<(String, Option<i64>)> {
+        let row = self.query_one("SELECT w.status,(SELECT c.revision FROM gl_commits c WHERE c.project=w.project AND c.workspace=w.id) FROM gl_workspaces w WHERE w.project=$1 AND w.id=$2", &[&project,&workspace])?;
+        Ok((row.get(0usize)?, row.get(1usize)?))
+    }
+
     pub(super) fn workspace_key_table(&self) -> &'static str {
         match self.0.backend {
             // ANALYZE on a new database can retain a one-row estimate after drafts grow.

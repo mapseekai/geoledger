@@ -10,6 +10,13 @@ test("summary uses one aggregate call without loading names or feature bodies", 
     datasets: [
       { id: "d", name: "LUCC", added: 9384n, deleted: 0n, modified: 0n },
     ],
+    schemaChanges: [
+      {
+        dataset: "d",
+        before: [],
+        after: [{ name: "note", type: "text", nullable: true, editable: true }],
+      },
+    ],
     version: 503n,
   };
   const client = stubConsoleClient({

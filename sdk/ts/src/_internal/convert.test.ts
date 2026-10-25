@@ -25,8 +25,8 @@ test("query page decoders preserve opaque and 64-bit continuations and terminal 
   const convert = require("../../dist/_internal/convert");
   for (const nextAfter of [undefined, "opaque/%/cursor"]) {
     for (const [decode, value] of [
-      [convert.decodeDiff, { baseRevision: "1", version: "2", changes: [], nextAfter }],
-      [convert.decodeCommitChanges, { revision: "3", changes: [], nextAfter }],
+      [convert.decodeDiff, { baseRevision: "1", version: "2", changes: [], schemaChanges: [], nextAfter }],
+      [convert.decodeCommitChanges, { revision: "3", changes: [], schemaChanges: [], nextAfter }],
     ]) {
       const result = decode(value);
       assert.equal(result.nextAfter, nextAfter);
@@ -43,4 +43,13 @@ test("query page decoders preserve opaque and 64-bit continuations and terminal 
       assert.equal(Object.hasOwn(result, "nextAfter"), nextAfter !== undefined);
     }
   }
+});
+
+test("schema-only changes remain visible in draft, commit and summary models", () => {
+  const convert=require("../../dist/_internal/convert");
+  const change={dataset:"d",before:[],after:[{name:"note",type:"text",nullable:true,editable:true}]};
+  const diff=convert.decodeDiff({baseRevision:"1",version:"2",changes:[],schemaChanges:[change]});
+  const commit=convert.decodeCommitChanges({revision:"2",changes:[],schemaChanges:[change]});
+  const summary=convert.decodeChangeSummary({total:{added:"0",deleted:"0",modified:"0"},datasets:[],schemaChanges:[change]});
+  for(const result of [diff,commit,summary]) assert.deepEqual(result.schemaChanges,[change]);
 });

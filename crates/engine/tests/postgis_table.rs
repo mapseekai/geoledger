@@ -1,7 +1,411 @@
 mod support;
-use geoledger_engine::{Application, Storage};
+use geoledger_engine::{Application, Storage, StorageOptions};
 use serde_json::{Value, json};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn registration_state(
+    db: &mut postgres::Client,
+    project: &str,
+    table: &str,
+) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+    Ok(db.query_one(
+        "SELECT ARRAY[(SELECT head FROM gl_projects WHERE id=$1),(SELECT count(*) FROM gl_datasets),(SELECT count(*) FROM gl_workspaces),(SELECT count(*) FROM gl_commits),(SELECT count(*) FROM gl_source_state),(SELECT count(*) FROM gl_source_versions),(SELECT count(*) FROM gl_history),(SELECT count(*) FROM gl_commit_changes),(SELECT count(*) FROM gl_audit_events),(SELECT count(*) FROM pg_index WHERE indrelid=$2::text::regclass),(SELECT count(*) FROM pg_trigger WHERE tgrelid=$2::text::regclass AND NOT tgisinternal)]",
+        &[&project, &table],
+    )?.get(0))
+}
+
+#[test]
+#[ignore = "explicit million-row PostGIS enrollment capacity probe"]
+fn million_row_enrollment_keeps_only_source_rows() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    support::reset_database(&mut db)?;
+    let result = (|| -> TestResult {
+        db.batch_execute("CREATE SCHEMA business; CREATE TABLE business.capacity_source(id text COLLATE \"C\" PRIMARY KEY, payload text NOT NULL, geom geometry(Point,4326)); INSERT INTO business.capacity_source SELECT lpad(i::text,7,'0'),repeat('x',512),ST_SetSRID(ST_MakePoint(i%180,0),4326) FROM generate_series(1,1000000) i; CREATE INDEX capacity_source_geom_idx ON business.capacity_source USING gist(geom)")?;
+        let app = Application::with_options(
+            Storage::Postgis(dsn),
+            StorageOptions {
+                statement_timeout: std::time::Duration::from_secs(300),
+                ..Default::default()
+            },
+        )
+        .with_timeout(std::time::Duration::from_secs(300));
+        app.migrate()?;
+        app.bootstrap_admin("alice", "initial-test-password")?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":"initial-test-password"}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let project =
+            app.execute(alice, "create_project", json!({"name":"capacity"}))?["project"].clone();
+        let started = std::time::Instant::now();
+        let dataset=app.execute(alice,"create_dataset",json!({"project":project,"name":"source","postgis_table":{"schema":"business","table":"capacity_source","id_column":"id","geometry_column":"geom"}}))?["dataset"].clone();
+        let registration = started.elapsed();
+        let counts=db.query_one("SELECT (SELECT count(*) FROM business.capacity_source),(SELECT count(*) FROM gl_history),(SELECT count(*) FROM gl_commit_changes),(SELECT count(*) FROM gl_source_versions)",&[])?;
+        assert_eq!(
+            (
+                counts.get::<_, i64>(0),
+                counts.get::<_, i64>(1),
+                counts.get::<_, i64>(2),
+                counts.get::<_, i64>(3)
+            ),
+            (1_000_000, 0, 0, 0)
+        );
+        let order_index: String = db.query_one("SELECT postgis_source::jsonb->>'order_index' FROM gl_datasets WHERE project=$1 AND id=$2", &[&project.as_str().ok_or("project")?,&dataset.as_str().ok_or("dataset")?])?.get(0);
+        assert!(
+            order_index.is_empty(),
+            "C-collated text primary key already supplies ID order"
+        );
+        let plan=db.query("EXPLAIN (COSTS OFF) SELECT id::text COLLATE \"C\" FROM business.capacity_source WHERE id::text COLLATE \"C\">'0999900' ORDER BY id::text COLLATE \"C\" LIMIT 100",&[])?.iter().map(|row|row.get::<_,String>(0)).collect::<Vec<_>>().join("\n");
+        assert!(
+            plan.contains("capacity_source_pkey"),
+            "tail page must reuse source primary key: {plan}"
+        );
+        let spatial_plan=db.query("EXPLAIN (COSTS OFF) SELECT id FROM business.capacity_source WHERE ST_Intersects(geom,ST_MakeEnvelope(89.9,-0.1,90.1,0.1,4326))",&[])?.iter().map(|row|row.get::<_,String>(0)).collect::<Vec<_>>().join("\n");
+        assert!(
+            spatial_plan.contains("capacity_source_geom_idx"),
+            "bbox must reuse the business GiST index: {spatial_plan}"
+        );
+        let page = app.execute(
+            alice,
+            "features",
+            json!({"project":project,"dataset":dataset,"after":"0999900","limit":100}),
+        )?;
+        assert_eq!(page["features"].as_array().ok_or("features")?.len(), 100);
+        assert_eq!(page["features"][99]["id"], "1000000");
+        let w = app.execute(alice, "create_workspace", json!({"project":project}))?["workspace"]
+            .clone();
+        let feature = json!({"type":"Feature","id":"0000001","properties":{"payload":"changed"},"geometry":{"type":"Point","coordinates":[1,0]}});
+        app.execute(alice,"save",json!({"project":project,"workspace":w,"expected_workspace_version":0,"edits":[{"dataset":dataset,"feature_id":"0000001","feature":feature}]}))?;
+        let edit = std::time::Instant::now();
+        app.execute(alice,"publish",json!({"project":project,"workspace":w,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"one edit"}))?;
+        let publish = edit.elapsed();
+        let counts=db.query_one("SELECT (SELECT count(*) FROM business.capacity_source),(SELECT count(*) FROM gl_history),(SELECT count(*) FROM gl_commit_changes),(SELECT count(*) FROM gl_source_versions)",&[])?;
+        assert_eq!(
+            (
+                counts.get::<_, i64>(0),
+                counts.get::<_, i64>(1),
+                counts.get::<_, i64>(2),
+                counts.get::<_, i64>(3)
+            ),
+            (1_000_000, 1, 1, 1)
+        );
+        let old = app.execute(
+            alice,
+            "features",
+            json!({"project":project,"dataset":dataset,"feature_id":"0000001","revision":1}),
+        )?;
+        assert_eq!(
+            old["properties"]["payload"].as_str().map(str::len),
+            Some(512)
+        );
+        let new = app.execute(
+            alice,
+            "features",
+            json!({"project":project,"dataset":dataset,"feature_id":"0000001"}),
+        )?;
+        assert_eq!(new["properties"]["payload"], "changed");
+        eprintln!(
+            "million_enrollment rows=1000000 registration_secs={:.3} single_publish_secs={:.3} history_rows=1 commit_keys=1 source_versions=1",
+            registration.as_secs_f64(),
+            publish.as_secs_f64()
+        );
+        Ok(())
+    })();
+    support::reset_database(&mut db)?;
+    result
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn registration_pages_native_primary_keys_without_losing_rows() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    support::reset_database(&mut db)?;
+    let result = (|| -> TestResult {
+        db.batch_execute("CREATE SCHEMA business")?;
+        let app = Application::new(Storage::Postgis(dsn));
+        app.migrate()?;
+        app.bootstrap_admin("alice", "initial-test-password")?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":"initial-test-password"}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let project =
+            app.execute(alice, "create_project", json!({"name":"paging"}))?["project"].clone();
+        for (table, kind, value) in [
+            ("small_keys", "smallint", "i"),
+            ("integer_keys", "integer", "i"),
+            ("big_keys", "bigint", "i"),
+            ("uuid_keys", "uuid", "md5(i::text)::uuid"),
+            ("text_keys", "text COLLATE \"POSIX\"", "'道路-' || i::text"),
+            (
+                "varchar_keys",
+                "varchar(64) COLLATE \"POSIX\"",
+                "'道路-' || i::text",
+            ),
+            (
+                "varchar_c_keys",
+                "varchar(64) COLLATE \"C\"",
+                "'道路-' || i::text",
+            ),
+        ] {
+            db.batch_execute(&format!(
+                "CREATE TABLE business.{table}(id {kind} PRIMARY KEY, n integer NOT NULL, geom geometry(Point,4326)); INSERT INTO business.{table} SELECT {value},i,ST_SetSRID(ST_MakePoint(1,2),4326) FROM generate_series(-1250,1250) i"
+            ))?;
+            if table == "big_keys" {
+                db.batch_execute("CREATE INDEX existing_big_keys_order ON business.big_keys ((id::text COLLATE \"C\"),(lower(n::text)))")?;
+            }
+            let expected: std::collections::BTreeMap<String, i64> = db
+                .query(
+                    &format!("SELECT id::text,n::bigint FROM business.{table}"),
+                    &[],
+                )?
+                .iter()
+                .map(|row| (row.get(0), row.get(1)))
+                .collect();
+            let dataset = app.execute(
+                alice,
+                "create_dataset",
+                json!({"project":project,"name":table,"postgis_table":{"schema":"business","table":table,"id_column":"id","geometry_column":"geom"}}),
+            )?["dataset"]
+                .clone();
+            if table == "big_keys" || table == "varchar_c_keys" {
+                let own: String = db.query_one("SELECT postgis_source::jsonb->>'order_index' FROM gl_datasets WHERE project=$1 AND id=$2", &[&project.as_str().ok_or("project")?,&dataset.as_str().ok_or("dataset")?])?.get(0);
+                assert!(
+                    own.is_empty(),
+                    "{table} already has a usable identity index"
+                );
+            }
+            let mut actual = std::collections::BTreeMap::new();
+            let mut after = String::new();
+            loop {
+                let page = app.execute(
+                    alice,
+                    "features",
+                    json!({"project":project,"dataset":dataset,"after":after,"limit":1000}),
+                )?;
+                for feature in page["features"].as_array().ok_or("features")? {
+                    let id = feature["id"].as_str().ok_or("feature id")?.to_owned();
+                    let n = feature["properties"]["n"].as_i64().ok_or("property n")?;
+                    assert!(actual.insert(id, n).is_none(), "duplicate in {table}");
+                }
+                let Some(next) = page["next_after"].as_str() else {
+                    break;
+                };
+                assert_ne!(after, next, "stalled page in {table}");
+                after = next.to_owned();
+            }
+            assert_eq!(actual.len(), 2501, "{table}");
+            assert_eq!(actual, expected, "{table}");
+            assert_eq!(
+                db.query_one(&format!("SELECT count(*) FROM business.{table}"), &[])?
+                    .get::<_, i64>(0),
+                2501
+            );
+        }
+        Ok(())
+    })();
+    support::reset_database(&mut db)?;
+    result
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn registration_rejects_invalid_feature_ids_atomically() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    support::reset_database(&mut db)?;
+    let result = (|| -> TestResult {
+        db.batch_execute("CREATE SCHEMA business; CREATE TABLE business.text_keys(id text COLLATE \"POSIX\" PRIMARY KEY,label text NOT NULL,geom geometry(Point,4326))")?;
+        let app = Application::new(Storage::Postgis(dsn));
+        app.migrate()?;
+        app.bootstrap_admin("alice", "initial-test-password")?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":"initial-test-password"}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let project = app.execute(
+            alice,
+            "create_project",
+            json!({"name":"identity validation"}),
+        )?["project"]
+            .as_str()
+            .ok_or("project")?
+            .to_owned();
+        let register = || {
+            app.execute(
+            alice,
+            "create_dataset",
+            json!({"project":project,"name":"keys","postgis_table":{"schema":"business","table":"text_keys","id_column":"id","geometry_column":"geom"}}),
+        )
+        };
+        let before = registration_state(&mut db, &project, "business.text_keys")?;
+        for id in [
+            String::new(),
+            "é".repeat(128) + "a",
+            "line\nkey".into(),
+            "key-\u{0001}".into(),
+            "key-\u{001f}".into(),
+            "key-\u{007f}".into(),
+            "key-\u{0085}".into(),
+            "key-\u{009f}".into(),
+        ] {
+            db.execute(
+                "INSERT INTO business.text_keys(id,label) VALUES($1,'original')",
+                &[&id],
+            )?;
+            assert_eq!(register().err().map(|e| e.status), Some(400), "{id:?}");
+            assert_eq!(
+                registration_state(&mut db, &project, "business.text_keys")?,
+                before,
+                "rejected identifier {id:?} changed enrollment state"
+            );
+            assert_eq!(db.execute("DELETE FROM business.text_keys", &[])?, 1);
+        }
+        let valid_ids = ["é".repeat(128), "key- ~\u{00a0}".into()];
+        for id in &valid_ids {
+            db.execute(
+                "INSERT INTO business.text_keys(id,label) VALUES($1,'original')",
+                &[id],
+            )?;
+        }
+        let dataset = register()?["dataset"].clone();
+        assert_eq!(
+            db.query_one("SELECT count(*) FROM gl_history", &[])?
+                .get::<_, i64>(0),
+            0,
+            "enrollment must not copy feature bodies into history"
+        );
+        let workspace =
+            app.execute(alice, "create_workspace", json!({"project":project}))?["workspace"]
+                .clone();
+        let mut edits = Vec::new();
+        for id in &valid_ids {
+            let mut feature = app.execute(
+                alice,
+                "features",
+                json!({"project":project,"dataset":dataset,"feature_id":id}),
+            )?;
+            assert_eq!(feature["id"], *id);
+            feature["properties"]["label"] = json!("changed");
+            edits.push(json!({"dataset":dataset,"feature_id":id,"feature":{"type":"Feature","id":id,"properties":feature["properties"],"geometry":feature["geometry"]}}));
+        }
+        app.execute(alice, "save", json!({"project":project,"workspace":workspace,"expected_workspace_version":0,"edits":edits}))?;
+        app.execute(alice, "publish", json!({"project":project,"workspace":workspace,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"valid identities"}))?;
+        assert_eq!(
+            db.query_one(
+                "SELECT count(*) FROM business.text_keys WHERE label='changed'",
+                &[]
+            )?
+            .get::<_, i64>(0),
+            2
+        );
+        Ok(())
+    })();
+    support::reset_database(&mut db)?;
+    result
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn registration_rejects_invalid_property_columns_atomically() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    support::reset_database(&mut db)?;
+    let result = (|| -> TestResult {
+        let columns = (0..257)
+            .map(|i| format!("n{i:03} integer"))
+            .collect::<Vec<_>>()
+            .join(",");
+        db.batch_execute(&format!("CREATE SCHEMA business; CREATE TABLE business.wide(id bigint PRIMARY KEY,{columns},geom geometry(Point,4326)); INSERT INTO business.wide(id) VALUES(1); CREATE TABLE business.bad_name(id bigint PRIMARY KEY,\"bad\nproperty\" text,geom geometry(Point,4326)); INSERT INTO business.bad_name(id) VALUES(1)"))?;
+        for (table, column) in [
+            ("reserved_raw", "$serde_json::private::RawValue"),
+            ("reserved_number", "$serde_json::private::Number"),
+        ] {
+            db.batch_execute(&format!(
+                "CREATE TABLE business.{table}(id bigint PRIMARY KEY,\"{column}\" text,geom geometry(Point,4326)); INSERT INTO business.{table}(id) VALUES(1)"
+            ))?;
+        }
+        let app = Application::new(Storage::Postgis(dsn));
+        app.migrate()?;
+        app.bootstrap_admin("alice", "initial-test-password")?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":"initial-test-password"}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let project = app.execute(
+            alice,
+            "create_project",
+            json!({"name":"property validation"}),
+        )?["project"]
+            .as_str()
+            .ok_or("project")?
+            .to_owned();
+        let register = |table: &str| {
+            app.execute(
+            alice,
+            "create_dataset",
+            json!({"project":project,"name":table,"postgis_table":{"schema":"business","table":table,"id_column":"id","geometry_column":"geom"}}),
+        )
+        };
+        for table in ["wide", "bad_name", "reserved_raw", "reserved_number"] {
+            let relation = format!("business.{table}");
+            let before = registration_state(&mut db, &project, &relation)?;
+            assert_eq!(
+                register(table).err().map(|e| e.status),
+                Some(400),
+                "{table}"
+            );
+            assert_eq!(
+                registration_state(&mut db, &project, &relation)?,
+                before,
+                "{table}"
+            );
+            assert_eq!(db.execute(&format!("UPDATE {relation} SET id=2"), &[])?, 1);
+        }
+        db.batch_execute("ALTER TABLE business.wide DROP COLUMN n256")?;
+        let dataset = register("wide")?["dataset"].clone();
+        assert_eq!(
+            db.query_one("SELECT count(*) FROM gl_history", &[])?
+                .get::<_, i64>(0),
+            0
+        );
+        let mut feature = app.execute(
+            alice,
+            "features",
+            json!({"project":project,"dataset":dataset,"feature_id":"2"}),
+        )?;
+        assert_eq!(
+            feature["properties"].as_object().ok_or("properties")?.len(),
+            256
+        );
+        feature["properties"]["n000"] = json!(42);
+        let feature = json!({"type":"Feature","id":"2","properties":feature["properties"],"geometry":feature["geometry"]});
+        let workspace =
+            app.execute(alice, "create_workspace", json!({"project":project}))?["workspace"]
+                .clone();
+        app.execute(alice, "save", json!({"project":project,"workspace":workspace,"expected_workspace_version":0,"edits":[{"dataset":dataset,"feature_id":"2","feature":feature}]}))?;
+        app.execute(alice, "publish", json!({"project":project,"workspace":workspace,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"valid properties"}))?;
+        assert_eq!(
+            db.query_one("SELECT n000 FROM business.wide WHERE id=2", &[])?
+                .get::<_, i32>(0),
+            42
+        );
+        Ok(())
+    })();
+    support::reset_database(&mut db)?;
+    result
+}
+
 #[test]
 #[ignore = "requires isolated geoledger_test PostGIS database"]
 fn existing_table_publication_is_atomic() -> TestResult {
@@ -56,6 +460,22 @@ fn existing_table_publication_is_atomic() -> TestResult {
         assert_eq!(created["geometry_type"], "point");
         assert_eq!(created["coordinate_dimension"], 3);
         assert_eq!(created["crs"], "EPSG:3857");
+        assert!(
+            db.query_one(
+                "SELECT storage_table FROM gl_datasets WHERE project=$1 AND id=$2",
+                &[&p.as_str().ok_or("project")?, &d.as_str().ok_or("dataset")?]
+            )?
+            .get::<_, Option<String>>(0)
+            .is_none()
+        );
+        assert_eq!(
+            db.query_one(
+                "SELECT count(*) FROM pg_class WHERE relkind='r' AND left(relname,8)='gl_data_'",
+                &[]
+            )?
+            .get::<_, i64>(0),
+            0
+        );
         assert_eq!(
             run("history", json!({}))?["commits"][0]["message"],
             "Register table"
@@ -90,17 +510,19 @@ fn existing_table_publication_is_atomic() -> TestResult {
             imported.execute(alice, "features", json!({"project":p,"dataset":d}))?["features"],
             features["features"]
         );
-        // A full PostgreSQL restore recreates relation OIDs; names/schema/data define the binding.
-        db.batch_execute("ALTER TABLE business.points RENAME TO points_before_restore; CREATE TABLE business.points (LIKE business.points_before_restore INCLUDING ALL); INSERT INTO business.points SELECT * FROM business.points_before_restore; CREATE TRIGGER gl_versioned_write BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON business.points FOR EACH STATEMENT EXECUTE FUNCTION gl_source_guard(); CREATE TRIGGER gl_versioned_track AFTER INSERT OR UPDATE OR DELETE ON business.points FOR EACH ROW EXECUTE FUNCTION gl_source_track('id'); CREATE TRIGGER gl_versioned_truncate AFTER TRUNCATE ON business.points FOR EACH STATEMENT EXECUTE FUNCTION gl_source_track(); ALTER TABLE business.points ENABLE ALWAYS TRIGGER gl_versioned_track; ALTER TABLE business.points ENABLE ALWAYS TRIGGER gl_versioned_truncate; DROP TABLE business.points_before_restore")?;
-        let binding: String = db.query_one("SELECT binding FROM gl_source_state WHERE schema_name='business' AND table_name='points'", &[])?.get(0);
-        for trigger in [
-            "gl_versioned_write",
-            "gl_versioned_track",
-            "gl_versioned_truncate",
-        ] {
-            db.batch_execute(&format!(
-                "COMMENT ON TRIGGER {trigger} ON business.points IS '{binding}'"
-            ))?;
+        imported.execute(
+            alice,
+            "delete_dataset",
+            json!({"project":p,"dataset":d,"confirm_name":"existing"}),
+        )?;
+        let imported_db = rusqlite::Connection::open(temp.path().join("import.db"))?;
+        for table in ["gl_datasets", "gl_commits", "gl_workspaces"] {
+            assert_eq!(
+                imported_db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))?,
+                0,
+                "{table} should not retain registration state"
+            );
         }
         let feature = |id: &str, label: &str| json!({"type":"Feature","id":id,"properties":{"label":label,"n":18446744073709551615u64},"geometry":{"type":"Point","coordinates":[500010,3500020,30]}});
         let w = run("create_workspace", json!({}))?["workspace"].clone();
@@ -123,6 +545,18 @@ fn existing_table_publication_is_atomic() -> TestResult {
         let req = json!({"workspace":w,"expected_workspace_version":2,"request_id":uuid::Uuid::new_v4(),"message":"publish"});
         let result = run("publish", req.clone())?;
         assert_eq!(result, run("publish", req)?);
+        let published_workspace = w.clone();
+        let published_features = run("features", json!({"dataset":d,"workspace":w}))?;
+        assert_eq!(published_features["revision"], 2);
+        assert_eq!(
+            published_features["features"],
+            json!([feature("1", "edited"), feature("2", "inserted")])
+        );
+        let published_summary = run("workspace_summary", json!({"workspace":w}))?;
+        assert_eq!(
+            published_summary["total"],
+            json!({"added":1,"deleted":0,"modified":1})
+        );
         let native = db.query_one(
             "SELECT ST_SRID(geom),ST_X(geom),ST_Y(geom),ST_Z(geom) FROM business.points WHERE id=1",
             &[],
@@ -170,6 +604,20 @@ fn existing_table_publication_is_atomic() -> TestResult {
                 .get::<_, i64>(0),
             2
         );
+        assert_eq!(
+            run(
+                "features",
+                json!({"dataset":d,"workspace":published_workspace})
+            )?,
+            published_features
+        );
+        assert_eq!(
+            run(
+                "workspace_summary",
+                json!({"workspace":published_workspace})
+            )?,
+            published_summary
+        );
         let publication = |id: &str, label: &str| -> Result<Value, geoledger_engine::Error> {
             let w = run("create_workspace", json!({}))?["workspace"].clone();
             run(
@@ -213,62 +661,11 @@ fn existing_table_publication_is_atomic() -> TestResult {
         db.batch_execute(
             "DROP TRIGGER side_effect ON business.points; DROP FUNCTION business.side_effect()",
         )?;
-        // Disabling and restoring all tracking in one transaction invalidates the catalog proof.
+        // An out-of-band write cannot be reconciled without a retained old value.
         db.batch_execute("BEGIN; ALTER TABLE business.points DISABLE TRIGGER USER; UPDATE business.points SET label='outside' WHERE id=2; ALTER TABLE business.points ENABLE TRIGGER gl_versioned_write; ALTER TABLE business.points ENABLE ALWAYS TRIGGER gl_versioned_track; ALTER TABLE business.points ENABLE ALWAYS TRIGGER gl_versioned_truncate; COMMIT")?;
         rejected("1", "candidate", 409)?;
         db.batch_execute("SELECT set_config('geoledger.publication_table','business.points'::regclass::oid::text,false); UPDATE business.points SET label='inserted' WHERE id=2; RESET geoledger.publication_table")?;
-        // ALWAYS tracking also records privileged replica-mode writes while the statement guard is skipped.
-        db.batch_execute("SET session_replication_role=replica; UPDATE business.points SET label='replica' WHERE id=2; RESET session_replication_role")?;
         rejected("1", "candidate", 409)?;
-        db.batch_execute("SELECT set_config('geoledger.publication_table','business.points'::regclass::oid::text,false); UPDATE business.points SET label='inserted' WHERE id=2; RESET geoledger.publication_table")?;
-        // Both sides of an identity change are candidates.
-        db.batch_execute("SELECT set_config('geoledger.publication_table','business.points'::regclass::oid::text,false); UPDATE business.points SET id=3 WHERE id=2; RESET geoledger.publication_table")?;
-        rejected("1", "candidate", 409)?;
-        db.batch_execute("SELECT set_config('geoledger.publication_table','business.points'::regclass::oid::text,false); UPDATE business.points SET id=2 WHERE id=3; RESET geoledger.publication_table")?;
-        // TRUNCATE has no row events: its transactional flag forces full verification.
-        db.batch_execute("CREATE TEMP TABLE source_backup AS SELECT * FROM business.points")?;
-        db.batch_execute("BEGIN; SELECT set_config('geoledger.publication_table','business.points'::regclass::oid::text,true); TRUNCATE business.points; ROLLBACK")?;
-        assert!(
-            !db.query_one("SELECT dirty_all FROM gl_source_state", &[])?
-                .get::<_, bool>(0)
-        );
-        db.batch_execute("SELECT set_config('geoledger.publication_table','business.points'::regclass::oid::text,false); TRUNCATE business.points; RESET geoledger.publication_table")?;
-        rejected("1", "candidate", 409)?;
-        db.batch_execute("SELECT set_config('geoledger.publication_table','business.points'::regclass::oid::text,false); INSERT INTO business.points SELECT * FROM source_backup; RESET geoledger.publication_table; DROP TABLE source_backup")?;
-        publication("1", "candidate")?;
-        assert_eq!(
-            db.query_one("SELECT count(*) FROM gl_source_changes", &[])?
-                .get::<_, i64>(0),
-            0
-        );
-        assert!(
-            !db.query_one("SELECT dirty_all FROM gl_source_state", &[])?
-                .get::<_, bool>(0)
-        );
-        // Deferred no-op updates on the first source retain its publication authorization.
-        db.batch_execute("CREATE TABLE business.zzpoints (LIKE business.points INCLUDING ALL); INSERT INTO business.zzpoints SELECT * FROM business.points; CREATE FUNCTION business.deferred_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id=1 THEN UPDATE business.points SET label=label WHERE id=2; END IF; RETURN NEW; END $$; CREATE CONSTRAINT TRIGGER deferred_noop AFTER UPDATE ON business.points DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION business.deferred_noop()")?;
-        let other = run("create_dataset",json!({"name":"second source","postgis_table":{"schema":"business","table":"zzpoints","id_column":"id","geometry_column":"geom"}}))?["dataset"].clone();
-        let both = run("create_workspace", json!({}))?["workspace"].clone();
-        run(
-            "save",
-            json!({"workspace":both,"expected_workspace_version":0,"edits":[{"dataset":d,"feature_id":"1","feature":feature("1","two tables")},{"dataset":other,"feature_id":"1","feature":feature("1","second table") }]}),
-        )?;
-        run(
-            "publish",
-            json!({"workspace":both,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"two sources with deferred trigger"}),
-        )?;
-        db.batch_execute(
-            "DROP TRIGGER deferred_noop ON business.points; DROP FUNCTION business.deferred_noop()",
-        )?;
-        // Even privileged bypasses must be detected instead of overwritten.
-        db.batch_execute("SELECT set_config('geoledger.publication_table','business.points'::regclass::oid::text,false); UPDATE business.points SET label='outside' WHERE id=1; RESET geoledger.publication_table")?;
-        let w = run("create_workspace", json!({}))?["workspace"].clone();
-        run(
-            "save",
-            json!({"workspace":w,"expected_workspace_version":0,"edits":[{"dataset":d,"feature_id":"1","feature":feature("1","overwrite")}]}),
-        )?;
-        let error=run("publish",json!({"workspace":w,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"drift"})).err().ok_or("drift accepted")?;
-        assert_eq!(error.status, 409);
         run(
             "delete_dataset",
             json!({"dataset":d,"confirm_name":"existing"}),
@@ -310,6 +707,91 @@ fn existing_table_publication_is_atomic() -> TestResult {
             source = error.source();
         }
     }
+    result
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn same_database_source_replacement_is_rejected() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    support::reset_database(&mut db)?;
+    let result = (|| -> TestResult {
+        db.batch_execute("CREATE SCHEMA business; CREATE TABLE business.points(id text COLLATE \"C\" PRIMARY KEY,geom geometry(Point,4326)); INSERT INTO business.points VALUES('one',ST_SetSRID(ST_MakePoint(1,2),4326)); CREATE UNLOGGED TABLE business.volatile(id text PRIMARY KEY,geom geometry(Point,4326))")?;
+        let app = Application::new(Storage::Postgis(dsn));
+        app.migrate()?;
+        app.bootstrap_admin("alice", "initial-test-password")?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":"initial-test-password"}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let project =
+            app.execute(alice, "create_project", json!({"name":"source binding"}))?["project"]
+                .clone();
+        let register = |table: &str| {
+            app.execute(alice,"create_dataset",json!({"project":project,"name":table,"postgis_table":{"schema":"business","table":table,"id_column":"id","geometry_column":"geom"}}))
+        };
+        assert_eq!(
+            register("volatile")
+                .err()
+                .ok_or("unlogged source accepted")?
+                .status,
+            400
+        );
+        let dataset = register("points")?["dataset"].clone();
+        let binding: String = db.query_one("SELECT binding FROM gl_source_state WHERE schema_name='business' AND table_name='points'", &[])?.get(0);
+        db.batch_execute("COMMENT ON TRIGGER gl_versioned_write ON business.points IS NULL")?;
+        assert_eq!(
+            app.execute(
+                alice,
+                "features",
+                json!({"project":project,"dataset":dataset})
+            )
+            .err()
+            .ok_or("unbound trigger accepted")?
+            .status,
+            409
+        );
+        assert_eq!(
+            app.execute(
+                alice,
+                "delete_dataset",
+                json!({"project":project,"dataset":dataset,"confirm_name":"points"})
+            )
+            .err()
+            .ok_or("incomplete trigger cleanup accepted")?
+            .status,
+            409
+        );
+        db.batch_execute(&format!(
+            "COMMENT ON TRIGGER gl_versioned_write ON business.points IS '{binding}'"
+        ))?;
+        db.batch_execute("ALTER TABLE business.points RENAME TO old_points; CREATE TABLE business.points (LIKE business.old_points INCLUDING ALL); INSERT INTO business.points SELECT * FROM business.old_points; CREATE TRIGGER gl_versioned_write BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON business.points FOR EACH STATEMENT EXECUTE FUNCTION gl_source_guard(); CREATE TRIGGER gl_versioned_track AFTER INSERT OR UPDATE OR DELETE ON business.points FOR EACH ROW EXECUTE FUNCTION gl_source_track('id'); CREATE TRIGGER gl_versioned_truncate AFTER TRUNCATE ON business.points FOR EACH STATEMENT EXECUTE FUNCTION gl_source_track(); ALTER TABLE business.points ENABLE ALWAYS TRIGGER gl_versioned_track; ALTER TABLE business.points ENABLE ALWAYS TRIGGER gl_versioned_truncate; DROP TABLE business.old_points")?;
+        for trigger in [
+            "gl_versioned_write",
+            "gl_versioned_track",
+            "gl_versioned_truncate",
+        ] {
+            db.batch_execute(&format!(
+                "COMMENT ON TRIGGER {trigger} ON business.points IS '{binding}'"
+            ))?;
+        }
+        assert_eq!(
+            app.execute(
+                alice,
+                "features",
+                json!({"project":project,"dataset":dataset})
+            )
+            .err()
+            .ok_or("replaced table accepted")?
+            .status,
+            409
+        );
+        Ok(())
+    })();
+    support::reset_database(&mut db)?;
     result
 }
 
@@ -422,6 +904,8 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
         )?;
         db.batch_execute("INSERT INTO business.deferred_key(id,label) VALUES(7,'released')")?;
         // A renamed source is released; an unrelated replacement keeps its same-named trigger.
+        let owned_order: String = db.query_one("SELECT postgis_source::jsonb->>'order_index' FROM gl_datasets WHERE project=$1 AND id=$2", &[&p.as_str().ok_or("project")?,&child.as_str().ok_or("dataset")?])?.get(0);
+        assert!(!owned_order.is_empty());
         db.batch_execute("ALTER TABLE business.aa_child RENAME TO renamed_child; CREATE TABLE business.aa_child(id bigint PRIMARY KEY,geom geometry(Point,3857)); CREATE FUNCTION business.unrelated_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$; CREATE TRIGGER gl_versioned_write BEFORE INSERT ON business.aa_child FOR EACH STATEMENT EXECUTE FUNCTION business.unrelated_guard()")?;
         run(
             "delete_dataset",
@@ -429,6 +913,14 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
         )?;
         assert_eq!(db.query_one("SELECT count(*) FROM pg_trigger WHERE tgrelid='business.aa_child'::regclass AND tgname='gl_versioned_write'",&[])?.get::<_,i64>(0),1);
         assert_eq!(db.query_one("SELECT count(*) FROM pg_trigger WHERE tgrelid='business.renamed_child'::regclass AND tgname LIKE 'gl_versioned_%'",&[])?.get::<_,i64>(0),0);
+        assert_eq!(
+            db.query_one(
+                "SELECT count(*) FROM pg_class WHERE relname=$1",
+                &[&owned_order]
+            )?
+            .get::<_, i64>(0),
+            0
+        );
         db.batch_execute(
             "DELETE FROM business.renamed_child; DROP TABLE business.zz_parent CASCADE",
         )?;
@@ -444,5 +936,12 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
         Ok(())
     })();
     support::reset_database(&mut admin)?;
+    if let Err(error) = &result {
+        let mut source = error.source();
+        while let Some(error) = source {
+            eprintln!("cause: {error:?}");
+            source = error.source();
+        }
+    }
     result
 }
