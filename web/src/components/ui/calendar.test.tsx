@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import test from "node:test";
-import { fileURLToPath } from "node:url";
+import test, { type TestContext } from "node:test";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DateLib } from "react-day-picker";
@@ -10,7 +8,7 @@ import { Calendar } from "./calendar";
 
 type Scenario = "en-US" | "zh-CN" | "default" | "formatter" | "dateLib";
 
-function renderCalendar(scenario: string) {
+function renderCalendar(scenario: Scenario) {
   const props: ComponentProps<typeof Calendar> = {
     month: new Date(2026, 9, 1, 12),
     today: new Date(2026, 9, 15, 12),
@@ -52,40 +50,52 @@ function renderCalendar(scenario: string) {
   return renderToStaticMarkup(createElement(Calendar, props));
 }
 
-function monthLabels(scenario: Scenario, environment: "en-US" | "zh-CN") {
-  // Intl's default locale is fixed at process startup; use a real child locale.
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      fileURLToPath(import.meta.url),
-      "--render-calendar",
-      scenario,
-    ],
-    {
-      cwd: fileURLToPath(new URL("../../..", import.meta.url)),
-      env: {
-        ...process.env,
-        LANG: environment.replace("-", "_") + ".UTF-8",
-        LC_ALL: environment.replace("-", "_") + ".UTF-8",
-        TZ: "UTC",
-      },
-      encoding: "utf8",
+function monthLabels(
+  context: TestContext,
+  scenario: Scenario,
+  ambientLocale: "en-US" | "zh-CN",
+) {
+  // Control the unit's ambient formatting surface, not the OS/browser locale.
+  // Explicit locales still use real Intl; TestContext restores this proxy.
+  const nativeToLocaleString = Date.prototype.toLocaleString;
+  context.mock.method(
+    Date.prototype,
+    "toLocaleString",
+    function (
+      this: Date,
+      locales?: Intl.LocalesArgument,
+      options?: Intl.DateTimeFormatOptions,
+    ) {
+      return nativeToLocaleString.call(
+        this,
+        locales === undefined || locales === "default"
+          ? ambientLocale
+          : locales,
+        options,
+      );
     },
   );
-  assert.ifError(result.error);
-  assert.equal(result.status, 0, result.stderr);
-  const rendered: {
-    html: string;
-    environmentLocale: string;
-    nativeMonth: string;
-  } = JSON.parse(result.stdout);
-  assert.equal(rendered.environmentLocale, environment);
-  assert.equal(rendered.nativeMonth, environment === "zh-CN" ? "10月" : "Oct");
+  const october = new Date(2026, 9, 1, 12);
+  const ambientMonth = ambientLocale === "zh-CN" ? "10月" : "Oct";
+  for (const locales of [undefined, "default"]) {
+    assert.equal(
+      october.toLocaleString(locales, { month: "short" }),
+      ambientMonth,
+    );
+  }
+  const explicitLocale = ambientLocale === "zh-CN" ? "en-US" : "zh-CN";
+  const options: Intl.DateTimeFormatOptions = {
+    month: "long",
+    year: "numeric",
+    timeZone: "Pacific/Kiritimati",
+  };
+  assert.equal(
+    october.toLocaleString(explicitLocale, options),
+    nativeToLocaleString.call(october, explicitLocale, options),
+  );
   const dropdown =
     /<select\b[^>]*class="[^"]*\brdp-months_dropdown\b[^"]*"[^>]*>([\s\S]*?)<\/select>/.exec(
-      rendered.html,
+      renderCalendar(scenario),
     );
   assert(dropdown, "the real Calendar must render its month dropdown");
   return Array.from(
@@ -94,56 +104,44 @@ function monthLabels(scenario: Scenario, environment: "en-US" | "zh-CN") {
   );
 }
 
-if (process.argv[2] === "--render-calendar") {
-  console.log(
-    JSON.stringify({
-      html: renderCalendar(process.argv[3]),
-      environmentLocale: new Intl.DateTimeFormat().resolvedOptions().locale,
-      nativeMonth: new Date(2026, 9, 1, 12).toLocaleString("default", {
-        month: "short",
-      }),
-    }),
+const englishMonths = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+test("month dropdown uses explicit English locale under controlled Chinese ambient", (context) => {
+  assert.deepEqual(monthLabels(context, "en-US", "zh-CN"), englishMonths);
+});
+test("month dropdown uses explicit Chinese locale under controlled English ambient", (context) => {
+  assert.deepEqual(
+    monthLabels(context, "zh-CN", "en-US"),
+    Array.from({ length: 12 }, (_, index) => `${index + 1}月`),
   );
-} else {
-  const englishMonths = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-  test("month dropdown uses explicit English locale in a Chinese environment", () => {
-    assert.deepEqual(monthLabels("en-US", "zh-CN"), englishMonths);
-  });
-  test("month dropdown uses explicit Chinese locale in an English environment", () => {
-    assert.deepEqual(
-      monthLabels("zh-CN", "en-US"),
-      Array.from({ length: 12 }, (_, index) => `${index + 1}月`),
-    );
-  });
-  test("month dropdown follows DayPicker's English default when locale is omitted", () => {
-    assert.deepEqual(monthLabels("default", "zh-CN"), englishMonths);
-  });
-  test("caller month formatter takes precedence", () => {
-    assert.deepEqual(
-      monthLabels("formatter", "zh-CN"),
-      Array.from({ length: 12 }, (_, index) => `Month ${index + 1}`),
-    );
-  });
-  test("default month formatter uses the configured DateLib and time zone", () => {
-    assert.deepEqual(
-      monthLabels("dateLib", "zh-CN"),
-      Array.from(
-        { length: 12 },
-        (_, index) => `custom:${englishMonths[index]}:-840`,
-      ),
-    );
-  });
-}
+});
+test("month dropdown follows DayPicker's English default when locale is omitted", (context) => {
+  assert.deepEqual(monthLabels(context, "default", "zh-CN"), englishMonths);
+});
+test("caller month formatter takes precedence", (context) => {
+  assert.deepEqual(
+    monthLabels(context, "formatter", "zh-CN"),
+    Array.from({ length: 12 }, (_, index) => `Month ${index + 1}`),
+  );
+});
+test("default month formatter uses the configured DateLib and time zone", (context) => {
+  assert.deepEqual(
+    monthLabels(context, "dateLib", "zh-CN"),
+    Array.from(
+      { length: 12 },
+      (_, index) => `custom:${englishMonths[index]}:-840`,
+    ),
+  );
+});
