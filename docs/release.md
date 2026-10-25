@@ -34,7 +34,7 @@ Release 查询使用带认证、分页的 releases 列表匹配 `tag_name`，同
 
 恢复流程不重新构建、推送或签名镜像，不发布 SDK，也不使用 registry 凭据。修复流程的 main 提交与镜像源码 SHA 分开记录。不要为这次恢复重跑旧运行（它仍使用错误的预期身份），也不要启动正常构建流程试图覆盖已发布标签。原产物过期、校验不一致或已有公开 Release 时停止，重新评估恢复方案。
 
-格式 16 需要初始化新数据库；上一发布的格式 14 旧库、备份及旧版程序独立保留。新流程不执行业务部署或旧数据迁移。
+格式 18 需要初始化新数据库；旧格式数据库、备份及旧版程序独立保留。新流程不执行业务部署或旧数据迁移。
 
 GitHub 的 `release` environment 配置 `NPM_TOKEN` secret，授予 `@geoledger/client` 的发布权限。PyPI 项目 `geoledger-client` 配置 Trusted Publisher：仓库 `mapseekai/geoledger`、工作流 `release.yml`、environment `release`；完成绑定后将该 environment 的 `PYPI_TRUSTED_PUBLISHING` variable 设置为 `true`。凭据由仓库与包管理员在平台设置中维护。预检验证配置存在，实际发布验证授权生效。
 

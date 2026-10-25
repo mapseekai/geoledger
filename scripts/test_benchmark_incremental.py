@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 import sqlite3
 from pathlib import Path
 import tempfile
@@ -48,16 +49,21 @@ class CoordinateContractTests(unittest.TestCase):
                 fixture_crs(metadata, requested)
         self.assertEqual(fixture_crs({"crs": "+proj=tmerc +units=m"}), "+proj=tmerc +units=m")
 
-    def test_business_srid_and_internal_srid_are_distinct(self):
+    def test_business_srid_is_preserved_without_a_second_current_copy(self):
         for crs, expected in [("EPSG:4326", 4326), ("EPSG:3857", 3857), ("POSTGIS:0", 0)]:
             self.assertEqual(postgis_srid(crs), expected)
-            sql = postgis_seed_sql("project", "dataset", 1, expected)
+            sql = postgis_seed_sql("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", 1, expected)
             source = next(line for line in sql.splitlines() if line.startswith("INSERT INTO business.source"))
-            history = next(line for line in sql.splitlines() if line.startswith("INSERT INTO gl_history"))
             self.assertIn(f"->'geometry'),{expected})", source)
-            self.assertIn(f"->'geometry'),{INTERNAL_SRID})", history)
+            self.assertNotIn("INSERT INTO gl_history", sql)
             self.assertNotIn("ST_Transform", sql)
             self.assertIn(r"DELIMITER E'\x01'", sql)
+            self.assertIn("PERFORM project,dataset,revision,definition FROM gl_schema_history LIMIT 0", sql)
+            self.assertIn("PERFORM project,workspace,dataset,definition FROM gl_workspace_schemas LIMIT 0", sql)
+            self.assertIn("fixture seeding rejects existing schema state", sql)
+            self.assertNotIn("gl_source_changes", sql)
+            self.assertNotIn("DELETE FROM gl_schema_history", sql)
+            self.assertNotIn("DELETE FROM gl_workspace_schemas", sql)
         for crs in ["EPSG:-1", "EPSG:3857);DROP TABLE x", "+proj=tmerc", "EPSG:9999999999"]:
             with self.subTest(crs=crs), self.assertRaises(ValueError):
                 postgis_srid(crs)
@@ -66,8 +72,9 @@ class CoordinateContractTests(unittest.TestCase):
         engine = (Path(__file__).resolve().parents[1] / "crates/engine/src/lib.rs").read_text()
         self.assertIn(f"pub const FORMAT_VERSION: i32 = {STORAGE_FORMAT};", engine)
         check_storage_format(STORAGE_FORMAT)
-        with self.assertRaisesRegex(ValueError, "rebuild the current server"):
-            check_storage_format(STORAGE_FORMAT - 1)
+        for version in [STORAGE_FORMAT - 1, STORAGE_FORMAT + 1]:
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, "rebuild the current server"):
+                check_storage_format(version)
 
     def test_native_translation_preserves_type_z_and_ring_closure(self):
         ring = [[500000.0, 3500000.0, 3], [500001.0, 3500001.0, 4],
@@ -105,9 +112,23 @@ class SpatialiteSeedTests(unittest.TestCase):
         db.execute("SELECT InitSpatialMetaData(1, 'WGS84')")
         db.execute("CREATE TABLE gl_format(version INTEGER)")
         db.execute("INSERT INTO gl_format VALUES(?)", (version,))
-        db.execute("CREATE TABLE gl_history(project TEXT,dataset TEXT,feature_id TEXT,valid_from INTEGER,properties TEXT,geometry_json TEXT)")
+        table = "gl_data_" + "0" * 32
+        db.execute("CREATE TABLE gl_datasets(project TEXT,id TEXT,storage_table TEXT,PRIMARY KEY(project,id))")
+        db.execute("INSERT INTO gl_datasets VALUES('p','d',?)", (table,))
+        db.execute("CREATE TABLE gl_workspaces(project TEXT,id TEXT,PRIMARY KEY(project,id))")
+        db.execute("INSERT INTO gl_workspaces VALUES('p','w')")
+        db.execute("CREATE TABLE gl_purge(project TEXT PRIMARY KEY)")
+        engine_sql = (Path(__file__).resolve().parents[1] / "crates/engine/src/sqlite.sql").read_text()
+        for name in ["gl_schema_history", "gl_workspace_schemas"]:
+            ddl = re.search(rf"CREATE TABLE {name} \([\s\S]*?\);", engine_sql)
+            self.assertIsNotNone(ddl, name)
+            db.executescript(ddl.group(0))
+        for ddl in engine_sql.splitlines():
+            if ddl.startswith("CREATE TRIGGER gl_schema_history_"):
+                db.executescript(ddl)
+        db.execute(f"CREATE TABLE {table}(feature_id TEXT PRIMARY KEY,valid_from INTEGER NOT NULL,properties TEXT,geometry_json TEXT,geom BLOB,geom_z BLOB)")
         for column, dimension in [("geom", "XY"), ("geom_z", "XYZ")]:
-            self.assertEqual(db.execute("SELECT AddGeometryColumn('gl_history',?,?,'GEOMETRY',?)", (column, srid, dimension)).fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT RecoverGeometryColumn(?,?,?,'GEOMETRY',?)", (table, column, srid, dimension)).fetchone()[0], 1)
         db.commit()
         return db
 
@@ -133,7 +154,12 @@ class SpatialiteSeedTests(unittest.TestCase):
                     values = [self.feature(index, geometry) for index in (1, 2)]
                     fixture.write_text("".join(compact(f) + "\n" for f in values))
                     db = self.initialize(path)
-                    sql = f"INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,{column}) VALUES('p','d',?,1,?,?,coalesce(SetSRID(GeomFromGeoJSON(?),?),SetSRID(GeomFromGeoJSON(?),?)))"
+                    db.execute("INSERT INTO gl_datasets VALUES('p','other',NULL)")
+                    definition = compact({"supported": True, "fields": [], "reserved": [], "defaults": [], "dropped": [], "dynamic": True})
+                    db.execute("INSERT INTO gl_schema_history VALUES('p','other',0,?)", (definition,))
+                    db.execute("INSERT INTO gl_workspace_schemas VALUES('p','w','other',?)", (definition,))
+                    db.commit()
+                    sql = f"INSERT INTO gl_data_{'0' * 32}(feature_id,valid_from,properties,geometry_json,{column}) VALUES(?,1,?,?,coalesce(SetSRID(GeomFromGeoJSON(?),?),SetSRID(GeomFromGeoJSON(?),?)))"
                     g = compact(geometry)
                     with self.assertRaisesRegex(sqlite3.IntegrityError, "Geometry constraint"):
                         db.execute(sql, (values[0]["id"], compact(values[0]["properties"]), g, g, 4326, collection(geometry), 4326))
@@ -143,19 +169,42 @@ class SpatialiteSeedTests(unittest.TestCase):
                     count = sqlite_seed(path, fixture, "p", "d", 1, dimension, os.environ["GL_SPATIALITE_EXTENSION"])
                     self.assertEqual(count, 2)
                     db = self.connect(path)
-                    actual = db.execute(f"SELECT feature_id,geometry_json,ST_SRID({column}) FROM gl_history ORDER BY feature_id").fetchall()
-                    self.assertEqual(actual, [(f["id"], g, 0) for f in values])
+                    current = db.execute(f"SELECT feature_id,geometry_json,ST_SRID({column}) FROM gl_data_{'0' * 32} ORDER BY feature_id").fetchall()
+                    self.assertEqual(current, [(f["id"], g, 0) for f in values])
+                    self.assertEqual(db.execute("SELECT project,dataset,revision,definition FROM gl_schema_history").fetchall(), [("p", "other", 0, definition)])
+                    self.assertEqual(db.execute("SELECT project,workspace,dataset,definition FROM gl_workspace_schemas").fetchall(), [("p", "w", "other", definition)])
                     db.close()
 
     def test_preflight_rejects_stale_format_and_geometry_contract(self):
-        for version, srid, error in [(STORAGE_FORMAT - 1, 0, "storage format"), (STORAGE_FORMAT, 4326, "geometry contract")]:
-            with self.subTest(version=version, srid=srid), tempfile.TemporaryDirectory() as directory:
+        cases = [(STORAGE_FORMAT - 1, 0, None, "storage format"),
+                 (STORAGE_FORMAT, 4326, None, "geometry contract")]
+        for table in ["gl_schema_history", "gl_workspace_schemas"]:
+            cases.extend([(STORAGE_FORMAT, 0, (table, "missing"), "schema contract"),
+                          (STORAGE_FORMAT, 0, (table, "existing"), "existing schema state")])
+        for version, srid, state, error in cases:
+            with self.subTest(version=version, srid=srid, state=state), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "data.sqlite3"
                 fixture = Path(directory) / "fixture.jsonl"
                 fixture.write_text("")
-                self.initialize(path, srid=srid, version=version).close()
+                db = self.initialize(path, srid=srid, version=version)
+                if state:
+                    table, condition = state
+                    if condition == "missing":
+                        db.execute(f"DROP TABLE {table}")
+                    elif table == "gl_schema_history":
+                        db.execute("INSERT INTO gl_schema_history VALUES('p','d',0,'{}')")
+                    else:
+                        db.execute("INSERT INTO gl_workspace_schemas VALUES('p','w','d','{}')")
+                    db.commit()
+                db.close()
                 with self.assertRaisesRegex(ValueError, error):
                     sqlite_seed(path, fixture, "p", "d", 1, 3, os.environ["GL_SPATIALITE_EXTENSION"])
+                db = self.connect(path)
+                self.assertEqual(db.execute("SELECT version FROM gl_format").fetchone()[0], version)
+                self.assertEqual(db.execute(f"SELECT count(*) FROM gl_data_{'0' * 32}").fetchone()[0], 0)
+                if state and state[1] == "existing":
+                    self.assertEqual(db.execute(f"SELECT definition FROM {state[0]}").fetchall(), [("{}",)])
+                db.close()
 
     def test_dimension_error_rolls_back_all_seed_rows(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -167,7 +216,7 @@ class SpatialiteSeedTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "row 3 coordinate dimension"):
                 sqlite_seed(path, fixture, "p", "d", 1, 3, os.environ["GL_SPATIALITE_EXTENSION"])
             db = self.connect(path)
-            self.assertEqual(db.execute("SELECT count(*) FROM gl_history").fetchone()[0], 0)
+            self.assertEqual(db.execute(f"SELECT count(*) FROM gl_data_{'0' * 32}").fetchone()[0], 0)
             db.close()
 
 
@@ -196,7 +245,7 @@ class CompletionTests(unittest.TestCase):
     def test_failed_load_keeps_integrity_evidence_without_passing(self):
         for failure in ({"soak": {"exit_code": 1}}, {"read_load_exit_code": 1}):
             result = {"success": False, "client": {"exit_code": 0},
-                      "history_live": 10, "source_live": 10, **failure}
+                      "current_live": 10, "source_live": 10, **failure}
             with self.assertRaisesRegex(AssertionError, "integrity checked"):
                 check_results(result, 10)
             self.assertTrue(result["integrity_verified"])
@@ -204,7 +253,7 @@ class CompletionTests(unittest.TestCase):
 
     def test_corruption_and_client_failure_never_pass(self):
         result = {"success": False, "client": {"exit_code": 0},
-                  "history_live": 10, "source_live": 9}
+                  "current_live": 10, "source_live": 9}
         with self.assertRaisesRegex(AssertionError, "background feature count"):
             check_results(result, 10)
         self.assertNotIn("integrity_verified", result)

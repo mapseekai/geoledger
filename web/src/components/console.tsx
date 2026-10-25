@@ -127,6 +127,8 @@ export function Console({
   const navigationQuery = query ? `?${query}` : "";
   const [info, setInfo] = useState<Info>();
   const [project, setProject] = useState<Project>();
+  const [projectRefresh, setProjectRefresh] = useState(0);
+  const refreshProject = () => setProjectRefresh((n) => n + 1);
   const [error, setError] = useState("");
   const [resolved, setResolved] = useState(false);
   const [mobile, setMobile] = useState(false);
@@ -171,6 +173,7 @@ export function Console({
     };
   }, [
     projectId,
+    projectRefresh,
     query,
     router,
     section,
@@ -396,11 +399,16 @@ export function Console({
                     project={project}
                     writable={writable}
                     backend={info?.backend}
+                    projectChanged={refreshProject}
                   />
                 </MapConfigProvider>
               )}
               {section === "workspaces" && (
-                <Workspaces project={project} writable={writable} />
+                <Workspaces
+                  project={project}
+                  writable={writable}
+                  projectChanged={refreshProject}
+                />
               )}
               {section === "history" && (
                 <HistoryPanel project={project} writable={writable} />

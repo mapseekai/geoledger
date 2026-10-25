@@ -25,11 +25,11 @@ python3 scripts/benchmark_incremental.py \
 
 `fixture_jsonl SOURCE OUTPUT CRS` 将显式指定的源坐标系写入夹具元数据，例如 `EPSG:4326`、`EPSG:3857` 或自定义 CRS 定义。参数应与源文件的实际坐标系一致；生成器保留原始坐标。已有 JSONL 夹具可通过 `benchmark_incremental.py --crs EPSG:4326` 补充经过核对的 CRS。监督器在启动前校验 CRS 元数据及显式参数的一致性。
 
-当前格式 16 将数据集 CRS 保存在 `gl_datasets.crs`，SQLite 和 PostGIS 的共享内部几何列使用 SRID 0。SQLite 的 XY/XYZ 分别写入 `geom`/`geom_z`；PostGIS 业务表按照 `EPSG:<编号>` 或 `POSTGIS:<编号>` 声明的 SRID 创建，历史表仍使用内部 SRID 0。两条写入路径均保留坐标数值。初始化先校验当前存储格式，SQLite 还校验几何列的维度及 SRID；运行结束后核对历史表与业务表的实际 SRID。`environment.json` 和 `result.json` 记录 CRS、内部/业务 SRID 及执行阶段。
+当前格式 19 将数据集 CRS 保存在 `gl_datasets.crs`，SQLite 和 PostGIS 的旧版历史及自建数据表的内部几何列使用 SRID 0。SQLite 的 XY/XYZ 分别写入 `geom`/`geom_z`；PostGIS 业务表按照 `EPSG:<编号>` 或 `POSTGIS:<编号>` 声明的 SRID 创建，历史表仅保存旧版几何，仍使用内部 SRID 0。两条写入路径均保留坐标数值。初始化先校验当前存储格式，SQLite 还校验几何列的维度及 SRID，并在同一事务填充数据集正式表；运行结束后核对正式表或原表的实际 SRID 与当前行数。`environment.json` 和 `result.json` 记录 CRS、内部/业务 SRID 及执行阶段。
 
 增量客户端与原表校验器在数据集原生坐标空间中执行可表示的 XY 平移，保留几何类型、环闭合和 Z 值。经纬度与投影坐标使用同一增量验证流程。功能诊断可使用 debug 构建；性能对照使用本次代码构建的 release 二进制，并核对服务版本及报告中的构建摘要。
 
-SQLite 设置可信的 `GL_SPATIALITE_EXTENSION`；加 `--backend postgis` 测量已有业务表的同步发布。夹具将原属性保存在 `attributes` 对象中，业务表使用 `id` 主键、`attributes jsonb` 和有明确类型的 `geom` 列；业务现场额外的索引、约束与触发器可用独立环境进一步测量。监督器通过 API 建立初始版本，在自己创建的一次性数据库中用 SQL 填充背景夹具，然后运行纯 RPC 客户端。准备夹具的耗时单独记录。PostGIS 测量结束后另做一个未计时增删改循环，每一步直接读取原表核对完整属性和几何，再核对原表与版本表的存活要素数量。对比修复前后时，用 `--server` 指定各自的 release 二进制，保持同一份夹具、客户端及轮数，顺序运行负载。
+SQLite 设置可信的 `GL_SPATIALITE_EXTENSION`；加 `--backend postgis` 测量已有业务表的同步发布。夹具将原属性保存在 `attributes` 对象中，业务表使用 `id` 主键、`attributes jsonb` 和有明确类型的 `geom` 列；业务现场额外的索引、约束与触发器可用独立环境进一步测量。监督器通过 API 建立初始版本，在自己创建的一次性数据库中用 SQL 填充背景夹具，然后运行纯 RPC 客户端。准备夹具的耗时单独记录。PostGIS 测量结束后另做一个未计时增删改循环，每一步直接读取原表核对完整属性和几何，再核对原表当前行数与仅含旧正文的历史行数。对比修复前后时，用 `--server` 指定各自的 release 二进制，保持同一份夹具、客户端及轮数，顺序运行负载。
 
 输出包含构建与夹具 SHA-256、平台、逐次延迟、分位数、历史/幂等断言、进程 RSS 和清理状态。默认 10 轮的每组分位数适合本机回归对照；持续负载评估可增加轮数，并结合下方的固定到达率与并发测试。添加 `--k6 /absolute/path/k6`，可在增量循环后对同一背景数据施加 50 请求/秒、持续 30 秒的首页、末页、单要素和空范围查询负载，阈值与下方读取压力测试一致。业务事务变化通过 `./scripts/check.sh` 的一致性与 PostGIS 触发器回归验证。
 
@@ -67,7 +67,7 @@ python3 scripts/benchmark.py --geojson /absolute/path/building.geojson \
   --output artifacts/performance/http-run --k6 /absolute/path/k6
 ```
 
-`k6/scripts/large-data-reads.js` 对已导入的数据分别施加 5、20、50 请求/秒，每档 30 秒。固定到达率用于观察请求积压；报告同时包含失败率、丢弃迭代及各查询延迟。默认诊断阈值为 p95 小于 500 ms、请求失败率低于 1%、检查通过率高于 99% 和零丢弃迭代。阈值超出时保留失败报告。
+`k6/scripts/large-data-reads.js` 对已导入的数据分别施加 5、20、50 请求/秒，每档 30 秒，交替查询当前数据表与指定历史版本。固定到达率用于观察请求积压；报告同时包含失败率、丢弃迭代、各查询及两种版本视图的延迟。默认诊断阈值为 p95 小于 500 ms、请求失败率低于 1%、检查通过率高于 99% 和零丢弃迭代。阈值超出时保留失败报告。
 
 并发写入、发布和空间查询使用仓库现有客户端：
 

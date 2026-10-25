@@ -167,6 +167,36 @@ export interface FeaturePage {
   nextAfter?: string;
 }
 
+export interface SchemaField {
+  name: string;
+  type: string;
+  nullable: boolean;
+  editable: boolean;
+}
+export interface DatasetSchema {
+  revision: bigint;
+  workspaceVersion?: bigint;
+  fields: SchemaField[];
+}
+export interface SchemaQuery {
+  revision?: bigint;
+  workspace?: string;
+}
+export interface AddField {
+  name: string;
+  type: "string" | "number" | "integer" | "boolean" | "json";
+}
+export interface SchemaEdit {
+  dataset: string;
+  add?: readonly AddField[];
+  drop?: readonly string[];
+}
+export interface SchemaChange {
+  dataset: string;
+  before: SchemaField[];
+  after: SchemaField[];
+}
+
 export interface Change {
   cursor: string;
   dataset: string;
@@ -178,6 +208,7 @@ export interface Change {
 }
 
 export interface Diff {
+  schemaChanges: SchemaChange[];
   baseRevision: bigint;
   version: bigint;
   changes: Change[];
@@ -222,6 +253,7 @@ export interface HistoryPage {
   nextAfter?: bigint;
 }
 export interface CommitChanges {
+  schemaChanges: SchemaChange[];
   revision: bigint;
   changes: Change[];
   /** Absent at the current read snapshot end; pass back unchanged. */
@@ -287,6 +319,7 @@ export interface Publication {
 
 export type ChangeCounts = { added: bigint; deleted: bigint; modified: bigint };
 export type ChangeSummary = {
+  schemaChanges: SchemaChange[];
   total: ChangeCounts;
   datasets: (ChangeCounts & { id: string; name: string })[];
   version?: bigint;

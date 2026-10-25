@@ -29,6 +29,7 @@ pub(crate) const OPERATIONS: &[&str] = &[
     "save",
     "discard",
     "features",
+    "schema",
     "diff",
     "workspace_summary",
     "commit_summary",
