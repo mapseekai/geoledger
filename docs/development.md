@@ -37,7 +37,7 @@ cargo build --release --locked --bins
 
 ## 生成 SDK
 
-SDK 业务层手工维护，公开接口提供业务客户端、业务模型和业务错误。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：Go、Python、TypeScript 共用 grpcio-tools 内置 protoc，protoc-gen-go 1.36.12、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.13.0。
+SDK 业务层手工维护，公开接口提供业务客户端、业务模型和业务错误。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：Go、Python、TypeScript 共用 grpcio-tools 内置 protoc，protoc-gen-go 1.36.12、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.18.0。
 
 ```sh
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
@@ -204,7 +204,7 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 
 ### 已有 PostGIS 表回归
 
-`./scripts/check.sh` 在设置 `GL_TEST_DATABASE_URL` 后执行 `postgis_table` 专项测试，覆盖初始快照、管理员权限、原表增删改、约束失败回滚、重复发布、撤销、外部修改检测、逻辑导入独立副本和解绑保留。
+`./scripts/check.sh` 在设置 `GL_TEST_DATABASE_URL` 后执行 `postgis_table` 专项测试，覆盖不复制数据的初始纳管、管理员权限、原表增删改、约束失败回滚、重复发布、撤销、外部修改检测、逻辑导入独立副本和解绑保留。
 
 `scripts/test-console-postgis.py` 验证完整 Web 纳管与发布。使用隔离 PostGIS 服务，在当前数据库准备 `business.roads(id bigint PRIMARY KEY, name text NOT NULL, geom geometry(LineString,4326))` 及一条要素，并使用数据库平台管理员授权测试操作。脚本接收与上传测试相同的 `--url`、`--api-key-file`、`--chromium` 和 `--screenshots` 参数。
 
@@ -227,7 +227,7 @@ Console 真实 BFF 回归使用 `scripts/test-console-auth-http.py --url <Consol
 
 [发布策略检查](../scripts/check-release-policy.py) 和 [失败注入测试](../scripts/test_supply_chain.py) 随 `scripts/check.sh` 执行。完整工作流使用 actionlint 检查语法。Windows 原生依赖通过 [安装器](../scripts/install-spatialite.py) 和 [版本锁](../.security/windows-spatialite.lock.json) 校验到隔离目录；二进制在打包前执行真实初始化、XYZ 保存发布、bbox 查询与重启测试，而非只检查 `--version`。
 
-[镜像复审工作流](../.github/workflows/image-audit.yml) 每天从最新非草稿 Release 的 `*-images.json` 清单读取镜像 digest，并重扫两个架构；手动输入标签可复审指定版本。无清单、拉取失败、扫描失败均作为失败处理。历史重建所选提交也必须具备当前发布门禁所需的脚本和依赖配置，缺失时停止发布。发布交付验收见 [发布验收](release.md)。
+[镜像复审工作流](../.github/workflows/image-audit.yml) 每天从最新非草稿 Release 的 `*-images.json` 清单读取镜像 digest，并重扫两个架构；手动输入标签可复审指定版本。复审将 Release 标签解析为完整提交 SHA，要求镜像清单与该 SHA 一致，再从该 SHA 获取 `Cargo.lock` 作为依赖完整性基线；执行的审计脚本、扫描器版本和漏洞阻断规则仍使用当前检出版本。诊断产物保留源锁文件、SHA256、镜像 digest、逐架构报告和审计状态。无清单、源锁文件获取失败、拉取失败、扫描失败均作为失败处理。历史重建所选提交也必须具备当前发布门禁所需的脚本和依赖配置，缺失时停止发布。发布交付验收见 [发布验收](release.md)。
 
 ### 容器构建工具链维护
 

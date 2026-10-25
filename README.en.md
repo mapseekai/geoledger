@@ -6,7 +6,9 @@ GeoLedger is a version control and collaborative editing service for spatial fea
 
 The repository contains the Rust server `geoledger-server`, the remote `gl` CLI, a web console, and SDKs for Rust, Go, TypeScript / Node.js, and Python. The server manages data in SQLite + SpatiaLite or PostGIS. HTTP and gRPC requests use the same application engine.
 
-The current source version is `0.3.0-alpha.6`, with storage format 16, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
+The current source version is `0.3.0-alpha.6`, with storage format 19, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
+
+Each internally created dataset immediately gets its own physical table and spatial indexes. Roads, buildings, points of interest, and other datasets remain separate within one database, with transactional publication and version history.
 
 ## Key Capabilities
 
@@ -15,6 +17,7 @@ The current source version is `0.3.0-alpha.6`, with storage format 16, defined i
 | Datasets and coordinate systems | Organize point, line, and polygon features with two- or three-dimensional coordinates and an EPSG identifier or custom CRS. The default CRS is `EPSG:4326`. Saving and publishing preserve source coordinates and GeoJSON numeric values. |
 | Workspaces and review | Edit multiple datasets in one workspace, save additions, updates, and deletions in batches, and inspect feature differences and dataset change summaries. Draft versions check concurrent edits. |
 | Three-way merge and publication | Compare the base revision, current shared revision, and draft; merge independent property changes and review conflicting fields. Publication writes features, history, the revision, receipt, and audit records in one transaction. |
+| Versioned fields | Save property-field additions or removals in a workspace, query definitions at a fixed revision, and publish schema history and business-table DDL atomically. Field intent can be cleared; a changed HEAD rejects schema publication while preserving the draft. |
 | Publication recovery | SDKs retain the publication request ID and original payload. Retrying the original request confirms the result after a connection interruption. The console provides a publication recovery flow. |
 | Queries and commit reversal | Query by revision, feature ID, spatial bounds, and pagination cursor. Generate a workspace containing the inverse changes of a selected commit, then review and publish a new revision. |
 | PostGIS table registration | Connect an existing business table to a dataset and create an initial version. Publication updates the source table transactionally and retains its CRS. |

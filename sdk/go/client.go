@@ -299,6 +299,34 @@ func decode(reply proto.Message, out any) error {
 			return err
 		}
 	}
+	// New schema collections have the same empty-array contract in every SDK.
+	switch reply.(type) {
+	case *pb.SchemaReply:
+		if _, present := obj["fields"]; !present {
+			obj["fields"] = json.RawMessage("[]")
+		}
+	case *pb.DiffReply, *pb.CommitReply, *pb.ChangeSummaryReply:
+		var changes []map[string]json.RawMessage
+		if raw := obj["schema_changes"]; len(raw) > 0 {
+			if err = json.Unmarshal(raw, &changes); err != nil {
+				return err
+			}
+		}
+		if changes == nil {
+			changes = []map[string]json.RawMessage{}
+		}
+		for _, change := range changes {
+			for _, key := range []string{"before", "after"} {
+				if _, present := change[key]; !present {
+					change[key] = json.RawMessage("[]")
+				}
+			}
+		}
+		obj["schema_changes"], err = json.Marshal(changes)
+		if err != nil {
+			return err
+		}
+	}
 	raw, err = json.Marshal(obj)
 	if err != nil {
 		return err
@@ -446,6 +474,16 @@ func (c *Client) Features(ctx context.Context, project, dataset string, query Fe
 	}
 	e := call(c, ctx, c.rpc.Features, &pb.FeaturesRequest{Project: project, Dataset: dataset, Workspace: query.Workspace, Revision: query.Revision, FeatureId: query.FeatureID, Bbox: query.Bbox, After: query.After, Limit: limit(query.Limit)}, &r)
 	return r, e
+}
+
+// Schema returns the fields at a published revision or workspace version.
+func (c *Client) Schema(ctx context.Context, project, dataset string, query SchemaQuery) (DatasetSchema, error) {
+	var r DatasetSchema
+	if query.Workspace != nil && query.Revision != nil {
+		return r, invalid("schema query cannot combine workspace and revision")
+	}
+	err := call(c, ctx, c.rpc.Schema, &pb.SchemaRequest{Project: project, Dataset: dataset, Workspace: query.Workspace, Revision: query.Revision}, &r)
+	return r, err
 }
 
 // History returns one ascending page. Continue with HistoryPage.NextAfter; nil ends this snapshot.

@@ -799,8 +799,10 @@ type SaveRequest struct {
 	Workspace                string                 `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	ExpectedWorkspaceVersion int64                  `protobuf:"varint,3,opt,name=expected_workspace_version,json=expectedWorkspaceVersion,proto3" json:"expected_workspace_version,omitempty"`
 	Edits                    []*Edit                `protobuf:"bytes,4,rep,name=edits,proto3" json:"edits,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// Missing preserves the workspace schema intent; a present empty message clears it.
+	SchemaEdits   *SchemaEdits `protobuf:"bytes,5,opt,name=schema_edits,json=schemaEdits,proto3" json:"schema_edits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SaveRequest) Reset() {
@@ -861,6 +863,427 @@ func (x *SaveRequest) GetEdits() []*Edit {
 	return nil
 }
 
+func (x *SaveRequest) GetSchemaEdits() *SchemaEdits {
+	if x != nil {
+		return x.SchemaEdits
+	}
+	return nil
+}
+
+type AddField struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// string, number, integer, boolean or json; no SQL definitions.
+	Type          string `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddField) Reset() {
+	*x = AddField{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddField) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddField) ProtoMessage() {}
+
+func (x *AddField) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddField.ProtoReflect.Descriptor instead.
+func (*AddField) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *AddField) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *AddField) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+type SchemaEdit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Dataset       string                 `protobuf:"bytes,1,opt,name=dataset,proto3" json:"dataset,omitempty"`
+	Add           []*AddField            `protobuf:"bytes,2,rep,name=add,proto3" json:"add,omitempty"`
+	Drop          []string               `protobuf:"bytes,3,rep,name=drop,proto3" json:"drop,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SchemaEdit) Reset() {
+	*x = SchemaEdit{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SchemaEdit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SchemaEdit) ProtoMessage() {}
+
+func (x *SchemaEdit) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SchemaEdit.ProtoReflect.Descriptor instead.
+func (*SchemaEdit) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SchemaEdit) GetDataset() string {
+	if x != nil {
+		return x.Dataset
+	}
+	return ""
+}
+
+func (x *SchemaEdit) GetAdd() []*AddField {
+	if x != nil {
+		return x.Add
+	}
+	return nil
+}
+
+func (x *SchemaEdit) GetDrop() []string {
+	if x != nil {
+		return x.Drop
+	}
+	return nil
+}
+
+type SchemaEdits struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Complete intent relative to workspace.base_revision, not incremental DDL.
+	Edits         []*SchemaEdit `protobuf:"bytes,1,rep,name=edits,proto3" json:"edits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SchemaEdits) Reset() {
+	*x = SchemaEdits{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SchemaEdits) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SchemaEdits) ProtoMessage() {}
+
+func (x *SchemaEdits) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SchemaEdits.ProtoReflect.Descriptor instead.
+func (*SchemaEdits) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SchemaEdits) GetEdits() []*SchemaEdit {
+	if x != nil {
+		return x.Edits
+	}
+	return nil
+}
+
+type SchemaRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Project       string                 `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	Dataset       string                 `protobuf:"bytes,2,opt,name=dataset,proto3" json:"dataset,omitempty"`
+	Workspace     *string                `protobuf:"bytes,3,opt,name=workspace,proto3,oneof" json:"workspace,omitempty"`
+	Revision      *int64                 `protobuf:"varint,4,opt,name=revision,proto3,oneof" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SchemaRequest) Reset() {
+	*x = SchemaRequest{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SchemaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SchemaRequest) ProtoMessage() {}
+
+func (x *SchemaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SchemaRequest.ProtoReflect.Descriptor instead.
+func (*SchemaRequest) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SchemaRequest) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *SchemaRequest) GetDataset() string {
+	if x != nil {
+		return x.Dataset
+	}
+	return ""
+}
+
+func (x *SchemaRequest) GetWorkspace() string {
+	if x != nil && x.Workspace != nil {
+		return *x.Workspace
+	}
+	return ""
+}
+
+func (x *SchemaRequest) GetRevision() int64 {
+	if x != nil && x.Revision != nil {
+		return *x.Revision
+	}
+	return 0
+}
+
+type SchemaField struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	Nullable      bool                   `protobuf:"varint,3,opt,name=nullable,proto3" json:"nullable,omitempty"`
+	Editable      bool                   `protobuf:"varint,4,opt,name=editable,proto3" json:"editable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SchemaField) Reset() {
+	*x = SchemaField{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SchemaField) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SchemaField) ProtoMessage() {}
+
+func (x *SchemaField) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SchemaField.ProtoReflect.Descriptor instead.
+func (*SchemaField) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SchemaField) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SchemaField) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *SchemaField) GetNullable() bool {
+	if x != nil {
+		return x.Nullable
+	}
+	return false
+}
+
+func (x *SchemaField) GetEditable() bool {
+	if x != nil {
+		return x.Editable
+	}
+	return false
+}
+
+type SchemaReply struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Revision         int64                  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	WorkspaceVersion *int64                 `protobuf:"varint,2,opt,name=workspace_version,json=workspaceVersion,proto3,oneof" json:"workspace_version,omitempty"`
+	Fields           []*SchemaField         `protobuf:"bytes,3,rep,name=fields,proto3" json:"fields,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SchemaReply) Reset() {
+	*x = SchemaReply{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SchemaReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SchemaReply) ProtoMessage() {}
+
+func (x *SchemaReply) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SchemaReply.ProtoReflect.Descriptor instead.
+func (*SchemaReply) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *SchemaReply) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *SchemaReply) GetWorkspaceVersion() int64 {
+	if x != nil && x.WorkspaceVersion != nil {
+		return *x.WorkspaceVersion
+	}
+	return 0
+}
+
+func (x *SchemaReply) GetFields() []*SchemaField {
+	if x != nil {
+		return x.Fields
+	}
+	return nil
+}
+
+type SchemaChange struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Dataset       string                 `protobuf:"bytes,1,opt,name=dataset,proto3" json:"dataset,omitempty"`
+	Before        []*SchemaField         `protobuf:"bytes,2,rep,name=before,proto3" json:"before,omitempty"`
+	After         []*SchemaField         `protobuf:"bytes,3,rep,name=after,proto3" json:"after,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SchemaChange) Reset() {
+	*x = SchemaChange{}
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SchemaChange) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SchemaChange) ProtoMessage() {}
+
+func (x *SchemaChange) ProtoReflect() protoreflect.Message {
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SchemaChange.ProtoReflect.Descriptor instead.
+func (*SchemaChange) Descriptor() ([]byte, []int) {
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *SchemaChange) GetDataset() string {
+	if x != nil {
+		return x.Dataset
+	}
+	return ""
+}
+
+func (x *SchemaChange) GetBefore() []*SchemaField {
+	if x != nil {
+		return x.Before
+	}
+	return nil
+}
+
+func (x *SchemaChange) GetAfter() []*SchemaField {
+	if x != nil {
+		return x.After
+	}
+	return nil
+}
+
 type FeaturesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Project       string                 `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
@@ -877,7 +1300,7 @@ type FeaturesRequest struct {
 
 func (x *FeaturesRequest) Reset() {
 	*x = FeaturesRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[15]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -889,7 +1312,7 @@ func (x *FeaturesRequest) String() string {
 func (*FeaturesRequest) ProtoMessage() {}
 
 func (x *FeaturesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[15]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -902,7 +1325,7 @@ func (x *FeaturesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FeaturesRequest.ProtoReflect.Descriptor instead.
 func (*FeaturesRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{15}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *FeaturesRequest) GetProject() string {
@@ -973,7 +1396,7 @@ type DiffRequest struct {
 
 func (x *DiffRequest) Reset() {
 	*x = DiffRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[16]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -985,7 +1408,7 @@ func (x *DiffRequest) String() string {
 func (*DiffRequest) ProtoMessage() {}
 
 func (x *DiffRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[16]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -998,7 +1421,7 @@ func (x *DiffRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffRequest.ProtoReflect.Descriptor instead.
 func (*DiffRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{16}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *DiffRequest) GetProject() string {
@@ -1040,7 +1463,7 @@ type HistoryRequest struct {
 
 func (x *HistoryRequest) Reset() {
 	*x = HistoryRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[17]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1052,7 +1475,7 @@ func (x *HistoryRequest) String() string {
 func (*HistoryRequest) ProtoMessage() {}
 
 func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[17]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1065,7 +1488,7 @@ func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryRequest.ProtoReflect.Descriptor instead.
 func (*HistoryRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{17}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *HistoryRequest) GetProject() string {
@@ -1101,7 +1524,7 @@ type CommitRequest struct {
 
 func (x *CommitRequest) Reset() {
 	*x = CommitRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[18]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1113,7 +1536,7 @@ func (x *CommitRequest) String() string {
 func (*CommitRequest) ProtoMessage() {}
 
 func (x *CommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[18]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1126,7 +1549,7 @@ func (x *CommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitRequest.ProtoReflect.Descriptor instead.
 func (*CommitRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{18}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *CommitRequest) GetProject() string {
@@ -1170,7 +1593,7 @@ type PublishRequest struct {
 
 func (x *PublishRequest) Reset() {
 	*x = PublishRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[19]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1182,7 +1605,7 @@ func (x *PublishRequest) String() string {
 func (*PublishRequest) ProtoMessage() {}
 
 func (x *PublishRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[19]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1195,7 +1618,7 @@ func (x *PublishRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishRequest.ProtoReflect.Descriptor instead.
 func (*PublishRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{19}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *PublishRequest) GetProject() string {
@@ -1246,7 +1669,7 @@ type ResolveRequest struct {
 
 func (x *ResolveRequest) Reset() {
 	*x = ResolveRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[20]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1258,7 +1681,7 @@ func (x *ResolveRequest) String() string {
 func (*ResolveRequest) ProtoMessage() {}
 
 func (x *ResolveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[20]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1271,7 +1694,7 @@ func (x *ResolveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveRequest.ProtoReflect.Descriptor instead.
 func (*ResolveRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{20}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ResolveRequest) GetProject() string {
@@ -1319,7 +1742,7 @@ type RestoreRequest struct {
 
 func (x *RestoreRequest) Reset() {
 	*x = RestoreRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[21]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1331,7 +1754,7 @@ func (x *RestoreRequest) String() string {
 func (*RestoreRequest) ProtoMessage() {}
 
 func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[21]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1344,7 +1767,7 @@ func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreRequest.ProtoReflect.Descriptor instead.
 func (*RestoreRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{21}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RestoreRequest) GetProject() string {
@@ -1369,7 +1792,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[22]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1381,7 +1804,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[22]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1394,7 +1817,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{22}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{29}
 }
 
 type InfoReply struct {
@@ -1411,7 +1834,7 @@ type InfoReply struct {
 
 func (x *InfoReply) Reset() {
 	*x = InfoReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[23]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1423,7 +1846,7 @@ func (x *InfoReply) String() string {
 func (*InfoReply) ProtoMessage() {}
 
 func (x *InfoReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[23]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1436,7 +1859,7 @@ func (x *InfoReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InfoReply.ProtoReflect.Descriptor instead.
 func (*InfoReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{23}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *InfoReply) GetPlatformAdmin() bool {
@@ -1495,7 +1918,7 @@ type ProjectReply struct {
 
 func (x *ProjectReply) Reset() {
 	*x = ProjectReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[24]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1507,7 +1930,7 @@ func (x *ProjectReply) String() string {
 func (*ProjectReply) ProtoMessage() {}
 
 func (x *ProjectReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[24]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1520,7 +1943,7 @@ func (x *ProjectReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectReply.ProtoReflect.Descriptor instead.
 func (*ProjectReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{24}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ProjectReply) GetProject() string {
@@ -1567,7 +1990,7 @@ type ProjectsReply struct {
 
 func (x *ProjectsReply) Reset() {
 	*x = ProjectsReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[25]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1579,7 +2002,7 @@ func (x *ProjectsReply) String() string {
 func (*ProjectsReply) ProtoMessage() {}
 
 func (x *ProjectsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[25]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1592,7 +2015,7 @@ func (x *ProjectsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectsReply.ProtoReflect.Descriptor instead.
 func (*ProjectsReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{25}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ProjectsReply) GetProjects() []*ProjectReply {
@@ -1612,7 +2035,7 @@ type MemberInfo struct {
 
 func (x *MemberInfo) Reset() {
 	*x = MemberInfo{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[26]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1624,7 +2047,7 @@ func (x *MemberInfo) String() string {
 func (*MemberInfo) ProtoMessage() {}
 
 func (x *MemberInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[26]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1637,7 +2060,7 @@ func (x *MemberInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemberInfo.ProtoReflect.Descriptor instead.
 func (*MemberInfo) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{26}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *MemberInfo) GetSubject() string {
@@ -1663,7 +2086,7 @@ type MembersReply struct {
 
 func (x *MembersReply) Reset() {
 	*x = MembersReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[27]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1675,7 +2098,7 @@ func (x *MembersReply) String() string {
 func (*MembersReply) ProtoMessage() {}
 
 func (x *MembersReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[27]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1688,7 +2111,7 @@ func (x *MembersReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MembersReply.ProtoReflect.Descriptor instead.
 func (*MembersReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{27}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *MembersReply) GetMembers() []*MemberInfo {
@@ -1707,7 +2130,7 @@ type OkReply struct {
 
 func (x *OkReply) Reset() {
 	*x = OkReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[28]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1719,7 +2142,7 @@ func (x *OkReply) String() string {
 func (*OkReply) ProtoMessage() {}
 
 func (x *OkReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[28]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1732,7 +2155,7 @@ func (x *OkReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OkReply.ProtoReflect.Descriptor instead.
 func (*OkReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{28}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *OkReply) GetOk() bool {
@@ -1758,7 +2181,7 @@ type DatasetReply struct {
 
 func (x *DatasetReply) Reset() {
 	*x = DatasetReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[29]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1770,7 +2193,7 @@ func (x *DatasetReply) String() string {
 func (*DatasetReply) ProtoMessage() {}
 
 func (x *DatasetReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[29]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1783,7 +2206,7 @@ func (x *DatasetReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DatasetReply.ProtoReflect.Descriptor instead.
 func (*DatasetReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{29}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *DatasetReply) GetDataset() string {
@@ -1837,7 +2260,7 @@ type DatasetsReply struct {
 
 func (x *DatasetsReply) Reset() {
 	*x = DatasetsReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[30]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1849,7 +2272,7 @@ func (x *DatasetsReply) String() string {
 func (*DatasetsReply) ProtoMessage() {}
 
 func (x *DatasetsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[30]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1862,7 +2285,7 @@ func (x *DatasetsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DatasetsReply.ProtoReflect.Descriptor instead.
 func (*DatasetsReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{30}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *DatasetsReply) GetDatasets() []*DatasetReply {
@@ -1884,7 +2307,7 @@ type WorkspaceReply struct {
 
 func (x *WorkspaceReply) Reset() {
 	*x = WorkspaceReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[31]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1896,7 +2319,7 @@ func (x *WorkspaceReply) String() string {
 func (*WorkspaceReply) ProtoMessage() {}
 
 func (x *WorkspaceReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[31]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1909,7 +2332,7 @@ func (x *WorkspaceReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceReply.ProtoReflect.Descriptor instead.
 func (*WorkspaceReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{31}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *WorkspaceReply) GetWorkspace() string {
@@ -1949,7 +2372,7 @@ type WorkspacesReply struct {
 
 func (x *WorkspacesReply) Reset() {
 	*x = WorkspacesReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[32]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1961,7 +2384,7 @@ func (x *WorkspacesReply) String() string {
 func (*WorkspacesReply) ProtoMessage() {}
 
 func (x *WorkspacesReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[32]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1974,7 +2397,7 @@ func (x *WorkspacesReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspacesReply.ProtoReflect.Descriptor instead.
 func (*WorkspacesReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{32}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *WorkspacesReply) GetWorkspaces() []*WorkspaceReply {
@@ -1996,7 +2419,7 @@ type SaveReply struct {
 
 func (x *SaveReply) Reset() {
 	*x = SaveReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[33]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2008,7 +2431,7 @@ func (x *SaveReply) String() string {
 func (*SaveReply) ProtoMessage() {}
 
 func (x *SaveReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[33]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2021,7 +2444,7 @@ func (x *SaveReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveReply.ProtoReflect.Descriptor instead.
 func (*SaveReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{33}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *SaveReply) GetVersion() int64 {
@@ -2055,7 +2478,7 @@ type DiscardReply struct {
 
 func (x *DiscardReply) Reset() {
 	*x = DiscardReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[34]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2067,7 +2490,7 @@ func (x *DiscardReply) String() string {
 func (*DiscardReply) ProtoMessage() {}
 
 func (x *DiscardReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[34]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2080,7 +2503,7 @@ func (x *DiscardReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiscardReply.ProtoReflect.Descriptor instead.
 func (*DiscardReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{34}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *DiscardReply) GetVersion() int64 {
@@ -2111,7 +2534,7 @@ type FeaturesReply struct {
 
 func (x *FeaturesReply) Reset() {
 	*x = FeaturesReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[35]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2123,7 +2546,7 @@ func (x *FeaturesReply) String() string {
 func (*FeaturesReply) ProtoMessage() {}
 
 func (x *FeaturesReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[35]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2136,7 +2559,7 @@ func (x *FeaturesReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FeaturesReply.ProtoReflect.Descriptor instead.
 func (*FeaturesReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{35}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *FeaturesReply) GetFeatures() []*Feature {
@@ -2189,7 +2612,7 @@ type Change struct {
 
 func (x *Change) Reset() {
 	*x = Change{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[36]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2201,7 +2624,7 @@ func (x *Change) String() string {
 func (*Change) ProtoMessage() {}
 
 func (x *Change) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[36]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2214,7 +2637,7 @@ func (x *Change) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Change.ProtoReflect.Descriptor instead.
 func (*Change) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{36}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *Change) GetCursor() string {
@@ -2267,10 +2690,11 @@ func (x *Change) GetAfter() *Feature {
 }
 
 type DiffReply struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	BaseRevision int64                  `protobuf:"varint,1,opt,name=base_revision,json=baseRevision,proto3" json:"base_revision,omitempty"`
-	Version      int64                  `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
-	Changes      []*Change              `protobuf:"bytes,3,rep,name=changes,proto3" json:"changes,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BaseRevision  int64                  `protobuf:"varint,1,opt,name=base_revision,json=baseRevision,proto3" json:"base_revision,omitempty"`
+	Version       int64                  `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	Changes       []*Change              `protobuf:"bytes,3,rep,name=changes,proto3" json:"changes,omitempty"`
+	SchemaChanges []*SchemaChange        `protobuf:"bytes,5,rep,name=schema_changes,json=schemaChanges,proto3" json:"schema_changes,omitempty"`
 	// Present only if more changes exist in this request's read snapshot.
 	NextAfter     *string `protobuf:"bytes,4,opt,name=next_after,json=nextAfter,proto3,oneof" json:"next_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2279,7 +2703,7 @@ type DiffReply struct {
 
 func (x *DiffReply) Reset() {
 	*x = DiffReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[37]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2291,7 +2715,7 @@ func (x *DiffReply) String() string {
 func (*DiffReply) ProtoMessage() {}
 
 func (x *DiffReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[37]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2304,7 +2728,7 @@ func (x *DiffReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffReply.ProtoReflect.Descriptor instead.
 func (*DiffReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{37}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *DiffReply) GetBaseRevision() int64 {
@@ -2324,6 +2748,13 @@ func (x *DiffReply) GetVersion() int64 {
 func (x *DiffReply) GetChanges() []*Change {
 	if x != nil {
 		return x.Changes
+	}
+	return nil
+}
+
+func (x *DiffReply) GetSchemaChanges() []*SchemaChange {
+	if x != nil {
+		return x.SchemaChanges
 	}
 	return nil
 }
@@ -2352,7 +2783,7 @@ type Conflict struct {
 
 func (x *Conflict) Reset() {
 	*x = Conflict{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[38]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2364,7 +2795,7 @@ func (x *Conflict) String() string {
 func (*Conflict) ProtoMessage() {}
 
 func (x *Conflict) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[38]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2377,7 +2808,7 @@ func (x *Conflict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Conflict.ProtoReflect.Descriptor instead.
 func (*Conflict) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{38}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *Conflict) GetCursor() string {
@@ -2457,7 +2888,7 @@ type ConflictsReply struct {
 
 func (x *ConflictsReply) Reset() {
 	*x = ConflictsReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[39]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2469,7 +2900,7 @@ func (x *ConflictsReply) String() string {
 func (*ConflictsReply) ProtoMessage() {}
 
 func (x *ConflictsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[39]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2482,7 +2913,7 @@ func (x *ConflictsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConflictsReply.ProtoReflect.Descriptor instead.
 func (*ConflictsReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{39}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *ConflictsReply) GetHead() int64 {
@@ -2541,7 +2972,7 @@ type CommitInfo struct {
 
 func (x *CommitInfo) Reset() {
 	*x = CommitInfo{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[40]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2553,7 +2984,7 @@ func (x *CommitInfo) String() string {
 func (*CommitInfo) ProtoMessage() {}
 
 func (x *CommitInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[40]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2566,7 +2997,7 @@ func (x *CommitInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitInfo.ProtoReflect.Descriptor instead.
 func (*CommitInfo) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{40}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *CommitInfo) GetRevision() int64 {
@@ -2622,7 +3053,7 @@ type HistoryReply struct {
 
 func (x *HistoryReply) Reset() {
 	*x = HistoryReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[41]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2634,7 +3065,7 @@ func (x *HistoryReply) String() string {
 func (*HistoryReply) ProtoMessage() {}
 
 func (x *HistoryReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[41]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2647,7 +3078,7 @@ func (x *HistoryReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryReply.ProtoReflect.Descriptor instead.
 func (*HistoryReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{41}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *HistoryReply) GetCommits() []*CommitInfo {
@@ -2668,6 +3099,7 @@ type CommitReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Revision      int64                  `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
 	Changes       []*Change              `protobuf:"bytes,2,rep,name=changes,proto3" json:"changes,omitempty"`
+	SchemaChanges []*SchemaChange        `protobuf:"bytes,4,rep,name=schema_changes,json=schemaChanges,proto3" json:"schema_changes,omitempty"`
 	NextAfter     *string                `protobuf:"bytes,3,opt,name=next_after,json=nextAfter,proto3,oneof" json:"next_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2675,7 +3107,7 @@ type CommitReply struct {
 
 func (x *CommitReply) Reset() {
 	*x = CommitReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[42]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2687,7 +3119,7 @@ func (x *CommitReply) String() string {
 func (*CommitReply) ProtoMessage() {}
 
 func (x *CommitReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[42]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2700,7 +3132,7 @@ func (x *CommitReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitReply.ProtoReflect.Descriptor instead.
 func (*CommitReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{42}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *CommitReply) GetRevision() int64 {
@@ -2713,6 +3145,13 @@ func (x *CommitReply) GetRevision() int64 {
 func (x *CommitReply) GetChanges() []*Change {
 	if x != nil {
 		return x.Changes
+	}
+	return nil
+}
+
+func (x *CommitReply) GetSchemaChanges() []*SchemaChange {
+	if x != nil {
+		return x.SchemaChanges
 	}
 	return nil
 }
@@ -2737,7 +3176,7 @@ type AuditEvent struct {
 
 func (x *AuditEvent) Reset() {
 	*x = AuditEvent{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[43]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2749,7 +3188,7 @@ func (x *AuditEvent) String() string {
 func (*AuditEvent) ProtoMessage() {}
 
 func (x *AuditEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[43]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2762,7 +3201,7 @@ func (x *AuditEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEvent.ProtoReflect.Descriptor instead.
 func (*AuditEvent) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{43}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *AuditEvent) GetId() int64 {
@@ -2811,7 +3250,7 @@ type AuditReply struct {
 
 func (x *AuditReply) Reset() {
 	*x = AuditReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[44]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2823,7 +3262,7 @@ func (x *AuditReply) String() string {
 func (*AuditReply) ProtoMessage() {}
 
 func (x *AuditReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[44]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2836,7 +3275,7 @@ func (x *AuditReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditReply.ProtoReflect.Descriptor instead.
 func (*AuditReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{44}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *AuditReply) GetEvents() []*AuditEvent {
@@ -2866,7 +3305,7 @@ type PublishReply struct {
 
 func (x *PublishReply) Reset() {
 	*x = PublishReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[45]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2878,7 +3317,7 @@ func (x *PublishReply) String() string {
 func (*PublishReply) ProtoMessage() {}
 
 func (x *PublishReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[45]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2891,7 +3330,7 @@ func (x *PublishReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishReply.ProtoReflect.Descriptor instead.
 func (*PublishReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{45}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *PublishReply) GetRevision() int64 {
@@ -2940,7 +3379,7 @@ type ResolveReply struct {
 
 func (x *ResolveReply) Reset() {
 	*x = ResolveReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[46]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2952,7 +3391,7 @@ func (x *ResolveReply) String() string {
 func (*ResolveReply) ProtoMessage() {}
 
 func (x *ResolveReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[46]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2965,7 +3404,7 @@ func (x *ResolveReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveReply.ProtoReflect.Descriptor instead.
 func (*ResolveReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{46}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ResolveReply) GetHead() int64 {
@@ -3000,7 +3439,7 @@ type RebaseReply struct {
 
 func (x *RebaseReply) Reset() {
 	*x = RebaseReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[47]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3012,7 +3451,7 @@ func (x *RebaseReply) String() string {
 func (*RebaseReply) ProtoMessage() {}
 
 func (x *RebaseReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[47]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3025,7 +3464,7 @@ func (x *RebaseReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RebaseReply.ProtoReflect.Descriptor instead.
 func (*RebaseReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{47}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *RebaseReply) GetBaseRevision() int64 {
@@ -3061,7 +3500,7 @@ type ErrorDetail struct {
 
 func (x *ErrorDetail) Reset() {
 	*x = ErrorDetail{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[48]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3073,7 +3512,7 @@ func (x *ErrorDetail) String() string {
 func (*ErrorDetail) ProtoMessage() {}
 
 func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[48]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3086,7 +3525,7 @@ func (x *ErrorDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorDetail.ProtoReflect.Descriptor instead.
 func (*ErrorDetail) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{48}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ErrorDetail) GetCode() string {
@@ -3131,7 +3570,7 @@ type RpcStatus struct {
 
 func (x *RpcStatus) Reset() {
 	*x = RpcStatus{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[49]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3143,7 +3582,7 @@ func (x *RpcStatus) String() string {
 func (*RpcStatus) ProtoMessage() {}
 
 func (x *RpcStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[49]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3156,7 +3595,7 @@ func (x *RpcStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RpcStatus.ProtoReflect.Descriptor instead.
 func (*RpcStatus) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{49}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *RpcStatus) GetCode() int32 {
@@ -3190,7 +3629,7 @@ type ErrorAny struct {
 
 func (x *ErrorAny) Reset() {
 	*x = ErrorAny{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[50]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3202,7 +3641,7 @@ func (x *ErrorAny) String() string {
 func (*ErrorAny) ProtoMessage() {}
 
 func (x *ErrorAny) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[50]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3215,7 +3654,7 @@ func (x *ErrorAny) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorAny.ProtoReflect.Descriptor instead.
 func (*ErrorAny) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{50}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ErrorAny) GetTypeUrl() string {
@@ -3242,7 +3681,7 @@ type RenameProjectRequest struct {
 
 func (x *RenameProjectRequest) Reset() {
 	*x = RenameProjectRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[51]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3254,7 +3693,7 @@ func (x *RenameProjectRequest) String() string {
 func (*RenameProjectRequest) ProtoMessage() {}
 
 func (x *RenameProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[51]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3267,7 +3706,7 @@ func (x *RenameProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameProjectRequest.ProtoReflect.Descriptor instead.
 func (*RenameProjectRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{51}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *RenameProjectRequest) GetProject() string {
@@ -3295,7 +3734,7 @@ type RenameDatasetRequest struct {
 
 func (x *RenameDatasetRequest) Reset() {
 	*x = RenameDatasetRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[52]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3307,7 +3746,7 @@ func (x *RenameDatasetRequest) String() string {
 func (*RenameDatasetRequest) ProtoMessage() {}
 
 func (x *RenameDatasetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[52]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3320,7 +3759,7 @@ func (x *RenameDatasetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameDatasetRequest.ProtoReflect.Descriptor instead.
 func (*RenameDatasetRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{52}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *RenameDatasetRequest) GetProject() string {
@@ -3355,7 +3794,7 @@ type DeleteDatasetRequest struct {
 
 func (x *DeleteDatasetRequest) Reset() {
 	*x = DeleteDatasetRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[53]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3367,7 +3806,7 @@ func (x *DeleteDatasetRequest) String() string {
 func (*DeleteDatasetRequest) ProtoMessage() {}
 
 func (x *DeleteDatasetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[53]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3380,7 +3819,7 @@ func (x *DeleteDatasetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDatasetRequest.ProtoReflect.Descriptor instead.
 func (*DeleteDatasetRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{53}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *DeleteDatasetRequest) GetProject() string {
@@ -3414,7 +3853,7 @@ type SummaryCommitRequest struct {
 
 func (x *SummaryCommitRequest) Reset() {
 	*x = SummaryCommitRequest{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[54]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3426,7 +3865,7 @@ func (x *SummaryCommitRequest) String() string {
 func (*SummaryCommitRequest) ProtoMessage() {}
 
 func (x *SummaryCommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[54]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3439,7 +3878,7 @@ func (x *SummaryCommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SummaryCommitRequest.ProtoReflect.Descriptor instead.
 func (*SummaryCommitRequest) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{54}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *SummaryCommitRequest) GetProject() string {
@@ -3467,7 +3906,7 @@ type ChangeCounts struct {
 
 func (x *ChangeCounts) Reset() {
 	*x = ChangeCounts{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[55]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3479,7 +3918,7 @@ func (x *ChangeCounts) String() string {
 func (*ChangeCounts) ProtoMessage() {}
 
 func (x *ChangeCounts) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[55]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3492,7 +3931,7 @@ func (x *ChangeCounts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangeCounts.ProtoReflect.Descriptor instead.
 func (*ChangeCounts) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{55}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ChangeCounts) GetAdded() int64 {
@@ -3529,7 +3968,7 @@ type DatasetChangeCounts struct {
 
 func (x *DatasetChangeCounts) Reset() {
 	*x = DatasetChangeCounts{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[56]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3541,7 +3980,7 @@ func (x *DatasetChangeCounts) String() string {
 func (*DatasetChangeCounts) ProtoMessage() {}
 
 func (x *DatasetChangeCounts) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[56]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3554,7 +3993,7 @@ func (x *DatasetChangeCounts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DatasetChangeCounts.ProtoReflect.Descriptor instead.
 func (*DatasetChangeCounts) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{56}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *DatasetChangeCounts) GetId() string {
@@ -3594,6 +4033,7 @@ func (x *DatasetChangeCounts) GetModified() int64 {
 
 type ChangeSummaryReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	SchemaChanges []*SchemaChange        `protobuf:"bytes,5,rep,name=schema_changes,json=schemaChanges,proto3" json:"schema_changes,omitempty"`
 	Total         *ChangeCounts          `protobuf:"bytes,1,opt,name=total,proto3" json:"total,omitempty"`
 	Datasets      []*DatasetChangeCounts `protobuf:"bytes,2,rep,name=datasets,proto3" json:"datasets,omitempty"`
 	Version       *int64                 `protobuf:"varint,3,opt,name=version,proto3,oneof" json:"version,omitempty"`
@@ -3604,7 +4044,7 @@ type ChangeSummaryReply struct {
 
 func (x *ChangeSummaryReply) Reset() {
 	*x = ChangeSummaryReply{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[57]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3616,7 +4056,7 @@ func (x *ChangeSummaryReply) String() string {
 func (*ChangeSummaryReply) ProtoMessage() {}
 
 func (x *ChangeSummaryReply) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[57]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3629,7 +4069,14 @@ func (x *ChangeSummaryReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangeSummaryReply.ProtoReflect.Descriptor instead.
 func (*ChangeSummaryReply) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{57}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *ChangeSummaryReply) GetSchemaChanges() []*SchemaChange {
+	if x != nil {
+		return x.SchemaChanges
+	}
+	return nil
 }
 
 func (x *ChangeSummaryReply) GetTotal() *ChangeCounts {
@@ -3673,7 +4120,7 @@ type PostgisTable struct {
 
 func (x *PostgisTable) Reset() {
 	*x = PostgisTable{}
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[58]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3685,7 +4132,7 @@ func (x *PostgisTable) String() string {
 func (*PostgisTable) ProtoMessage() {}
 
 func (x *PostgisTable) ProtoReflect() protoreflect.Message {
-	mi := &file_geoledger_v1_geoledger_proto_msgTypes[58]
+	mi := &file_geoledger_v1_geoledger_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3698,7 +4145,7 @@ func (x *PostgisTable) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PostgisTable.ProtoReflect.Descriptor instead.
 func (*PostgisTable) Descriptor() ([]byte, []int) {
-	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{58}
+	return file_geoledger_v1_geoledger_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *PostgisTable) GetSchema() string {
@@ -3784,12 +4231,45 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\adataset\x18\x01 \x01(\tR\adataset\x12\x1d\n" +
 	"\n" +
 	"feature_id\x18\x02 \x01(\tR\tfeatureId\x12/\n" +
-	"\afeature\x18\x03 \x01(\v2\x15.geoledger.v1.FeatureR\afeature\"\xad\x01\n" +
+	"\afeature\x18\x03 \x01(\v2\x15.geoledger.v1.FeatureR\afeature\"\xeb\x01\n" +
 	"\vSaveRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x1c\n" +
 	"\tworkspace\x18\x02 \x01(\tR\tworkspace\x12<\n" +
 	"\x1aexpected_workspace_version\x18\x03 \x01(\x03R\x18expectedWorkspaceVersion\x12(\n" +
-	"\x05edits\x18\x04 \x03(\v2\x12.geoledger.v1.EditR\x05edits\"\xa6\x02\n" +
+	"\x05edits\x18\x04 \x03(\v2\x12.geoledger.v1.EditR\x05edits\x12<\n" +
+	"\fschema_edits\x18\x05 \x01(\v2\x19.geoledger.v1.SchemaEditsR\vschemaEdits\"2\n" +
+	"\bAddField\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\"d\n" +
+	"\n" +
+	"SchemaEdit\x12\x18\n" +
+	"\adataset\x18\x01 \x01(\tR\adataset\x12(\n" +
+	"\x03add\x18\x02 \x03(\v2\x16.geoledger.v1.AddFieldR\x03add\x12\x12\n" +
+	"\x04drop\x18\x03 \x03(\tR\x04drop\"=\n" +
+	"\vSchemaEdits\x12.\n" +
+	"\x05edits\x18\x01 \x03(\v2\x18.geoledger.v1.SchemaEditR\x05edits\"\xa2\x01\n" +
+	"\rSchemaRequest\x12\x18\n" +
+	"\aproject\x18\x01 \x01(\tR\aproject\x12\x18\n" +
+	"\adataset\x18\x02 \x01(\tR\adataset\x12!\n" +
+	"\tworkspace\x18\x03 \x01(\tH\x00R\tworkspace\x88\x01\x01\x12\x1f\n" +
+	"\brevision\x18\x04 \x01(\x03H\x01R\brevision\x88\x01\x01B\f\n" +
+	"\n" +
+	"_workspaceB\v\n" +
+	"\t_revision\"m\n" +
+	"\vSchemaField\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1a\n" +
+	"\bnullable\x18\x03 \x01(\bR\bnullable\x12\x1a\n" +
+	"\beditable\x18\x04 \x01(\bR\beditable\"\xa4\x01\n" +
+	"\vSchemaReply\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x120\n" +
+	"\x11workspace_version\x18\x02 \x01(\x03H\x00R\x10workspaceVersion\x88\x01\x01\x121\n" +
+	"\x06fields\x18\x03 \x03(\v2\x19.geoledger.v1.SchemaFieldR\x06fieldsB\x14\n" +
+	"\x12_workspace_version\"\x8c\x01\n" +
+	"\fSchemaChange\x12\x18\n" +
+	"\adataset\x18\x01 \x01(\tR\adataset\x121\n" +
+	"\x06before\x18\x02 \x03(\v2\x19.geoledger.v1.SchemaFieldR\x06before\x12/\n" +
+	"\x05after\x18\x03 \x03(\v2\x19.geoledger.v1.SchemaFieldR\x05after\"\xa6\x02\n" +
 	"\x0fFeaturesRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x18\n" +
 	"\adataset\x18\x02 \x01(\tR\adataset\x12!\n" +
@@ -3904,11 +4384,12 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\x04base\x18\x04 \x01(\v2\x15.geoledger.v1.FeatureR\x04base\x12+\n" +
 	"\x05draft\x18\x05 \x01(\v2\x15.geoledger.v1.FeatureR\x05draft\x12-\n" +
 	"\x06before\x18\x06 \x01(\v2\x15.geoledger.v1.FeatureR\x06before\x12+\n" +
-	"\x05after\x18\a \x01(\v2\x15.geoledger.v1.FeatureR\x05after\"\xad\x01\n" +
+	"\x05after\x18\a \x01(\v2\x15.geoledger.v1.FeatureR\x05after\"\xf0\x01\n" +
 	"\tDiffReply\x12#\n" +
 	"\rbase_revision\x18\x01 \x01(\x03R\fbaseRevision\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x03R\aversion\x12.\n" +
-	"\achanges\x18\x03 \x03(\v2\x14.geoledger.v1.ChangeR\achanges\x12\"\n" +
+	"\achanges\x18\x03 \x03(\v2\x14.geoledger.v1.ChangeR\achanges\x12A\n" +
+	"\x0eschema_changes\x18\x05 \x03(\v2\x1a.geoledger.v1.SchemaChangeR\rschemaChanges\x12\"\n" +
 	"\n" +
 	"next_after\x18\x04 \x01(\tH\x00R\tnextAfter\x88\x01\x01B\r\n" +
 	"\v_next_after\"\xf3\x02\n" +
@@ -3946,10 +4427,11 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\acommits\x18\x01 \x03(\v2\x18.geoledger.v1.CommitInfoR\acommits\x12\"\n" +
 	"\n" +
 	"next_after\x18\x02 \x01(\x03H\x00R\tnextAfter\x88\x01\x01B\r\n" +
-	"\v_next_after\"\x8c\x01\n" +
+	"\v_next_after\"\xcf\x01\n" +
 	"\vCommitReply\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x03R\brevision\x12.\n" +
-	"\achanges\x18\x02 \x03(\v2\x14.geoledger.v1.ChangeR\achanges\x12\"\n" +
+	"\achanges\x18\x02 \x03(\v2\x14.geoledger.v1.ChangeR\achanges\x12A\n" +
+	"\x0eschema_changes\x18\x04 \x03(\v2\x1a.geoledger.v1.SchemaChangeR\rschemaChanges\x12\"\n" +
 	"\n" +
 	"next_after\x18\x03 \x01(\tH\x00R\tnextAfter\x88\x01\x01B\r\n" +
 	"\v_next_after\"\x8e\x01\n" +
@@ -4018,8 +4500,9 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
 	"\x05added\x18\x03 \x01(\x03R\x05added\x12\x18\n" +
 	"\adeleted\x18\x04 \x01(\x03R\adeleted\x12\x1a\n" +
-	"\bmodified\x18\x05 \x01(\x03R\bmodified\"\xde\x01\n" +
-	"\x12ChangeSummaryReply\x120\n" +
+	"\bmodified\x18\x05 \x01(\x03R\bmodified\"\xa1\x02\n" +
+	"\x12ChangeSummaryReply\x12A\n" +
+	"\x0eschema_changes\x18\x05 \x03(\v2\x1a.geoledger.v1.SchemaChangeR\rschemaChanges\x120\n" +
 	"\x05total\x18\x01 \x01(\v2\x1a.geoledger.v1.ChangeCountsR\x05total\x12=\n" +
 	"\bdatasets\x18\x02 \x03(\v2!.geoledger.v1.DatasetChangeCountsR\bdatasets\x12\x1d\n" +
 	"\aversion\x18\x03 \x01(\x03H\x00R\aversion\x88\x01\x01\x12\x1f\n" +
@@ -4031,7 +4514,7 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\x06schema\x18\x01 \x01(\tR\x06schema\x12\x14\n" +
 	"\x05table\x18\x02 \x01(\tR\x05table\x12\x1b\n" +
 	"\tid_column\x18\x03 \x01(\tR\bidColumn\x12'\n" +
-	"\x0fgeometry_column\x18\x04 \x01(\tR\x0egeometryColumn2\xe7\x12\n" +
+	"\x0fgeometry_column\x18\x04 \x01(\tR\x0egeometryColumn2\xa9\x13\n" +
 	"\tGeoLedger\x124\n" +
 	"\x04Info\x12\x13.geoledger.v1.Empty\x1a\x17.geoledger.v1.InfoReply\x12F\n" +
 	"\rCreateProject\x12\x19.geoledger.v1.NameRequest\x1a\x1a.geoledger.v1.ProjectReply\x12F\n" +
@@ -4051,7 +4534,8 @@ const file_geoledger_v1_geoledger_proto_rawDesc = "" +
 	"\n" +
 	"SaveStream\x12\x17.geoledger.v1.DataChunk\x1a\x17.geoledger.v1.SaveReply(\x01\x12C\n" +
 	"\aDiscard\x12\x1c.geoledger.v1.VersionRequest\x1a\x1a.geoledger.v1.DiscardReply\x12F\n" +
-	"\bFeatures\x12\x1d.geoledger.v1.FeaturesRequest\x1a\x1b.geoledger.v1.FeaturesReply\x12J\n" +
+	"\bFeatures\x12\x1d.geoledger.v1.FeaturesRequest\x1a\x1b.geoledger.v1.FeaturesReply\x12@\n" +
+	"\x06Schema\x12\x1b.geoledger.v1.SchemaRequest\x1a\x19.geoledger.v1.SchemaReply\x12J\n" +
 	"\x0eFeaturesStream\x12\x1d.geoledger.v1.FeaturesRequest\x1a\x17.geoledger.v1.DataChunk0\x01\x12T\n" +
 	"\x10WorkspaceSummary\x12\x1e.geoledger.v1.WorkspaceRequest\x1a .geoledger.v1.ChangeSummaryReply\x12U\n" +
 	"\rCommitSummary\x12\".geoledger.v1.SummaryCommitRequest\x1a .geoledger.v1.ChangeSummaryReply\x12:\n" +
@@ -4081,7 +4565,7 @@ func file_geoledger_v1_geoledger_proto_rawDescGZIP() []byte {
 	return file_geoledger_v1_geoledger_proto_rawDescData
 }
 
-var file_geoledger_v1_geoledger_proto_msgTypes = make([]protoimpl.MessageInfo, 59)
+var file_geoledger_v1_geoledger_proto_msgTypes = make([]protoimpl.MessageInfo, 66)
 var file_geoledger_v1_geoledger_proto_goTypes = []any{
 	(*DataChunk)(nil),             // 0: geoledger.v1.DataChunk
 	(*NameRequest)(nil),           // 1: geoledger.v1.NameRequest
@@ -4098,149 +4582,167 @@ var file_geoledger_v1_geoledger_proto_goTypes = []any{
 	(*Feature)(nil),               // 12: geoledger.v1.Feature
 	(*Edit)(nil),                  // 13: geoledger.v1.Edit
 	(*SaveRequest)(nil),           // 14: geoledger.v1.SaveRequest
-	(*FeaturesRequest)(nil),       // 15: geoledger.v1.FeaturesRequest
-	(*DiffRequest)(nil),           // 16: geoledger.v1.DiffRequest
-	(*HistoryRequest)(nil),        // 17: geoledger.v1.HistoryRequest
-	(*CommitRequest)(nil),         // 18: geoledger.v1.CommitRequest
-	(*PublishRequest)(nil),        // 19: geoledger.v1.PublishRequest
-	(*ResolveRequest)(nil),        // 20: geoledger.v1.ResolveRequest
-	(*RestoreRequest)(nil),        // 21: geoledger.v1.RestoreRequest
-	(*Empty)(nil),                 // 22: geoledger.v1.Empty
-	(*InfoReply)(nil),             // 23: geoledger.v1.InfoReply
-	(*ProjectReply)(nil),          // 24: geoledger.v1.ProjectReply
-	(*ProjectsReply)(nil),         // 25: geoledger.v1.ProjectsReply
-	(*MemberInfo)(nil),            // 26: geoledger.v1.MemberInfo
-	(*MembersReply)(nil),          // 27: geoledger.v1.MembersReply
-	(*OkReply)(nil),               // 28: geoledger.v1.OkReply
-	(*DatasetReply)(nil),          // 29: geoledger.v1.DatasetReply
-	(*DatasetsReply)(nil),         // 30: geoledger.v1.DatasetsReply
-	(*WorkspaceReply)(nil),        // 31: geoledger.v1.WorkspaceReply
-	(*WorkspacesReply)(nil),       // 32: geoledger.v1.WorkspacesReply
-	(*SaveReply)(nil),             // 33: geoledger.v1.SaveReply
-	(*DiscardReply)(nil),          // 34: geoledger.v1.DiscardReply
-	(*FeaturesReply)(nil),         // 35: geoledger.v1.FeaturesReply
-	(*Change)(nil),                // 36: geoledger.v1.Change
-	(*DiffReply)(nil),             // 37: geoledger.v1.DiffReply
-	(*Conflict)(nil),              // 38: geoledger.v1.Conflict
-	(*ConflictsReply)(nil),        // 39: geoledger.v1.ConflictsReply
-	(*CommitInfo)(nil),            // 40: geoledger.v1.CommitInfo
-	(*HistoryReply)(nil),          // 41: geoledger.v1.HistoryReply
-	(*CommitReply)(nil),           // 42: geoledger.v1.CommitReply
-	(*AuditEvent)(nil),            // 43: geoledger.v1.AuditEvent
-	(*AuditReply)(nil),            // 44: geoledger.v1.AuditReply
-	(*PublishReply)(nil),          // 45: geoledger.v1.PublishReply
-	(*ResolveReply)(nil),          // 46: geoledger.v1.ResolveReply
-	(*RebaseReply)(nil),           // 47: geoledger.v1.RebaseReply
-	(*ErrorDetail)(nil),           // 48: geoledger.v1.ErrorDetail
-	(*RpcStatus)(nil),             // 49: geoledger.v1.RpcStatus
-	(*ErrorAny)(nil),              // 50: geoledger.v1.ErrorAny
-	(*RenameProjectRequest)(nil),  // 51: geoledger.v1.RenameProjectRequest
-	(*RenameDatasetRequest)(nil),  // 52: geoledger.v1.RenameDatasetRequest
-	(*DeleteDatasetRequest)(nil),  // 53: geoledger.v1.DeleteDatasetRequest
-	(*SummaryCommitRequest)(nil),  // 54: geoledger.v1.SummaryCommitRequest
-	(*ChangeCounts)(nil),          // 55: geoledger.v1.ChangeCounts
-	(*DatasetChangeCounts)(nil),   // 56: geoledger.v1.DatasetChangeCounts
-	(*ChangeSummaryReply)(nil),    // 57: geoledger.v1.ChangeSummaryReply
-	(*PostgisTable)(nil),          // 58: geoledger.v1.PostgisTable
+	(*AddField)(nil),              // 15: geoledger.v1.AddField
+	(*SchemaEdit)(nil),            // 16: geoledger.v1.SchemaEdit
+	(*SchemaEdits)(nil),           // 17: geoledger.v1.SchemaEdits
+	(*SchemaRequest)(nil),         // 18: geoledger.v1.SchemaRequest
+	(*SchemaField)(nil),           // 19: geoledger.v1.SchemaField
+	(*SchemaReply)(nil),           // 20: geoledger.v1.SchemaReply
+	(*SchemaChange)(nil),          // 21: geoledger.v1.SchemaChange
+	(*FeaturesRequest)(nil),       // 22: geoledger.v1.FeaturesRequest
+	(*DiffRequest)(nil),           // 23: geoledger.v1.DiffRequest
+	(*HistoryRequest)(nil),        // 24: geoledger.v1.HistoryRequest
+	(*CommitRequest)(nil),         // 25: geoledger.v1.CommitRequest
+	(*PublishRequest)(nil),        // 26: geoledger.v1.PublishRequest
+	(*ResolveRequest)(nil),        // 27: geoledger.v1.ResolveRequest
+	(*RestoreRequest)(nil),        // 28: geoledger.v1.RestoreRequest
+	(*Empty)(nil),                 // 29: geoledger.v1.Empty
+	(*InfoReply)(nil),             // 30: geoledger.v1.InfoReply
+	(*ProjectReply)(nil),          // 31: geoledger.v1.ProjectReply
+	(*ProjectsReply)(nil),         // 32: geoledger.v1.ProjectsReply
+	(*MemberInfo)(nil),            // 33: geoledger.v1.MemberInfo
+	(*MembersReply)(nil),          // 34: geoledger.v1.MembersReply
+	(*OkReply)(nil),               // 35: geoledger.v1.OkReply
+	(*DatasetReply)(nil),          // 36: geoledger.v1.DatasetReply
+	(*DatasetsReply)(nil),         // 37: geoledger.v1.DatasetsReply
+	(*WorkspaceReply)(nil),        // 38: geoledger.v1.WorkspaceReply
+	(*WorkspacesReply)(nil),       // 39: geoledger.v1.WorkspacesReply
+	(*SaveReply)(nil),             // 40: geoledger.v1.SaveReply
+	(*DiscardReply)(nil),          // 41: geoledger.v1.DiscardReply
+	(*FeaturesReply)(nil),         // 42: geoledger.v1.FeaturesReply
+	(*Change)(nil),                // 43: geoledger.v1.Change
+	(*DiffReply)(nil),             // 44: geoledger.v1.DiffReply
+	(*Conflict)(nil),              // 45: geoledger.v1.Conflict
+	(*ConflictsReply)(nil),        // 46: geoledger.v1.ConflictsReply
+	(*CommitInfo)(nil),            // 47: geoledger.v1.CommitInfo
+	(*HistoryReply)(nil),          // 48: geoledger.v1.HistoryReply
+	(*CommitReply)(nil),           // 49: geoledger.v1.CommitReply
+	(*AuditEvent)(nil),            // 50: geoledger.v1.AuditEvent
+	(*AuditReply)(nil),            // 51: geoledger.v1.AuditReply
+	(*PublishReply)(nil),          // 52: geoledger.v1.PublishReply
+	(*ResolveReply)(nil),          // 53: geoledger.v1.ResolveReply
+	(*RebaseReply)(nil),           // 54: geoledger.v1.RebaseReply
+	(*ErrorDetail)(nil),           // 55: geoledger.v1.ErrorDetail
+	(*RpcStatus)(nil),             // 56: geoledger.v1.RpcStatus
+	(*ErrorAny)(nil),              // 57: geoledger.v1.ErrorAny
+	(*RenameProjectRequest)(nil),  // 58: geoledger.v1.RenameProjectRequest
+	(*RenameDatasetRequest)(nil),  // 59: geoledger.v1.RenameDatasetRequest
+	(*DeleteDatasetRequest)(nil),  // 60: geoledger.v1.DeleteDatasetRequest
+	(*SummaryCommitRequest)(nil),  // 61: geoledger.v1.SummaryCommitRequest
+	(*ChangeCounts)(nil),          // 62: geoledger.v1.ChangeCounts
+	(*DatasetChangeCounts)(nil),   // 63: geoledger.v1.DatasetChangeCounts
+	(*ChangeSummaryReply)(nil),    // 64: geoledger.v1.ChangeSummaryReply
+	(*PostgisTable)(nil),          // 65: geoledger.v1.PostgisTable
 }
 var file_geoledger_v1_geoledger_proto_depIdxs = []int32{
-	58, // 0: geoledger.v1.DatasetRequest.postgis_table:type_name -> geoledger.v1.PostgisTable
+	65, // 0: geoledger.v1.DatasetRequest.postgis_table:type_name -> geoledger.v1.PostgisTable
 	12, // 1: geoledger.v1.Edit.feature:type_name -> geoledger.v1.Feature
 	13, // 2: geoledger.v1.SaveRequest.edits:type_name -> geoledger.v1.Edit
-	13, // 3: geoledger.v1.ResolveRequest.resolutions:type_name -> geoledger.v1.Edit
-	24, // 4: geoledger.v1.ProjectsReply.projects:type_name -> geoledger.v1.ProjectReply
-	26, // 5: geoledger.v1.MembersReply.members:type_name -> geoledger.v1.MemberInfo
-	58, // 6: geoledger.v1.DatasetReply.postgis_table:type_name -> geoledger.v1.PostgisTable
-	29, // 7: geoledger.v1.DatasetsReply.datasets:type_name -> geoledger.v1.DatasetReply
-	31, // 8: geoledger.v1.WorkspacesReply.workspaces:type_name -> geoledger.v1.WorkspaceReply
-	12, // 9: geoledger.v1.FeaturesReply.features:type_name -> geoledger.v1.Feature
-	12, // 10: geoledger.v1.Change.base:type_name -> geoledger.v1.Feature
-	12, // 11: geoledger.v1.Change.draft:type_name -> geoledger.v1.Feature
-	12, // 12: geoledger.v1.Change.before:type_name -> geoledger.v1.Feature
-	12, // 13: geoledger.v1.Change.after:type_name -> geoledger.v1.Feature
-	36, // 14: geoledger.v1.DiffReply.changes:type_name -> geoledger.v1.Change
-	12, // 15: geoledger.v1.Conflict.base:type_name -> geoledger.v1.Feature
-	12, // 16: geoledger.v1.Conflict.current:type_name -> geoledger.v1.Feature
-	12, // 17: geoledger.v1.Conflict.draft:type_name -> geoledger.v1.Feature
-	38, // 18: geoledger.v1.ConflictsReply.conflicts:type_name -> geoledger.v1.Conflict
-	40, // 19: geoledger.v1.HistoryReply.commits:type_name -> geoledger.v1.CommitInfo
-	36, // 20: geoledger.v1.CommitReply.changes:type_name -> geoledger.v1.Change
-	43, // 21: geoledger.v1.AuditReply.events:type_name -> geoledger.v1.AuditEvent
-	39, // 22: geoledger.v1.ErrorDetail.conflicts:type_name -> geoledger.v1.ConflictsReply
-	50, // 23: geoledger.v1.RpcStatus.details:type_name -> geoledger.v1.ErrorAny
-	55, // 24: geoledger.v1.ChangeSummaryReply.total:type_name -> geoledger.v1.ChangeCounts
-	56, // 25: geoledger.v1.ChangeSummaryReply.datasets:type_name -> geoledger.v1.DatasetChangeCounts
-	22, // 26: geoledger.v1.GeoLedger.Info:input_type -> geoledger.v1.Empty
-	1,  // 27: geoledger.v1.GeoLedger.CreateProject:input_type -> geoledger.v1.NameRequest
-	3,  // 28: geoledger.v1.GeoLedger.ListProjects:input_type -> geoledger.v1.PageRequest
-	2,  // 29: geoledger.v1.GeoLedger.GetProject:input_type -> geoledger.v1.ProjectRequest
-	5,  // 30: geoledger.v1.GeoLedger.SetMember:input_type -> geoledger.v1.MemberRequest
-	51, // 31: geoledger.v1.GeoLedger.RenameProject:input_type -> geoledger.v1.RenameProjectRequest
-	52, // 32: geoledger.v1.GeoLedger.RenameDataset:input_type -> geoledger.v1.RenameDatasetRequest
-	53, // 33: geoledger.v1.GeoLedger.DeleteDataset:input_type -> geoledger.v1.DeleteDatasetRequest
-	9,  // 34: geoledger.v1.GeoLedger.CreateDataset:input_type -> geoledger.v1.DatasetRequest
-	4,  // 35: geoledger.v1.GeoLedger.ListDatasets:input_type -> geoledger.v1.ProjectPageRequest
-	2,  // 36: geoledger.v1.GeoLedger.CreateWorkspace:input_type -> geoledger.v1.ProjectRequest
-	4,  // 37: geoledger.v1.GeoLedger.ListWorkspaces:input_type -> geoledger.v1.ProjectPageRequest
-	10, // 38: geoledger.v1.GeoLedger.GetWorkspace:input_type -> geoledger.v1.WorkspaceRequest
-	14, // 39: geoledger.v1.GeoLedger.Save:input_type -> geoledger.v1.SaveRequest
-	0,  // 40: geoledger.v1.GeoLedger.SaveStream:input_type -> geoledger.v1.DataChunk
-	11, // 41: geoledger.v1.GeoLedger.Discard:input_type -> geoledger.v1.VersionRequest
-	15, // 42: geoledger.v1.GeoLedger.Features:input_type -> geoledger.v1.FeaturesRequest
-	15, // 43: geoledger.v1.GeoLedger.FeaturesStream:input_type -> geoledger.v1.FeaturesRequest
-	10, // 44: geoledger.v1.GeoLedger.WorkspaceSummary:input_type -> geoledger.v1.WorkspaceRequest
-	54, // 45: geoledger.v1.GeoLedger.CommitSummary:input_type -> geoledger.v1.SummaryCommitRequest
-	16, // 46: geoledger.v1.GeoLedger.Diff:input_type -> geoledger.v1.DiffRequest
-	16, // 47: geoledger.v1.GeoLedger.Conflicts:input_type -> geoledger.v1.DiffRequest
-	17, // 48: geoledger.v1.GeoLedger.History:input_type -> geoledger.v1.HistoryRequest
-	18, // 49: geoledger.v1.GeoLedger.Commit:input_type -> geoledger.v1.CommitRequest
-	17, // 50: geoledger.v1.GeoLedger.Audit:input_type -> geoledger.v1.HistoryRequest
-	19, // 51: geoledger.v1.GeoLedger.Publish:input_type -> geoledger.v1.PublishRequest
-	20, // 52: geoledger.v1.GeoLedger.Resolve:input_type -> geoledger.v1.ResolveRequest
-	20, // 53: geoledger.v1.GeoLedger.Rebase:input_type -> geoledger.v1.ResolveRequest
-	21, // 54: geoledger.v1.GeoLedger.Restore:input_type -> geoledger.v1.RestoreRequest
-	4,  // 55: geoledger.v1.GeoLedger.ListMembers:input_type -> geoledger.v1.ProjectPageRequest
-	6,  // 56: geoledger.v1.GeoLedger.RemoveMember:input_type -> geoledger.v1.MemberRefRequest
-	7,  // 57: geoledger.v1.GeoLedger.ArchiveProject:input_type -> geoledger.v1.ArchiveProjectRequest
-	8,  // 58: geoledger.v1.GeoLedger.DeleteProject:input_type -> geoledger.v1.DeleteProjectRequest
-	23, // 59: geoledger.v1.GeoLedger.Info:output_type -> geoledger.v1.InfoReply
-	24, // 60: geoledger.v1.GeoLedger.CreateProject:output_type -> geoledger.v1.ProjectReply
-	25, // 61: geoledger.v1.GeoLedger.ListProjects:output_type -> geoledger.v1.ProjectsReply
-	24, // 62: geoledger.v1.GeoLedger.GetProject:output_type -> geoledger.v1.ProjectReply
-	28, // 63: geoledger.v1.GeoLedger.SetMember:output_type -> geoledger.v1.OkReply
-	24, // 64: geoledger.v1.GeoLedger.RenameProject:output_type -> geoledger.v1.ProjectReply
-	29, // 65: geoledger.v1.GeoLedger.RenameDataset:output_type -> geoledger.v1.DatasetReply
-	28, // 66: geoledger.v1.GeoLedger.DeleteDataset:output_type -> geoledger.v1.OkReply
-	29, // 67: geoledger.v1.GeoLedger.CreateDataset:output_type -> geoledger.v1.DatasetReply
-	30, // 68: geoledger.v1.GeoLedger.ListDatasets:output_type -> geoledger.v1.DatasetsReply
-	31, // 69: geoledger.v1.GeoLedger.CreateWorkspace:output_type -> geoledger.v1.WorkspaceReply
-	32, // 70: geoledger.v1.GeoLedger.ListWorkspaces:output_type -> geoledger.v1.WorkspacesReply
-	31, // 71: geoledger.v1.GeoLedger.GetWorkspace:output_type -> geoledger.v1.WorkspaceReply
-	33, // 72: geoledger.v1.GeoLedger.Save:output_type -> geoledger.v1.SaveReply
-	33, // 73: geoledger.v1.GeoLedger.SaveStream:output_type -> geoledger.v1.SaveReply
-	34, // 74: geoledger.v1.GeoLedger.Discard:output_type -> geoledger.v1.DiscardReply
-	35, // 75: geoledger.v1.GeoLedger.Features:output_type -> geoledger.v1.FeaturesReply
-	0,  // 76: geoledger.v1.GeoLedger.FeaturesStream:output_type -> geoledger.v1.DataChunk
-	57, // 77: geoledger.v1.GeoLedger.WorkspaceSummary:output_type -> geoledger.v1.ChangeSummaryReply
-	57, // 78: geoledger.v1.GeoLedger.CommitSummary:output_type -> geoledger.v1.ChangeSummaryReply
-	37, // 79: geoledger.v1.GeoLedger.Diff:output_type -> geoledger.v1.DiffReply
-	39, // 80: geoledger.v1.GeoLedger.Conflicts:output_type -> geoledger.v1.ConflictsReply
-	41, // 81: geoledger.v1.GeoLedger.History:output_type -> geoledger.v1.HistoryReply
-	42, // 82: geoledger.v1.GeoLedger.Commit:output_type -> geoledger.v1.CommitReply
-	44, // 83: geoledger.v1.GeoLedger.Audit:output_type -> geoledger.v1.AuditReply
-	45, // 84: geoledger.v1.GeoLedger.Publish:output_type -> geoledger.v1.PublishReply
-	46, // 85: geoledger.v1.GeoLedger.Resolve:output_type -> geoledger.v1.ResolveReply
-	47, // 86: geoledger.v1.GeoLedger.Rebase:output_type -> geoledger.v1.RebaseReply
-	31, // 87: geoledger.v1.GeoLedger.Restore:output_type -> geoledger.v1.WorkspaceReply
-	27, // 88: geoledger.v1.GeoLedger.ListMembers:output_type -> geoledger.v1.MembersReply
-	28, // 89: geoledger.v1.GeoLedger.RemoveMember:output_type -> geoledger.v1.OkReply
-	24, // 90: geoledger.v1.GeoLedger.ArchiveProject:output_type -> geoledger.v1.ProjectReply
-	28, // 91: geoledger.v1.GeoLedger.DeleteProject:output_type -> geoledger.v1.OkReply
-	59, // [59:92] is the sub-list for method output_type
-	26, // [26:59] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	17, // 3: geoledger.v1.SaveRequest.schema_edits:type_name -> geoledger.v1.SchemaEdits
+	15, // 4: geoledger.v1.SchemaEdit.add:type_name -> geoledger.v1.AddField
+	16, // 5: geoledger.v1.SchemaEdits.edits:type_name -> geoledger.v1.SchemaEdit
+	19, // 6: geoledger.v1.SchemaReply.fields:type_name -> geoledger.v1.SchemaField
+	19, // 7: geoledger.v1.SchemaChange.before:type_name -> geoledger.v1.SchemaField
+	19, // 8: geoledger.v1.SchemaChange.after:type_name -> geoledger.v1.SchemaField
+	13, // 9: geoledger.v1.ResolveRequest.resolutions:type_name -> geoledger.v1.Edit
+	31, // 10: geoledger.v1.ProjectsReply.projects:type_name -> geoledger.v1.ProjectReply
+	33, // 11: geoledger.v1.MembersReply.members:type_name -> geoledger.v1.MemberInfo
+	65, // 12: geoledger.v1.DatasetReply.postgis_table:type_name -> geoledger.v1.PostgisTable
+	36, // 13: geoledger.v1.DatasetsReply.datasets:type_name -> geoledger.v1.DatasetReply
+	38, // 14: geoledger.v1.WorkspacesReply.workspaces:type_name -> geoledger.v1.WorkspaceReply
+	12, // 15: geoledger.v1.FeaturesReply.features:type_name -> geoledger.v1.Feature
+	12, // 16: geoledger.v1.Change.base:type_name -> geoledger.v1.Feature
+	12, // 17: geoledger.v1.Change.draft:type_name -> geoledger.v1.Feature
+	12, // 18: geoledger.v1.Change.before:type_name -> geoledger.v1.Feature
+	12, // 19: geoledger.v1.Change.after:type_name -> geoledger.v1.Feature
+	43, // 20: geoledger.v1.DiffReply.changes:type_name -> geoledger.v1.Change
+	21, // 21: geoledger.v1.DiffReply.schema_changes:type_name -> geoledger.v1.SchemaChange
+	12, // 22: geoledger.v1.Conflict.base:type_name -> geoledger.v1.Feature
+	12, // 23: geoledger.v1.Conflict.current:type_name -> geoledger.v1.Feature
+	12, // 24: geoledger.v1.Conflict.draft:type_name -> geoledger.v1.Feature
+	45, // 25: geoledger.v1.ConflictsReply.conflicts:type_name -> geoledger.v1.Conflict
+	47, // 26: geoledger.v1.HistoryReply.commits:type_name -> geoledger.v1.CommitInfo
+	43, // 27: geoledger.v1.CommitReply.changes:type_name -> geoledger.v1.Change
+	21, // 28: geoledger.v1.CommitReply.schema_changes:type_name -> geoledger.v1.SchemaChange
+	50, // 29: geoledger.v1.AuditReply.events:type_name -> geoledger.v1.AuditEvent
+	46, // 30: geoledger.v1.ErrorDetail.conflicts:type_name -> geoledger.v1.ConflictsReply
+	57, // 31: geoledger.v1.RpcStatus.details:type_name -> geoledger.v1.ErrorAny
+	21, // 32: geoledger.v1.ChangeSummaryReply.schema_changes:type_name -> geoledger.v1.SchemaChange
+	62, // 33: geoledger.v1.ChangeSummaryReply.total:type_name -> geoledger.v1.ChangeCounts
+	63, // 34: geoledger.v1.ChangeSummaryReply.datasets:type_name -> geoledger.v1.DatasetChangeCounts
+	29, // 35: geoledger.v1.GeoLedger.Info:input_type -> geoledger.v1.Empty
+	1,  // 36: geoledger.v1.GeoLedger.CreateProject:input_type -> geoledger.v1.NameRequest
+	3,  // 37: geoledger.v1.GeoLedger.ListProjects:input_type -> geoledger.v1.PageRequest
+	2,  // 38: geoledger.v1.GeoLedger.GetProject:input_type -> geoledger.v1.ProjectRequest
+	5,  // 39: geoledger.v1.GeoLedger.SetMember:input_type -> geoledger.v1.MemberRequest
+	58, // 40: geoledger.v1.GeoLedger.RenameProject:input_type -> geoledger.v1.RenameProjectRequest
+	59, // 41: geoledger.v1.GeoLedger.RenameDataset:input_type -> geoledger.v1.RenameDatasetRequest
+	60, // 42: geoledger.v1.GeoLedger.DeleteDataset:input_type -> geoledger.v1.DeleteDatasetRequest
+	9,  // 43: geoledger.v1.GeoLedger.CreateDataset:input_type -> geoledger.v1.DatasetRequest
+	4,  // 44: geoledger.v1.GeoLedger.ListDatasets:input_type -> geoledger.v1.ProjectPageRequest
+	2,  // 45: geoledger.v1.GeoLedger.CreateWorkspace:input_type -> geoledger.v1.ProjectRequest
+	4,  // 46: geoledger.v1.GeoLedger.ListWorkspaces:input_type -> geoledger.v1.ProjectPageRequest
+	10, // 47: geoledger.v1.GeoLedger.GetWorkspace:input_type -> geoledger.v1.WorkspaceRequest
+	14, // 48: geoledger.v1.GeoLedger.Save:input_type -> geoledger.v1.SaveRequest
+	0,  // 49: geoledger.v1.GeoLedger.SaveStream:input_type -> geoledger.v1.DataChunk
+	11, // 50: geoledger.v1.GeoLedger.Discard:input_type -> geoledger.v1.VersionRequest
+	22, // 51: geoledger.v1.GeoLedger.Features:input_type -> geoledger.v1.FeaturesRequest
+	18, // 52: geoledger.v1.GeoLedger.Schema:input_type -> geoledger.v1.SchemaRequest
+	22, // 53: geoledger.v1.GeoLedger.FeaturesStream:input_type -> geoledger.v1.FeaturesRequest
+	10, // 54: geoledger.v1.GeoLedger.WorkspaceSummary:input_type -> geoledger.v1.WorkspaceRequest
+	61, // 55: geoledger.v1.GeoLedger.CommitSummary:input_type -> geoledger.v1.SummaryCommitRequest
+	23, // 56: geoledger.v1.GeoLedger.Diff:input_type -> geoledger.v1.DiffRequest
+	23, // 57: geoledger.v1.GeoLedger.Conflicts:input_type -> geoledger.v1.DiffRequest
+	24, // 58: geoledger.v1.GeoLedger.History:input_type -> geoledger.v1.HistoryRequest
+	25, // 59: geoledger.v1.GeoLedger.Commit:input_type -> geoledger.v1.CommitRequest
+	24, // 60: geoledger.v1.GeoLedger.Audit:input_type -> geoledger.v1.HistoryRequest
+	26, // 61: geoledger.v1.GeoLedger.Publish:input_type -> geoledger.v1.PublishRequest
+	27, // 62: geoledger.v1.GeoLedger.Resolve:input_type -> geoledger.v1.ResolveRequest
+	27, // 63: geoledger.v1.GeoLedger.Rebase:input_type -> geoledger.v1.ResolveRequest
+	28, // 64: geoledger.v1.GeoLedger.Restore:input_type -> geoledger.v1.RestoreRequest
+	4,  // 65: geoledger.v1.GeoLedger.ListMembers:input_type -> geoledger.v1.ProjectPageRequest
+	6,  // 66: geoledger.v1.GeoLedger.RemoveMember:input_type -> geoledger.v1.MemberRefRequest
+	7,  // 67: geoledger.v1.GeoLedger.ArchiveProject:input_type -> geoledger.v1.ArchiveProjectRequest
+	8,  // 68: geoledger.v1.GeoLedger.DeleteProject:input_type -> geoledger.v1.DeleteProjectRequest
+	30, // 69: geoledger.v1.GeoLedger.Info:output_type -> geoledger.v1.InfoReply
+	31, // 70: geoledger.v1.GeoLedger.CreateProject:output_type -> geoledger.v1.ProjectReply
+	32, // 71: geoledger.v1.GeoLedger.ListProjects:output_type -> geoledger.v1.ProjectsReply
+	31, // 72: geoledger.v1.GeoLedger.GetProject:output_type -> geoledger.v1.ProjectReply
+	35, // 73: geoledger.v1.GeoLedger.SetMember:output_type -> geoledger.v1.OkReply
+	31, // 74: geoledger.v1.GeoLedger.RenameProject:output_type -> geoledger.v1.ProjectReply
+	36, // 75: geoledger.v1.GeoLedger.RenameDataset:output_type -> geoledger.v1.DatasetReply
+	35, // 76: geoledger.v1.GeoLedger.DeleteDataset:output_type -> geoledger.v1.OkReply
+	36, // 77: geoledger.v1.GeoLedger.CreateDataset:output_type -> geoledger.v1.DatasetReply
+	37, // 78: geoledger.v1.GeoLedger.ListDatasets:output_type -> geoledger.v1.DatasetsReply
+	38, // 79: geoledger.v1.GeoLedger.CreateWorkspace:output_type -> geoledger.v1.WorkspaceReply
+	39, // 80: geoledger.v1.GeoLedger.ListWorkspaces:output_type -> geoledger.v1.WorkspacesReply
+	38, // 81: geoledger.v1.GeoLedger.GetWorkspace:output_type -> geoledger.v1.WorkspaceReply
+	40, // 82: geoledger.v1.GeoLedger.Save:output_type -> geoledger.v1.SaveReply
+	40, // 83: geoledger.v1.GeoLedger.SaveStream:output_type -> geoledger.v1.SaveReply
+	41, // 84: geoledger.v1.GeoLedger.Discard:output_type -> geoledger.v1.DiscardReply
+	42, // 85: geoledger.v1.GeoLedger.Features:output_type -> geoledger.v1.FeaturesReply
+	20, // 86: geoledger.v1.GeoLedger.Schema:output_type -> geoledger.v1.SchemaReply
+	0,  // 87: geoledger.v1.GeoLedger.FeaturesStream:output_type -> geoledger.v1.DataChunk
+	64, // 88: geoledger.v1.GeoLedger.WorkspaceSummary:output_type -> geoledger.v1.ChangeSummaryReply
+	64, // 89: geoledger.v1.GeoLedger.CommitSummary:output_type -> geoledger.v1.ChangeSummaryReply
+	44, // 90: geoledger.v1.GeoLedger.Diff:output_type -> geoledger.v1.DiffReply
+	46, // 91: geoledger.v1.GeoLedger.Conflicts:output_type -> geoledger.v1.ConflictsReply
+	48, // 92: geoledger.v1.GeoLedger.History:output_type -> geoledger.v1.HistoryReply
+	49, // 93: geoledger.v1.GeoLedger.Commit:output_type -> geoledger.v1.CommitReply
+	51, // 94: geoledger.v1.GeoLedger.Audit:output_type -> geoledger.v1.AuditReply
+	52, // 95: geoledger.v1.GeoLedger.Publish:output_type -> geoledger.v1.PublishReply
+	53, // 96: geoledger.v1.GeoLedger.Resolve:output_type -> geoledger.v1.ResolveReply
+	54, // 97: geoledger.v1.GeoLedger.Rebase:output_type -> geoledger.v1.RebaseReply
+	38, // 98: geoledger.v1.GeoLedger.Restore:output_type -> geoledger.v1.WorkspaceReply
+	34, // 99: geoledger.v1.GeoLedger.ListMembers:output_type -> geoledger.v1.MembersReply
+	35, // 100: geoledger.v1.GeoLedger.RemoveMember:output_type -> geoledger.v1.OkReply
+	31, // 101: geoledger.v1.GeoLedger.ArchiveProject:output_type -> geoledger.v1.ProjectReply
+	35, // 102: geoledger.v1.GeoLedger.DeleteProject:output_type -> geoledger.v1.OkReply
+	69, // [69:103] is the sub-list for method output_type
+	35, // [35:69] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_geoledger_v1_geoledger_proto_init() }
@@ -4250,25 +4752,27 @@ func file_geoledger_v1_geoledger_proto_init() {
 	}
 	file_geoledger_v1_geoledger_proto_msgTypes[3].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[4].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[15].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[16].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[17].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[18].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[35].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[37].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[38].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[39].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[41].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[20].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[22].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[23].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[24].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[25].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[42].OneofWrappers = []any{}
 	file_geoledger_v1_geoledger_proto_msgTypes[44].OneofWrappers = []any{}
-	file_geoledger_v1_geoledger_proto_msgTypes[57].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[45].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[46].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[48].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[49].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[51].OneofWrappers = []any{}
+	file_geoledger_v1_geoledger_proto_msgTypes[64].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_geoledger_v1_geoledger_proto_rawDesc), len(file_geoledger_v1_geoledger_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   59,
+			NumMessages:   66,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

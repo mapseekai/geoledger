@@ -1,6 +1,6 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=16));
-INSERT INTO gl_format VALUES(true,16);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=19));
+INSERT INTO gl_format VALUES(true,19);
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head INTEGER NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -14,7 +14,7 @@ CREATE TABLE gl_datasets (
  geometry_type text NOT NULL CHECK(geometry_type IN ('point','line','polygon')),
  crs text NOT NULL DEFAULT 'EPSG:4326' CHECK(length(crs)>0 AND length(crs)<=16384),
  coordinate_dimension integer NOT NULL DEFAULT 2 CHECK(coordinate_dimension IN (2,3)),
- postgis_source text,
+ postgis_source text, storage_table text UNIQUE, source_revision INTEGER NOT NULL DEFAULT 0 CHECK(source_revision>=0),
  PRIMARY KEY(project,id), UNIQUE(project,name));
 CREATE TABLE gl_workspaces (
  project text NOT NULL, id text NOT NULL, owner text NOT NULL, base_revision INTEGER NOT NULL CHECK(base_revision>=0),
@@ -32,6 +32,7 @@ CREATE TABLE gl_commits (
  project text NOT NULL REFERENCES gl_projects(id), revision INTEGER NOT NULL CHECK(revision>0),
  workspace text NOT NULL, subject text NOT NULL, message text NOT NULL, created_at text NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
  PRIMARY KEY(project,revision), FOREIGN KEY(project,subject) REFERENCES gl_project_members(project,subject), FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id));
+CREATE INDEX gl_commits_workspace ON gl_commits(project,workspace);
 CREATE TABLE gl_history (
  project text NOT NULL, dataset text NOT NULL, feature_id text COLLATE BINARY NOT NULL, valid_from INTEGER NOT NULL, valid_to INTEGER,
  properties text, geometry_json text, geom BLOB, geom_z BLOB,
@@ -41,10 +42,9 @@ CREATE TABLE gl_history (
  FOREIGN KEY(project,valid_to) REFERENCES gl_commits(project,revision),
  CHECK(valid_to IS NULL OR valid_to>valid_from),
  CHECK(properties IS NULL OR json_type(properties)='object'), CHECK(properties IS NOT NULL OR geometry_json IS NULL));
-CREATE UNIQUE INDEX history_live ON gl_history(project,dataset,feature_id) WHERE valid_to IS NULL;
 CREATE TABLE gl_commit_changes (
  project text NOT NULL, revision INTEGER NOT NULL, dataset text NOT NULL, feature_id text COLLATE BINARY NOT NULL,
- before_value text, after_value text, PRIMARY KEY(project,revision,dataset,feature_id),
+ had_before boolean NOT NULL, has_after boolean NOT NULL, PRIMARY KEY(project,revision,dataset,feature_id),
  FOREIGN KEY(project,revision) REFERENCES gl_commits(project,revision),
  FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id));
 CREATE TABLE gl_idempotency (
@@ -115,3 +115,14 @@ CREATE TRIGGER gl_workspace_size_delete AFTER DELETE ON gl_workspace_changes BEG
  UPDATE gl_workspace_sizes SET changes=changes-1 WHERE project=OLD.project AND workspace=OLD.workspace; END;
 
 CREATE INDEX gl_users_status_id ON gl_users(status,id);
+
+CREATE TABLE gl_schema_history (
+ project text NOT NULL, dataset text NOT NULL, revision bigint NOT NULL CHECK(revision>=0), definition text NOT NULL,
+ PRIMARY KEY(project,dataset,revision), FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id) ON DELETE CASCADE);
+CREATE TABLE gl_workspace_schemas (
+ project text NOT NULL, workspace text NOT NULL, dataset text NOT NULL, definition text NOT NULL,
+ PRIMARY KEY(project,workspace,dataset), FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id) ON DELETE CASCADE,
+ FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id) ON DELETE CASCADE);
+
+CREATE TRIGGER gl_schema_history_update BEFORE UPDATE ON gl_schema_history BEGIN SELECT RAISE(ABORT,'immutable schema record'); END;
+CREATE TRIGGER gl_schema_history_delete BEFORE DELETE ON gl_schema_history WHEN NOT EXISTS (SELECT 1 FROM gl_purge WHERE project=OLD.project) BEGIN SELECT RAISE(ABORT,'immutable schema record'); END;
