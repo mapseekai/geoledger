@@ -22,7 +22,7 @@
     "cmdk": "1.1.1",
     "epsg-index": "2.0.0",
     "iron-session": "9.0.1",
-    "lossless-json": "4.3.1",
+    "lossless-json": "4.3.2",
     "lucide-react": "1.61.0",
     "maplibre-gl": "6.15.0",
     "next": "16.4.2",

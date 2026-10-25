@@ -37,7 +37,7 @@ cargo build --release --locked --bins
 
 ## 生成 SDK
 
-SDK 业务层手工维护，公开接口提供业务客户端、业务模型和业务错误。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：Go、Python、TypeScript 共用 grpcio-tools 内置 protoc，protoc-gen-go 1.36.12、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.13.0。
+SDK 业务层手工维护，公开接口提供业务客户端、业务模型和业务错误。Rust 内部绑定由 Cargo build 从 proto 生成；其余语言的内部生成结果提交在源码中；修改 proto 后执行 [generate-sdk.sh](../scripts/generate-sdk.sh)。工具版本：Go、Python、TypeScript 共用 grpcio-tools 内置 protoc，protoc-gen-go 1.36.12、protoc-gen-go-grpc 1.5.1、grpcio-tools 1.78.0、ts-proto 2.18.0。
 
 ```sh
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
@@ -227,7 +227,7 @@ Console 真实 BFF 回归使用 `scripts/test-console-auth-http.py --url <Consol
 
 [发布策略检查](../scripts/check-release-policy.py) 和 [失败注入测试](../scripts/test_supply_chain.py) 随 `scripts/check.sh` 执行。完整工作流使用 actionlint 检查语法。Windows 原生依赖通过 [安装器](../scripts/install-spatialite.py) 和 [版本锁](../.security/windows-spatialite.lock.json) 校验到隔离目录；二进制在打包前执行真实初始化、XYZ 保存发布、bbox 查询与重启测试，而非只检查 `--version`。
 
-[镜像复审工作流](../.github/workflows/image-audit.yml) 每天从最新非草稿 Release 的 `*-images.json` 清单读取镜像 digest，并重扫两个架构；手动输入标签可复审指定版本。无清单、拉取失败、扫描失败均作为失败处理。历史重建所选提交也必须具备当前发布门禁所需的脚本和依赖配置，缺失时停止发布。发布交付验收见 [发布验收](release.md)。
+[镜像复审工作流](../.github/workflows/image-audit.yml) 每天从最新非草稿 Release 的 `*-images.json` 清单读取镜像 digest，并重扫两个架构；手动输入标签可复审指定版本。复审将 Release 标签解析为完整提交 SHA，要求镜像清单与该 SHA 一致，再从该 SHA 获取 `Cargo.lock` 作为依赖完整性基线；执行的审计脚本、扫描器版本和漏洞阻断规则仍使用当前检出版本。诊断产物保留源锁文件、SHA256、镜像 digest、逐架构报告和审计状态。无清单、源锁文件获取失败、拉取失败、扫描失败均作为失败处理。历史重建所选提交也必须具备当前发布门禁所需的脚本和依赖配置，缺失时停止发布。发布交付验收见 [发布验收](release.md)。
 
 ### 容器构建工具链维护
 
