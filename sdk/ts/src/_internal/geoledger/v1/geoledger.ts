@@ -111,6 +111,51 @@ export interface SaveRequest {
   workspace: string;
   expectedWorkspaceVersion: string;
   edits: Edit[];
+  /** Missing preserves the workspace schema intent; a present empty message clears it. */
+  schemaEdits?: SchemaEdits | undefined;
+}
+
+export interface AddField {
+  name: string;
+  /** string, number, integer, boolean or json; no SQL definitions. */
+  type: string;
+}
+
+export interface SchemaEdit {
+  dataset: string;
+  add: AddField[];
+  drop: string[];
+}
+
+export interface SchemaEdits {
+  /** Complete intent relative to workspace.base_revision, not incremental DDL. */
+  edits: SchemaEdit[];
+}
+
+export interface SchemaRequest {
+  project: string;
+  dataset: string;
+  workspace?: string | undefined;
+  revision?: string | undefined;
+}
+
+export interface SchemaField {
+  name: string;
+  type: string;
+  nullable: boolean;
+  editable: boolean;
+}
+
+export interface SchemaReply {
+  revision: string;
+  workspaceVersion?: string | undefined;
+  fields: SchemaField[];
+}
+
+export interface SchemaChange {
+  dataset: string;
+  before: SchemaField[];
+  after: SchemaField[];
 }
 
 export interface FeaturesRequest {
@@ -268,6 +313,7 @@ export interface DiffReply {
   baseRevision: string;
   version: string;
   changes: Change[];
+  schemaChanges: SchemaChange[];
   /** Present only if more changes exist in this request's read snapshot. */
   nextAfter?: string | undefined;
 }
@@ -311,6 +357,7 @@ export interface HistoryReply {
 export interface CommitReply {
   revision: string;
   changes: Change[];
+  schemaChanges: SchemaChange[];
   nextAfter?: string | undefined;
 }
 
@@ -408,6 +455,7 @@ export interface DatasetChangeCounts {
 }
 
 export interface ChangeSummaryReply {
+  schemaChanges: SchemaChange[];
   total?: ChangeCounts | undefined;
   datasets: DatasetChangeCounts[];
   version?: string | undefined;
@@ -1719,7 +1767,7 @@ export const Edit: MessageFns<Edit> = {
 };
 
 function createBaseSaveRequest(): SaveRequest {
-  return { project: "", workspace: "", expectedWorkspaceVersion: "0", edits: [] };
+  return { project: "", workspace: "", expectedWorkspaceVersion: "0", edits: [], schemaEdits: undefined };
 }
 
 export const SaveRequest: MessageFns<SaveRequest> = {
@@ -1735,6 +1783,9 @@ export const SaveRequest: MessageFns<SaveRequest> = {
     }
     for (const v of message.edits) {
       Edit.encode(v!, writer.uint32(34).fork()).join();
+    }
+    if (message.schemaEdits !== undefined) {
+      SchemaEdits.encode(message.schemaEdits, writer.uint32(42).fork()).join();
     }
     return writer;
   },
@@ -1784,6 +1835,14 @@ export const SaveRequest: MessageFns<SaveRequest> = {
             message.edits.push(Edit.decode(reader, reader.uint32()));
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.schemaEdits = SchemaEdits.decode(reader, reader.uint32());
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1806,6 +1865,11 @@ export const SaveRequest: MessageFns<SaveRequest> = {
         ? globalThis.String(object.expected_workspace_version)
         : "0",
       edits: globalThis.Array.isArray(object?.edits) ? object.edits.map((e: any) => Edit.fromJSON(e)) : [],
+      schemaEdits: isSet(object.schemaEdits)
+        ? SchemaEdits.fromJSON(object.schemaEdits)
+        : isSet(object.schema_edits)
+        ? SchemaEdits.fromJSON(object.schema_edits)
+        : undefined,
     };
   },
 
@@ -1823,6 +1887,9 @@ export const SaveRequest: MessageFns<SaveRequest> = {
     if (message.edits?.length) {
       obj.edits = message.edits.map((e) => Edit.toJSON(e));
     }
+    if (message.schemaEdits !== undefined) {
+      obj.schemaEdits = SchemaEdits.toJSON(message.schemaEdits);
+    }
     return obj;
   },
 
@@ -1835,6 +1902,704 @@ export const SaveRequest: MessageFns<SaveRequest> = {
     message.workspace = object.workspace ?? "";
     message.expectedWorkspaceVersion = object.expectedWorkspaceVersion ?? "0";
     message.edits = object.edits?.map((e) => Edit.fromPartial(e)) || [];
+    message.schemaEdits = (object.schemaEdits !== undefined && object.schemaEdits !== null)
+      ? SchemaEdits.fromPartial(object.schemaEdits)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseAddField(): AddField {
+  return { name: "", type: "" };
+}
+
+export const AddField: MessageFns<AddField> = {
+  encode(message: AddField, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    if (message.type !== "") {
+      writer.uint32(18).string(message.type);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): AddField {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseAddField();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.type = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): AddField {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      type: isSet(object.type) ? globalThis.String(object.type) : "",
+    };
+  },
+
+  toJSON(message: AddField): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.type !== "") {
+      obj.type = message.type;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<AddField>, I>>(base?: I): AddField {
+    return AddField.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<AddField>, I>>(object: I): AddField {
+    const message = createBaseAddField();
+    message.name = object.name ?? "";
+    message.type = object.type ?? "";
+    return message;
+  },
+};
+
+function createBaseSchemaEdit(): SchemaEdit {
+  return { dataset: "", add: [], drop: [] };
+}
+
+export const SchemaEdit: MessageFns<SchemaEdit> = {
+  encode(message: SchemaEdit, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.dataset !== "") {
+      writer.uint32(10).string(message.dataset);
+    }
+    for (const v of message.add) {
+      AddField.encode(v!, writer.uint32(18).fork()).join();
+    }
+    for (const v of message.drop) {
+      writer.uint32(26).string(v!);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SchemaEdit {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSchemaEdit();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.dataset = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.add.push(AddField.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.drop.push(reader.string());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SchemaEdit {
+    return {
+      dataset: isSet(object.dataset) ? globalThis.String(object.dataset) : "",
+      add: globalThis.Array.isArray(object?.add) ? object.add.map((e: any) => AddField.fromJSON(e)) : [],
+      drop: globalThis.Array.isArray(object?.drop) ? object.drop.map((e: any) => globalThis.String(e)) : [],
+    };
+  },
+
+  toJSON(message: SchemaEdit): unknown {
+    const obj: any = {};
+    if (message.dataset !== "") {
+      obj.dataset = message.dataset;
+    }
+    if (message.add?.length) {
+      obj.add = message.add.map((e) => AddField.toJSON(e));
+    }
+    if (message.drop?.length) {
+      obj.drop = message.drop;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SchemaEdit>, I>>(base?: I): SchemaEdit {
+    return SchemaEdit.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SchemaEdit>, I>>(object: I): SchemaEdit {
+    const message = createBaseSchemaEdit();
+    message.dataset = object.dataset ?? "";
+    message.add = object.add?.map((e) => AddField.fromPartial(e)) || [];
+    message.drop = object.drop?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseSchemaEdits(): SchemaEdits {
+  return { edits: [] };
+}
+
+export const SchemaEdits: MessageFns<SchemaEdits> = {
+  encode(message: SchemaEdits, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.edits) {
+      SchemaEdit.encode(v!, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SchemaEdits {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSchemaEdits();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.edits.push(SchemaEdit.decode(reader, reader.uint32()));
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SchemaEdits {
+    return {
+      edits: globalThis.Array.isArray(object?.edits) ? object.edits.map((e: any) => SchemaEdit.fromJSON(e)) : [],
+    };
+  },
+
+  toJSON(message: SchemaEdits): unknown {
+    const obj: any = {};
+    if (message.edits?.length) {
+      obj.edits = message.edits.map((e) => SchemaEdit.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SchemaEdits>, I>>(base?: I): SchemaEdits {
+    return SchemaEdits.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SchemaEdits>, I>>(object: I): SchemaEdits {
+    const message = createBaseSchemaEdits();
+    message.edits = object.edits?.map((e) => SchemaEdit.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSchemaRequest(): SchemaRequest {
+  return { project: "", dataset: "", workspace: undefined, revision: undefined };
+}
+
+export const SchemaRequest: MessageFns<SchemaRequest> = {
+  encode(message: SchemaRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.project !== "") {
+      writer.uint32(10).string(message.project);
+    }
+    if (message.dataset !== "") {
+      writer.uint32(18).string(message.dataset);
+    }
+    if (message.workspace !== undefined) {
+      writer.uint32(26).string(message.workspace);
+    }
+    if (message.revision !== undefined) {
+      writer.uint32(32).int64(message.revision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SchemaRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSchemaRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.project = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.dataset = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.workspace = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.revision = reader.int64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SchemaRequest {
+    return {
+      project: isSet(object.project) ? globalThis.String(object.project) : "",
+      dataset: isSet(object.dataset) ? globalThis.String(object.dataset) : "",
+      workspace: isSet(object.workspace) ? globalThis.String(object.workspace) : undefined,
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
+    };
+  },
+
+  toJSON(message: SchemaRequest): unknown {
+    const obj: any = {};
+    if (message.project !== "") {
+      obj.project = message.project;
+    }
+    if (message.dataset !== "") {
+      obj.dataset = message.dataset;
+    }
+    if (message.workspace !== undefined) {
+      obj.workspace = message.workspace;
+    }
+    if (message.revision !== undefined) {
+      obj.revision = message.revision;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SchemaRequest>, I>>(base?: I): SchemaRequest {
+    return SchemaRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SchemaRequest>, I>>(object: I): SchemaRequest {
+    const message = createBaseSchemaRequest();
+    message.project = object.project ?? "";
+    message.dataset = object.dataset ?? "";
+    message.workspace = object.workspace ?? undefined;
+    message.revision = object.revision ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSchemaField(): SchemaField {
+  return { name: "", type: "", nullable: false, editable: false };
+}
+
+export const SchemaField: MessageFns<SchemaField> = {
+  encode(message: SchemaField, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    if (message.type !== "") {
+      writer.uint32(18).string(message.type);
+    }
+    if (message.nullable !== false) {
+      writer.uint32(24).bool(message.nullable);
+    }
+    if (message.editable !== false) {
+      writer.uint32(32).bool(message.editable);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SchemaField {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSchemaField();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.type = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.nullable = reader.bool();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.editable = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SchemaField {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      type: isSet(object.type) ? globalThis.String(object.type) : "",
+      nullable: isSet(object.nullable) ? globalThis.Boolean(object.nullable) : false,
+      editable: isSet(object.editable) ? globalThis.Boolean(object.editable) : false,
+    };
+  },
+
+  toJSON(message: SchemaField): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.type !== "") {
+      obj.type = message.type;
+    }
+    if (message.nullable !== false) {
+      obj.nullable = message.nullable;
+    }
+    if (message.editable !== false) {
+      obj.editable = message.editable;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SchemaField>, I>>(base?: I): SchemaField {
+    return SchemaField.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SchemaField>, I>>(object: I): SchemaField {
+    const message = createBaseSchemaField();
+    message.name = object.name ?? "";
+    message.type = object.type ?? "";
+    message.nullable = object.nullable ?? false;
+    message.editable = object.editable ?? false;
+    return message;
+  },
+};
+
+function createBaseSchemaReply(): SchemaReply {
+  return { revision: "0", workspaceVersion: undefined, fields: [] };
+}
+
+export const SchemaReply: MessageFns<SchemaReply> = {
+  encode(message: SchemaReply, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.revision !== "0") {
+      writer.uint32(8).int64(message.revision);
+    }
+    if (message.workspaceVersion !== undefined) {
+      writer.uint32(16).int64(message.workspaceVersion);
+    }
+    for (const v of message.fields) {
+      SchemaField.encode(v!, writer.uint32(26).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SchemaReply {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSchemaReply();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.revision = reader.int64().toString();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.workspaceVersion = reader.int64().toString();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.fields.push(SchemaField.decode(reader, reader.uint32()));
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SchemaReply {
+    return {
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : "0",
+      workspaceVersion: isSet(object.workspaceVersion)
+        ? globalThis.String(object.workspaceVersion)
+        : isSet(object.workspace_version)
+        ? globalThis.String(object.workspace_version)
+        : undefined,
+      fields: globalThis.Array.isArray(object?.fields) ? object.fields.map((e: any) => SchemaField.fromJSON(e)) : [],
+    };
+  },
+
+  toJSON(message: SchemaReply): unknown {
+    const obj: any = {};
+    if (message.revision !== "0") {
+      obj.revision = message.revision;
+    }
+    if (message.workspaceVersion !== undefined) {
+      obj.workspaceVersion = message.workspaceVersion;
+    }
+    if (message.fields?.length) {
+      obj.fields = message.fields.map((e) => SchemaField.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SchemaReply>, I>>(base?: I): SchemaReply {
+    return SchemaReply.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SchemaReply>, I>>(object: I): SchemaReply {
+    const message = createBaseSchemaReply();
+    message.revision = object.revision ?? "0";
+    message.workspaceVersion = object.workspaceVersion ?? undefined;
+    message.fields = object.fields?.map((e) => SchemaField.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSchemaChange(): SchemaChange {
+  return { dataset: "", before: [], after: [] };
+}
+
+export const SchemaChange: MessageFns<SchemaChange> = {
+  encode(message: SchemaChange, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.dataset !== "") {
+      writer.uint32(10).string(message.dataset);
+    }
+    for (const v of message.before) {
+      SchemaField.encode(v!, writer.uint32(18).fork()).join();
+    }
+    for (const v of message.after) {
+      SchemaField.encode(v!, writer.uint32(26).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SchemaChange {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSchemaChange();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.dataset = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.before.push(SchemaField.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.after.push(SchemaField.decode(reader, reader.uint32()));
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SchemaChange {
+    return {
+      dataset: isSet(object.dataset) ? globalThis.String(object.dataset) : "",
+      before: globalThis.Array.isArray(object?.before) ? object.before.map((e: any) => SchemaField.fromJSON(e)) : [],
+      after: globalThis.Array.isArray(object?.after) ? object.after.map((e: any) => SchemaField.fromJSON(e)) : [],
+    };
+  },
+
+  toJSON(message: SchemaChange): unknown {
+    const obj: any = {};
+    if (message.dataset !== "") {
+      obj.dataset = message.dataset;
+    }
+    if (message.before?.length) {
+      obj.before = message.before.map((e) => SchemaField.toJSON(e));
+    }
+    if (message.after?.length) {
+      obj.after = message.after.map((e) => SchemaField.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SchemaChange>, I>>(base?: I): SchemaChange {
+    return SchemaChange.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SchemaChange>, I>>(object: I): SchemaChange {
+    const message = createBaseSchemaChange();
+    message.dataset = object.dataset ?? "";
+    message.before = object.before?.map((e) => SchemaField.fromPartial(e)) || [];
+    message.after = object.after?.map((e) => SchemaField.fromPartial(e)) || [];
     return message;
   },
 };
@@ -4328,7 +5093,7 @@ export const Change: MessageFns<Change> = {
 };
 
 function createBaseDiffReply(): DiffReply {
-  return { baseRevision: "0", version: "0", changes: [], nextAfter: undefined };
+  return { baseRevision: "0", version: "0", changes: [], schemaChanges: [], nextAfter: undefined };
 }
 
 export const DiffReply: MessageFns<DiffReply> = {
@@ -4341,6 +5106,9 @@ export const DiffReply: MessageFns<DiffReply> = {
     }
     for (const v of message.changes) {
       Change.encode(v!, writer.uint32(26).fork()).join();
+    }
+    for (const v of message.schemaChanges) {
+      SchemaChange.encode(v!, writer.uint32(42).fork()).join();
     }
     if (message.nextAfter !== undefined) {
       writer.uint32(34).string(message.nextAfter);
@@ -4385,6 +5153,14 @@ export const DiffReply: MessageFns<DiffReply> = {
             message.changes.push(Change.decode(reader, reader.uint32()));
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.schemaChanges.push(SchemaChange.decode(reader, reader.uint32()));
+            continue;
+          }
           case 4: {
             if (tag !== 34) {
               break;
@@ -4414,6 +5190,11 @@ export const DiffReply: MessageFns<DiffReply> = {
         : "0",
       version: isSet(object.version) ? globalThis.String(object.version) : "0",
       changes: globalThis.Array.isArray(object?.changes) ? object.changes.map((e: any) => Change.fromJSON(e)) : [],
+      schemaChanges: globalThis.Array.isArray(object?.schemaChanges)
+        ? object.schemaChanges.map((e: any) => SchemaChange.fromJSON(e))
+        : globalThis.Array.isArray(object?.schema_changes)
+        ? object.schema_changes.map((e: any) => SchemaChange.fromJSON(e))
+        : [],
       nextAfter: isSet(object.nextAfter)
         ? globalThis.String(object.nextAfter)
         : isSet(object.next_after)
@@ -4433,6 +5214,9 @@ export const DiffReply: MessageFns<DiffReply> = {
     if (message.changes?.length) {
       obj.changes = message.changes.map((e) => Change.toJSON(e));
     }
+    if (message.schemaChanges?.length) {
+      obj.schemaChanges = message.schemaChanges.map((e) => SchemaChange.toJSON(e));
+    }
     if (message.nextAfter !== undefined) {
       obj.nextAfter = message.nextAfter;
     }
@@ -4447,6 +5231,7 @@ export const DiffReply: MessageFns<DiffReply> = {
     message.baseRevision = object.baseRevision ?? "0";
     message.version = object.version ?? "0";
     message.changes = object.changes?.map((e) => Change.fromPartial(e)) || [];
+    message.schemaChanges = object.schemaChanges?.map((e) => SchemaChange.fromPartial(e)) || [];
     message.nextAfter = object.nextAfter ?? undefined;
     return message;
   },
@@ -5077,7 +5862,7 @@ export const HistoryReply: MessageFns<HistoryReply> = {
 };
 
 function createBaseCommitReply(): CommitReply {
-  return { revision: "0", changes: [], nextAfter: undefined };
+  return { revision: "0", changes: [], schemaChanges: [], nextAfter: undefined };
 }
 
 export const CommitReply: MessageFns<CommitReply> = {
@@ -5087,6 +5872,9 @@ export const CommitReply: MessageFns<CommitReply> = {
     }
     for (const v of message.changes) {
       Change.encode(v!, writer.uint32(18).fork()).join();
+    }
+    for (const v of message.schemaChanges) {
+      SchemaChange.encode(v!, writer.uint32(34).fork()).join();
     }
     if (message.nextAfter !== undefined) {
       writer.uint32(26).string(message.nextAfter);
@@ -5123,6 +5911,14 @@ export const CommitReply: MessageFns<CommitReply> = {
             message.changes.push(Change.decode(reader, reader.uint32()));
             continue;
           }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.schemaChanges.push(SchemaChange.decode(reader, reader.uint32()));
+            continue;
+          }
           case 3: {
             if (tag !== 26) {
               break;
@@ -5147,6 +5943,11 @@ export const CommitReply: MessageFns<CommitReply> = {
     return {
       revision: isSet(object.revision) ? globalThis.String(object.revision) : "0",
       changes: globalThis.Array.isArray(object?.changes) ? object.changes.map((e: any) => Change.fromJSON(e)) : [],
+      schemaChanges: globalThis.Array.isArray(object?.schemaChanges)
+        ? object.schemaChanges.map((e: any) => SchemaChange.fromJSON(e))
+        : globalThis.Array.isArray(object?.schema_changes)
+        ? object.schema_changes.map((e: any) => SchemaChange.fromJSON(e))
+        : [],
       nextAfter: isSet(object.nextAfter)
         ? globalThis.String(object.nextAfter)
         : isSet(object.next_after)
@@ -5163,6 +5964,9 @@ export const CommitReply: MessageFns<CommitReply> = {
     if (message.changes?.length) {
       obj.changes = message.changes.map((e) => Change.toJSON(e));
     }
+    if (message.schemaChanges?.length) {
+      obj.schemaChanges = message.schemaChanges.map((e) => SchemaChange.toJSON(e));
+    }
     if (message.nextAfter !== undefined) {
       obj.nextAfter = message.nextAfter;
     }
@@ -5176,6 +5980,7 @@ export const CommitReply: MessageFns<CommitReply> = {
     const message = createBaseCommitReply();
     message.revision = object.revision ?? "0";
     message.changes = object.changes?.map((e) => Change.fromPartial(e)) || [];
+    message.schemaChanges = object.schemaChanges?.map((e) => SchemaChange.fromPartial(e)) || [];
     message.nextAfter = object.nextAfter ?? undefined;
     return message;
   },
@@ -6678,11 +7483,14 @@ export const DatasetChangeCounts: MessageFns<DatasetChangeCounts> = {
 };
 
 function createBaseChangeSummaryReply(): ChangeSummaryReply {
-  return { total: undefined, datasets: [], version: undefined, revision: undefined };
+  return { schemaChanges: [], total: undefined, datasets: [], version: undefined, revision: undefined };
 }
 
 export const ChangeSummaryReply: MessageFns<ChangeSummaryReply> = {
   encode(message: ChangeSummaryReply, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.schemaChanges) {
+      SchemaChange.encode(v!, writer.uint32(42).fork()).join();
+    }
     if (message.total !== undefined) {
       ChangeCounts.encode(message.total, writer.uint32(10).fork()).join();
     }
@@ -6711,6 +7519,14 @@ export const ChangeSummaryReply: MessageFns<ChangeSummaryReply> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.schemaChanges.push(SchemaChange.decode(reader, reader.uint32()));
+            continue;
+          }
           case 1: {
             if (tag !== 10) {
               break;
@@ -6757,6 +7573,11 @@ export const ChangeSummaryReply: MessageFns<ChangeSummaryReply> = {
 
   fromJSON(object: any): ChangeSummaryReply {
     return {
+      schemaChanges: globalThis.Array.isArray(object?.schemaChanges)
+        ? object.schemaChanges.map((e: any) => SchemaChange.fromJSON(e))
+        : globalThis.Array.isArray(object?.schema_changes)
+        ? object.schema_changes.map((e: any) => SchemaChange.fromJSON(e))
+        : [],
       total: isSet(object.total) ? ChangeCounts.fromJSON(object.total) : undefined,
       datasets: globalThis.Array.isArray(object?.datasets)
         ? object.datasets.map((e: any) => DatasetChangeCounts.fromJSON(e))
@@ -6768,6 +7589,9 @@ export const ChangeSummaryReply: MessageFns<ChangeSummaryReply> = {
 
   toJSON(message: ChangeSummaryReply): unknown {
     const obj: any = {};
+    if (message.schemaChanges?.length) {
+      obj.schemaChanges = message.schemaChanges.map((e) => SchemaChange.toJSON(e));
+    }
     if (message.total !== undefined) {
       obj.total = ChangeCounts.toJSON(message.total);
     }
@@ -6788,6 +7612,7 @@ export const ChangeSummaryReply: MessageFns<ChangeSummaryReply> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChangeSummaryReply>, I>>(object: I): ChangeSummaryReply {
     const message = createBaseChangeSummaryReply();
+    message.schemaChanges = object.schemaChanges?.map((e) => SchemaChange.fromPartial(e)) || [];
     message.total = (object.total !== undefined && object.total !== null)
       ? ChangeCounts.fromPartial(object.total)
       : undefined;
@@ -7084,6 +7909,15 @@ export const GeoLedgerService = {
     responseSerialize: (value: FeaturesReply): Buffer => Buffer.from(FeaturesReply.encode(value).finish()),
     responseDeserialize: (value: Buffer): FeaturesReply => FeaturesReply.decode(value),
   },
+  schema: {
+    path: "/geoledger.v1.GeoLedger/Schema" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: SchemaRequest): Buffer => Buffer.from(SchemaRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): SchemaRequest => SchemaRequest.decode(value),
+    responseSerialize: (value: SchemaReply): Buffer => Buffer.from(SchemaReply.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SchemaReply => SchemaReply.decode(value),
+  },
   /** Concatenated chunks encode one snapshot-consistent FeaturesReply. */
   featuresStream: {
     path: "/geoledger.v1.GeoLedger/FeaturesStream" as const,
@@ -7251,6 +8085,7 @@ export interface GeoLedgerServer extends UntypedServiceImplementation {
   saveStream: handleClientStreamingCall<DataChunk, SaveReply>;
   discard: handleUnaryCall<VersionRequest, DiscardReply>;
   features: handleUnaryCall<FeaturesRequest, FeaturesReply>;
+  schema: handleUnaryCall<SchemaRequest, SchemaReply>;
   /** Concatenated chunks encode one snapshot-consistent FeaturesReply. */
   featuresStream: handleServerStreamingCall<FeaturesRequest, DataChunk>;
   workspaceSummary: handleUnaryCall<WorkspaceRequest, ChangeSummaryReply>;
@@ -7516,6 +8351,21 @@ export interface GeoLedgerClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: FeaturesReply) => void,
+  ): ClientUnaryCall;
+  schema(
+    request: SchemaRequest,
+    callback: (error: ServiceError | null, response: SchemaReply) => void,
+  ): ClientUnaryCall;
+  schema(
+    request: SchemaRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: SchemaReply) => void,
+  ): ClientUnaryCall;
+  schema(
+    request: SchemaRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: SchemaReply) => void,
   ): ClientUnaryCall;
   /** Concatenated chunks encode one snapshot-consistent FeaturesReply. */
   featuresStream(request: FeaturesRequest, options?: Partial<CallOptions>): ClientReadableStream<DataChunk>;

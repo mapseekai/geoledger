@@ -48,8 +48,14 @@ pub(super) fn features(
         text(k, 256)?;
     }
     let (revision, workspace_version) = if let Some(w) = &r.workspace {
-        let (base, version, _) = workspace(t, s, &r.project, w, None)?;
-        (base, Some(version))
+        let (base, version, status) = workspace(t, s, &r.project, w, None)?;
+        let revision = if status == "published" {
+            t.workspace_publication_revision(&r.project, w)?
+                .ok_or_else(|| Error::new(500, "missing workspace publication"))?
+        } else {
+            base
+        };
+        (revision, Some(version))
     } else {
         let h = head(t, &r.project, false)?;
         let v = r.revision.unwrap_or(h);
@@ -58,6 +64,8 @@ pub(super) fn features(
         }
         (v, None)
     };
+    let definition =
+        effective_projection(t, &r.project, &r.dataset, revision, r.workspace.as_deref())?;
     let bbox = r.bbox.unwrap_or([-180., -90., 180., 90.]);
     if bbox.iter().any(|x| !x.is_finite()) || bbox[0] > bbox[2] || bbox[1] > bbox[3] {
         return Err(bad());
@@ -83,7 +91,10 @@ pub(super) fn features(
         }
         for row in rows {
             query.after = row.get(0usize)?;
-            let properties: Value = codec::stored(&row.get::<_, String>(1usize)?)?;
+            let mut properties: Value = codec::stored(&row.get::<_, String>(1usize)?)?;
+            if let Some(properties) = properties.as_object_mut() {
+                project_properties(properties, &definition);
+            }
             let geometry: Value = row
                 .get::<_, Option<String>>(2usize)?
                 .map(|s| serde_json::from_str(&s))
@@ -123,7 +134,7 @@ pub(super) struct Diff {
     pub(super) limit: i64,
 }
 pub(super) fn diff(
-    t: &mut (impl ProjectRepository + ResponseBudget + WorkspaceRepository + ?Sized),
+    t: &mut (impl DatasetRepository + ProjectRepository + ResponseBudget + WorkspaceRepository + ?Sized),
     s: &str,
     r: Diff,
 ) -> Result<Value> {
@@ -168,7 +179,9 @@ pub(super) fn diff(
     } else {
         None
     };
-    Ok(json!({"base_revision":base,"version":version,"changes":result,"next_after":next}))
+    Ok(
+        json!({"base_revision":base,"version":version,"changes":result,"next_after":next,"schema_changes":workspace_schema_diff(t,&r.project,&r.workspace,base)?}),
+    )
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,7 +223,7 @@ pub(super) struct Commit {
     limit: i64,
 }
 pub(super) fn commit_detail(
-    t: &mut (impl HistoryRepository + ProjectRepository + ResponseBudget + ?Sized),
+    t: &mut (impl DatasetRepository + HistoryRepository + ProjectRepository + ResponseBudget + ?Sized),
     s: &str,
     r: Commit,
 ) -> Result<Value> {
@@ -248,7 +261,9 @@ pub(super) fn commit_detail(
     } else {
         None
     };
-    Ok(json!({"revision":r.revision,"changes":out,"next_after":next}))
+    Ok(
+        json!({"revision":r.revision,"changes":out,"next_after":next,"schema_changes":commit_schema_diff(t,&r.project,r.revision)?}),
+    )
 }
 
 fn feature_row(row: &Row, key: &str, properties: usize, geometry: usize) -> Result<Value> {
@@ -324,17 +339,18 @@ pub(super) struct SummaryCommit {
     revision: i64,
 }
 pub(super) fn workspace_summary(
-    t: &mut (impl ProjectRepository + WorkspaceRepository + ?Sized),
+    t: &mut (impl DatasetRepository + ProjectRepository + WorkspaceRepository + ?Sized),
     s: &str,
     r: Workspace,
 ) -> Result<Value> {
     let (base, version, _) = workspace(t, s, &r.project, &r.workspace, None)?;
     let mut result = change_summary(t.workspace_summary(&r.project, &r.workspace, base)?)?;
     result["version"] = json!(version);
+    result["schema_changes"] = workspace_schema_diff(t, &r.project, &r.workspace, base)?;
     Ok(result)
 }
 pub(super) fn commit_summary(
-    t: &mut (impl HistoryRepository + ProjectRepository + ?Sized),
+    t: &mut (impl DatasetRepository + HistoryRepository + ProjectRepository + ?Sized),
     s: &str,
     r: SummaryCommit,
 ) -> Result<Value> {
@@ -343,6 +359,7 @@ pub(super) fn commit_summary(
         .ok_or_else(missing)?;
     let mut result = change_summary(t.commit_summary(&r.project, r.revision)?)?;
     result["revision"] = json!(r.revision);
+    result["schema_changes"] = commit_schema_diff(t, &r.project, r.revision)?;
     Ok(result)
 }
 fn change_summary(rows: Vec<Row>) -> Result<Value> {

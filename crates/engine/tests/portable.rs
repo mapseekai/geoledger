@@ -118,7 +118,8 @@ fn bulk(app: &Application, seed: &Seed) -> TestResult {
         .as_str()
         .ok_or("workspace")?
         .to_owned();
-    for batch in 0..11i64 {
+    let mut draft = None;
+    for batch in 0..21i64 {
         let edits: Vec<_> = (batch * 100..(batch + 1) * 100)
             .map(|i| {
                 let id = match i % 3 {
@@ -136,22 +137,23 @@ fn bulk(app: &Application, seed: &Seed) -> TestResult {
                 "publish",
                 json!({"project":p,"workspace":w,"expected_workspace_version":10,"request_id":Uuid::new_v4(),"message":"bulk"}),
             )?;
-            let next = app.execute("alice", "create_workspace", json!({"project":p}))?["workspace"]
-                .as_str()
-                .ok_or("workspace")?
-                .to_owned();
-            app.execute(
-                "alice",
-                "save",
-                json!({"project":p,"workspace":next,"expected_workspace_version":0,"edits":edits}),
-            )?;
-        } else {
-            app.execute(
-                "alice",
-                "save",
-                json!({"project":p,"workspace":w,"expected_workspace_version":batch,"edits":edits}),
-            )?;
+            draft = Some(
+                app.execute("alice", "create_workspace", json!({"project":p}))?["workspace"]
+                    .as_str()
+                    .ok_or("workspace")?
+                    .to_owned(),
+            );
         }
+        let (workspace, version) = if batch < 10 {
+            (&w, batch)
+        } else {
+            (draft.as_ref().ok_or("draft workspace")?, batch - 10)
+        };
+        app.execute(
+            "alice",
+            "save",
+            json!({"project":p,"workspace":workspace,"expected_workspace_version":version,"edits":edits}),
+        )?;
     }
     Ok(())
 }
@@ -229,7 +231,10 @@ fn sqlite_export_import_round_trip_preserves_everything() -> TestResult {
     bulk(&source, &seed)?;
     let (bytes, summary) = export(&source)?;
     assert_eq!(summary, source.data_summary()?);
-    assert!(summary.rows("gl_history") > 1000 && summary.rows("gl_workspace_changes") > 1000);
+    assert!(
+        summary.rows("gl_current_features") > 1000 && summary.rows("gl_workspace_changes") > 1000
+    );
+    assert!(summary.rows("gl_history") > 0);
     assert_eq!(Application::read_export(&mut Cursor::new(&bytes))?, summary);
     for table in [
         "gl_projects",
@@ -242,12 +247,31 @@ fn sqlite_export_import_round_trip_preserves_everything() -> TestResult {
         "gl_workspace_changes",
         "gl_idempotency",
         "gl_audit_events",
+        "gl_current_features",
     ] {
         assert!(summary.rows(table) > 0, "{table} is empty in the seed");
     }
     // Import initializes a missing database.
     let target = Application::new(Storage::Sqlite(dir.path().join("target.sqlite3")));
     assert_eq!(target.import_data(&mut Cursor::new(&bytes))?, summary);
+    let restored = rusqlite::Connection::open(dir.path().join("target.sqlite3"))?;
+    let table: String = restored.query_row(
+        "SELECT storage_table FROM gl_datasets WHERE project=?1 AND id=?2",
+        [&seed.project, &seed.dataset],
+        |r| r.get(0),
+    )?;
+    assert_eq!(
+        restored.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+            .get::<_, i64>(0))?,
+        1002
+    );
+    let original = rusqlite::Connection::open(dir.path().join("source.sqlite3"))?;
+    let source_table: String = original.query_row(
+        "SELECT storage_table FROM gl_datasets WHERE project=?1 AND id=?2",
+        [&seed.project, &seed.dataset],
+        |r| r.get(0),
+    )?;
+    assert_ne!(source_table, table);
     check_imported(&target, &seed, &summary)?;
     // A second import into a non-empty database is refused.
     let err = target
@@ -255,6 +279,97 @@ fn sqlite_export_import_round_trip_preserves_everything() -> TestResult {
         .err()
         .ok_or("import into non-empty database accepted")?;
     assert_eq!(err.status, 409);
+    Ok(())
+}
+
+#[test]
+fn sqlite_export_import_preserves_dataset_and_project_page_boundaries() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let source = Application::new(Storage::Sqlite(dir.path().join("source.sqlite3")));
+    source.migrate()?;
+    let mut datasets = Vec::new();
+    for name in ["first", "second"] {
+        let project = source.execute("alice", "create_project", json!({"name":name}))?["project"]
+            .as_str()
+            .ok_or("project")?
+            .to_owned();
+        for name in ["empty", "short", "full"] {
+            let dataset = source.execute(
+                "alice",
+                "create_dataset",
+                json!({"project":project,"name":name,"geometry_type":"point","coordinate_dimension":2,"crs":"EPSG:4326"}),
+            )?["dataset"]
+                .as_str()
+                .ok_or("dataset")?
+                .to_owned();
+            datasets.push((project.clone(), dataset));
+        }
+    }
+    // Export orders UUIDs, so assign the page sizes after sorting their identifiers.
+    datasets.sort();
+    let mut expected = Vec::new();
+    for ((project, dataset), count) in datasets.iter().zip([0, 1, 1001, 999, 0, 1000]) {
+        let features: Vec<_> = (0..count)
+            .map(|i| json!({"type":"Feature","id":format!("feature-{i:04}"),"properties":{"i":i,"dataset":dataset},"geometry":null}))
+            .collect();
+        if !features.is_empty() {
+            let workspace = source.execute(
+                "alice",
+                "create_workspace",
+                json!({"project":project}),
+            )?["workspace"]
+                .clone();
+            let mut version = 0;
+            for batch in features.chunks(100) {
+                let edits: Vec<_> = batch
+                    .iter()
+                    .map(|feature| json!({"dataset":dataset,"feature_id":feature["id"],"feature":feature}))
+                    .collect();
+                source.execute(
+                    "alice",
+                    "save",
+                    json!({"project":project,"workspace":workspace,"expected_workspace_version":version,"edits":edits}),
+                )?;
+                version += 1;
+            }
+            source.execute(
+                "alice",
+                "publish",
+                json!({"project":project,"workspace":workspace,"expected_workspace_version":version,"request_id":Uuid::new_v4(),"message":"page boundaries"}),
+            )?;
+        }
+        expected.push(features);
+    }
+    let (bytes, summary) = export(&source)?;
+    assert_eq!(summary.rows("gl_current_features"), 3001);
+    assert_eq!(source.data_summary()?.rows("gl_current_features"), 3001);
+    let restored = Application::new(Storage::Sqlite(dir.path().join("restored.sqlite3")));
+    restored.import_data(&mut Cursor::new(&bytes))?;
+    for ((project, dataset), expected) in datasets.iter().zip(expected) {
+        let mut actual = Vec::new();
+        let mut after = String::new();
+        loop {
+            let page = restored.execute(
+                "alice",
+                "features",
+                json!({"project":project,"dataset":dataset,"after":after,"limit":1000}),
+            )?;
+            actual.extend(
+                page["features"]
+                    .as_array()
+                    .ok_or("features")?
+                    .iter()
+                    .cloned(),
+            );
+            let Some(next) = page["next_after"].as_str() else {
+                break;
+            };
+            assert_ne!(after, next, "stalled page for {project}/{dataset}");
+            after = next.to_owned();
+        }
+        assert_eq!(actual.len(), expected.len(), "{project}/{dataset}");
+        assert_eq!(actual, expected, "{project}/{dataset}");
+    }
     Ok(())
 }
 
@@ -367,7 +482,7 @@ fn postgis_and_sqlite_exchange_exports_both_ways() -> TestResult {
         assert_eq!(pg.import_data(&mut Cursor::new(&bytes))?, summary);
         let mut check = postgres::Client::connect(&target, postgres::NoTls)?;
         let mutation = check.execute(
-            "UPDATE gl_history h SET geom=ST_Translate(geom,0.000000000001,0),valid_to=(SELECT min(revision) FROM gl_commits c WHERE c.project=h.project AND c.revision>h.valid_from) WHERE valid_to IS NULL AND geom IS NOT NULL AND EXISTS(SELECT 1 FROM gl_commits c WHERE c.project=h.project AND c.revision>h.valid_from)",
+            "UPDATE gl_history SET properties='{}' WHERE valid_to IS NOT NULL AND properties IS NOT NULL",
             &[],
         ).err().ok_or("native history mutation must fail")?;
         assert_eq!(

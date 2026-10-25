@@ -17,6 +17,13 @@ pub trait WorkspaceRepository: Send {
         write: bool,
     ) -> Result<Option<Row>>;
 
+    /// Immutable publication revision, including empty commits; absent for unpublished workspaces.
+    fn workspace_publication_revision(
+        &mut self,
+        project: &str,
+        workspace: &str,
+    ) -> Result<Option<i64>>;
+
     fn advance_workspace(&mut self, project: &str, workspace: &str, status: &str) -> Result<Row>;
 
     fn insert_workspace(
@@ -40,7 +47,9 @@ pub trait WorkspaceRepository: Send {
 
     fn invalidate_resolutions(&mut self, project: &str, workspace: &str) -> Result<()>;
 
-    /// Resolution flag and feature at the workspace base; absent features have null fields.
+    /// Row columns: resolution flag, base properties/geometry, raw draft properties/geometry,
+    /// and whether a draft row exists. Absent features have null fields.
+    /// The raw draft preserves fields temporarily hidden by a pending schema intent.
     fn edit_base(
         &mut self,
         project: &str,
@@ -60,6 +69,7 @@ pub trait WorkspaceRepository: Send {
 
     fn count_deltas(&mut self, project: &str, workspace: &str) -> Result<Row>;
 
+    /// Classify the workspace Diff against its base, using only existence metadata.
     fn workspace_summary(&mut self, project: &str, workspace: &str, base: i64) -> Result<Vec<Row>>;
 
     fn diff_page(

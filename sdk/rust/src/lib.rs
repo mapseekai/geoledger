@@ -396,6 +396,16 @@ impl Client {
                 }
             }
         }
+        if operation == "save"
+            && let Some(schema) = value.get_mut("schema_edits")
+            && !schema.is_null()
+        {
+            if !schema.is_array() {
+                return Err(Error::invalid("schema_edits must be an array"));
+            }
+            let edits = schema.take();
+            *schema = json!({"edits":edits});
+        }
         let mut result = self.invoke(operation, value).await?;
         normalize(&mut result)?;
         Ok(result)
@@ -471,6 +481,11 @@ impl Client {
             )?,
             "discard" => serde_json::to_value(
                 rpc.discard(serde_json::from_value::<pb::VersionRequest>(value)?)
+                    .await?
+                    .into_inner(),
+            )?,
+            "schema" => serde_json::to_value(
+                rpc.schema(serde_json::from_value::<pb::SchemaRequest>(value)?)
                     .await?
                     .into_inner(),
             )?,
@@ -780,6 +795,23 @@ impl Client {
         input["dataset"] = json!(dataset);
         decode(self.execute("features", input).await?)
     }
+    /// Read field definitions from one published revision or workspace version.
+    pub async fn schema(
+        &self,
+        project: &str,
+        dataset: &str,
+        query: SchemaQuery,
+    ) -> Result<DatasetSchema, Error> {
+        if query.workspace.is_some() && query.revision.is_some() {
+            return Err(Error::invalid(
+                "schema query cannot combine workspace and revision",
+            ));
+        }
+        let mut input = serde_json::to_value(query)?;
+        input["project"] = json!(project);
+        input["dataset"] = json!(dataset);
+        decode(self.execute("schema", input).await?)
+    }
     /// Read commits in ascending revision order. `next_after` is absent at the
     /// current snapshot end; later publications may appear in a later request.
     pub async fn history(
@@ -941,9 +973,21 @@ impl Workspace {
     /// A pending publication or closed workspace rejects edits. Cancellation may
     /// leave the server changed; refresh state before deciding whether to retry.
     pub async fn save_batch(&mut self, edits: &[Edit]) -> Result<SaveResult, Error> {
+        self.save_changes(edits, None).await
+    }
+    /// Save features and the complete schema intent atomically. None preserves
+    /// existing schema intent; Some(&[]) clears it relative to the base revision.
+    pub async fn save_changes(
+        &mut self,
+        edits: &[Edit],
+        schema_edits: Option<&[SchemaEdit]>,
+    ) -> Result<SaveResult, Error> {
         self.editable()?;
         let mut input = self.input();
         input["edits"] = serde_json::to_value(edits)?;
+        if let Some(schema) = schema_edits {
+            input["schema_edits"] = serde_json::to_value(schema)?;
+        }
         let result: SaveResult = decode(self.client.execute("save", input).await?)?;
         self.info.version = result.version;
         Ok(result)
@@ -960,6 +1004,18 @@ impl Workspace {
         }
         query.workspace = Some(self.info.id.clone());
         self.client.features(&self.project, dataset, query).await
+    }
+    pub async fn schema(&self, dataset: &str) -> Result<DatasetSchema, Error> {
+        self.client
+            .schema(
+                &self.project,
+                dataset,
+                SchemaQuery {
+                    workspace: Some(self.info.id.clone()),
+                    revision: None,
+                },
+            )
+            .await
     }
     /// Read draft changes. Continue with `next_after` in `Page::after`;
     /// `None` ends traversal. Verify `version` is unchanged between pages.

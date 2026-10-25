@@ -1,6 +1,24 @@
 use super::*;
 
 impl PublicationRepository for SqlTransaction {
+    fn stage_schema_merge(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        current: i64,
+    ) -> Result<usize> {
+        self.materialize_schema_merge(project, workspace, current)
+    }
+    fn restore_workspace_schemas(
+        &mut self,
+        project: &str,
+        workspace: &str,
+        revision: i64,
+        current: i64,
+    ) -> Result<()> {
+        self.restore_schema_definitions(project, workspace, revision, current)
+    }
+
     fn cached_conflict_count(
         &mut self,
         project: &str,
@@ -73,7 +91,9 @@ impl PublicationRepository for SqlTransaction {
             after_key,
             limit,
         } = *query;
-        self.query("WITH keys AS MATERIALIZED (SELECT dataset,feature_id FROM gl_conflict_keys WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT $7), batch AS MATERIALIZED (SELECT c.* FROM keys k JOIN gl_workspace_changes c ON c.project=$1 AND c.workspace=$2 AND c.dataset=k.dataset AND c.feature_id=k.feature_id) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,c.resolved_head,c.resolution_stale,b.properties,b.geometry_json,o.properties,o.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project,&workspace,&base,&head,&after_dataset,&after_key,&limit])
+        let mut rows = self.query("WITH keys AS MATERIALIZED (SELECT dataset,feature_id FROM gl_conflict_keys WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT $5) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,c.resolved_head,c.resolution_stale FROM keys k JOIN gl_workspace_changes c ON c.project=$1 AND c.workspace=$2 AND c.dataset=k.dataset AND c.feature_id=k.feature_id ORDER BY c.dataset,c.feature_id", &[&project,&workspace,&after_dataset,&after_key,&limit])?;
+        self.fill_merge_versions(project, base, head, &mut rows)?;
+        Ok(rows)
     }
 
     fn begin_merge(&mut self) -> Result<()> {
@@ -96,7 +116,9 @@ impl PublicationRepository for SqlTransaction {
         after_dataset: &str,
         after_key: &str,
     ) -> Result<Vec<Row>> {
-        self.query("WITH batch AS MATERIALIZED (SELECT project,dataset,feature_id,properties,geometry_json,resolved_head,resolution_stale FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($5,$6) ORDER BY dataset,feature_id LIMIT 32) SELECT c.dataset,c.feature_id,c.properties,c.geometry_json,c.resolved_head,c.resolution_stale,b.properties,b.geometry_json,o.properties,o.geometry_json FROM batch c LEFT JOIN gl_history b ON b.project=c.project AND b.dataset=c.dataset AND b.feature_id=c.feature_id AND b.valid_from<=$3 AND (b.valid_to IS NULL OR b.valid_to>$3) LEFT JOIN gl_history o ON o.project=c.project AND o.dataset=c.dataset AND o.feature_id=c.feature_id AND o.valid_from<=$4 AND (o.valid_to IS NULL OR o.valid_to>$4) ORDER BY c.dataset,c.feature_id", &[&project, &workspace, &base, &current, &after_dataset, &after_key])
+        let mut rows = self.query("SELECT dataset,feature_id,properties,geometry_json,resolved_head,resolution_stale FROM gl_workspace_changes WHERE project=$1 AND workspace=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT 32", &[&project,&workspace,&after_dataset,&after_key])?;
+        self.fill_merge_versions(project, base, current, &mut rows)?;
+        Ok(rows)
     }
 
     fn stage_merge(
@@ -149,7 +171,7 @@ impl PublicationRepository for SqlTransaction {
 
     fn append_changes(&mut self, project: &str, revision: i64) -> Result<()> {
         self.flush_stage()?;
-        self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,NULLIF(before_value,'null'),after_value FROM gl_merge_stage", &[&project, &revision])
+        self.execute("INSERT INTO gl_commit_changes SELECT $1,$2,dataset,feature_id,before_value IS NOT NULL,after_value IS NOT NULL FROM gl_merge_stage", &[&project, &revision])
     }
 
     fn close_history(&mut self, project: &str, revision: i64) -> Result<()> {
@@ -159,26 +181,46 @@ impl PublicationRepository for SqlTransaction {
             // clears the temp table. Refresh its cardinality for this batch.
             self.batch_execute("ANALYZE gl_merge_stage")?;
         }
-        self.sync_sources(project)?;
-        // Drive both backends from changed keys, even when a new project's
-        // history is underestimated by statistics dominated by another project.
-        let sql = match self.0.backend {
-            Backend::Sqlite(_) => {
-                "UPDATE gl_history SET valid_to=$2 WHERE rowid IN (SELECT h.rowid FROM gl_merge_stage m CROSS JOIN gl_history h INDEXED BY history_live ON h.project=$1 AND h.dataset=m.dataset AND h.feature_id=m.feature_id AND h.valid_to IS NULL)"
+        let prepared = self.publish_schema_definitions(project, revision)?;
+        self.sync_sources(project, &prepared)?;
+        let mut after = (String::new(), String::new());
+        loop {
+            let rows = self.query("SELECT dataset,feature_id,before_value FROM gl_merge_stage WHERE before_value IS NOT NULL AND (dataset,feature_id)>($1,$2) ORDER BY dataset,feature_id LIMIT 32", &[&after.0,&after.1])?;
+            if rows.is_empty() {
+                break;
             }
-            Backend::Postgis(_) => {
-                // LIMIT keeps each live-key lookup correlated with the staged
-                // row. The TID is consumed in this statement while the project
-                // publication lock protects the history rows.
-                "UPDATE gl_history AS h SET valid_to=$2 FROM gl_merge_stage m CROSS JOIN LATERAL (SELECT ctid FROM gl_history WHERE project=$1 AND dataset=m.dataset AND feature_id=m.feature_id AND valid_to IS NULL LIMIT 1) live WHERE h.ctid=live.ctid"
+            for row in rows {
+                let dataset: String = row.get(0usize)?;
+                let key: String = row.get(1usize)?;
+                let before: String = row.get(2usize)?;
+                let start = self.current_start(project, &dataset, &key)?;
+                let columns = self.geometry_columns();
+                self.execute(&format!("INSERT INTO gl_history(project,dataset,feature_id,valid_from,valid_to,properties,geometry_json,{columns}) VALUES($1,$2,$3,$4,$5,gl_json_field($6,'properties'),gl_json_field($6,'geometry'),{values})",values=self.geometry_values("gl_json_field($6,'geometry')")), &[&project,&dataset,&key,&start,&revision,&before])?;
+                after = (dataset, key);
             }
-        };
-        self.execute(sql, &[&project, &revision])
+        }
+        Ok(())
     }
 
     fn append_history(&mut self, project: &str, revision: i64) -> Result<()> {
         self.flush_stage()?;
-        self.execute(&format!("INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,{columns}) SELECT $1,dataset,feature_id,$2,gl_json_field(after_value,'properties'),gl_json_field(after_value,'geometry'),{values} FROM gl_merge_stage", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(after_value,'geometry')")), &[&project, &revision])
+        if matches!(self.0.backend, Backend::Postgis(_)) {
+            self.execute("DELETE FROM gl_source_versions v USING gl_merge_stage m,gl_datasets d WHERE v.project=$1 AND v.dataset=m.dataset AND v.feature_id=m.feature_id AND m.after_value IS NULL AND d.project=$1 AND d.id=m.dataset AND d.postgis_source IS NOT NULL", &[&project])?;
+            self.execute("INSERT INTO gl_source_versions(project,dataset,feature_id,valid_from) SELECT $1,m.dataset,m.feature_id,$2 FROM gl_merge_stage m JOIN gl_datasets d ON d.project=$1 AND d.id=m.dataset WHERE d.postgis_source IS NOT NULL AND m.after_value IS NOT NULL ON CONFLICT(project,dataset,feature_id) DO UPDATE SET valid_from=excluded.valid_from", &[&project,&revision])?;
+        }
+        let mut after = String::new();
+        loop {
+            let rows = self.query("SELECT DISTINCT dataset FROM gl_merge_stage WHERE dataset>$1 ORDER BY dataset LIMIT 32", &[&after])?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in rows {
+                let dataset: String = row.get(0usize)?;
+                self.write_dataset_table(project, &dataset, revision)?;
+                after = dataset;
+            }
+        }
+        Ok(())
     }
 
     fn advance_head(&mut self, project: &str, revision: i64) -> Result<()> {
@@ -215,11 +257,64 @@ impl PublicationRepository for SqlTransaction {
     }
 
     fn restore_deltas(&mut self, project: &str, revision: i64, workspace: &str) -> Result<()> {
-        self.execute(&format!("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geometry_json,{columns}) SELECT project,$3,dataset,feature_id,gl_json_field(before_value,'properties'),gl_json_field(before_value,'geometry'),{values} FROM gl_commit_changes WHERE project=$1 AND revision=$2", columns=self.geometry_columns(), values=self.geometry_values("gl_json_field(before_value,'geometry')")), &[&project, &revision, &workspace])
+        let mut after = (String::new(), String::new());
+        loop {
+            let rows = self.query("SELECT dataset,feature_id FROM gl_commit_changes WHERE project=$1 AND revision=$2 AND (dataset,feature_id)>($3,$4) ORDER BY dataset,feature_id LIMIT 32", &[&project,&revision,&after.0,&after.1])?;
+            if rows.is_empty() {
+                break;
+            }
+            let mut deltas = Vec::with_capacity(rows.len());
+            for row in rows {
+                let dataset: String = row.get(0usize)?;
+                let key: String = row.get(1usize)?;
+                let before =
+                    FeatureRepository::feature_at(self, project, &dataset, &key, revision - 1)?;
+                let (properties, geometry) = if let Some(before) = before {
+                    (before.get(0usize)?, before.get(1usize)?)
+                } else {
+                    (None, None)
+                };
+                deltas.push(crate::repository::DraftDelta {
+                    dataset: dataset.clone(),
+                    key: key.clone(),
+                    properties,
+                    geometry,
+                });
+                after = (dataset, key);
+            }
+            self.put_deltas(project, workspace, &deltas)?;
+        }
+        Ok(())
     }
 }
 
 impl SqlTransaction {
+    fn fill_merge_versions(
+        &mut self,
+        project: &str,
+        base: i64,
+        head: i64,
+        rows: &mut [Row],
+    ) -> Result<()> {
+        for row in rows {
+            let dataset: String = row.get(0usize)?;
+            let key: String = row.get(1usize)?;
+            let original = super::query::version_cells(FeatureRepository::feature_at(
+                self, project, &dataset, &key, base,
+            )?);
+            let current = if base == head {
+                original.clone()
+            } else {
+                super::query::version_cells(FeatureRepository::feature_at(
+                    self, project, &dataset, &key, head,
+                )?)
+            };
+            row.0.extend(original);
+            row.0.extend(current);
+        }
+        Ok(())
+    }
+
     pub(super) fn flush_stage(&mut self) -> Result<()> {
         if self.1.stage.is_empty() {
             return Ok(());

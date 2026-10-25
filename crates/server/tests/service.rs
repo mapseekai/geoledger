@@ -1,5 +1,5 @@
 mod common;
-use geoledger_client::{Client, FeatureQuery, Page};
+use geoledger_client::{AddField, Client, Edit, FeatureQuery, Page, SchemaEdit, SchemaQuery};
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
@@ -202,6 +202,7 @@ async fn large_streams_and_http_preserve_atomic_saves_without_four_mib_cap() -> 
     let workspace = client.create_workspace(&project).await?.info().id.clone();
     let feature = json!({"type":"Feature","id":"large","properties":{"payload":"x".repeat(5*1024*1024),"exact":18446744073709551615u64},"geometry":null});
     let save = pb::SaveRequest {
+        schema_edits: None,
         project: project.clone(),
         workspace: workspace.clone(),
         expected_workspace_version: 0,
@@ -450,6 +451,207 @@ async fn query_pages_match_http_and_grpc_and_audit_stays_owner_only() -> TestRes
         )?
         .0,
         404
+    );
+    assert_eq!(
+        other_admin
+            .schema(&project, &dataset, SchemaQuery::default())
+            .await
+            .err()
+            .ok_or("schema denied")?
+            .code,
+        "not_found"
+    );
+    assert_eq!(
+        http(
+            server.http,
+            "/api/v1/schema",
+            Some(outsider_key),
+            Some(&json!({"project":project,"dataset":dataset}).to_string())
+        )?
+        .0,
+        404
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn schema_and_feature_intent_cross_rpc_with_history() -> TestResult {
+    let dir = common::tempdir()?;
+    let server = start(dir.path())?;
+    let client = connect(&server, common::KEY).await?;
+    let project = client.create_project("schema RPC").await?.id;
+    let dataset = client.create_dataset(&project, "points", "point").await?.id;
+    let baseline = client
+        .schema(&project, &dataset, SchemaQuery::default())
+        .await?;
+    let mut workspace = client.create_workspace(&project).await?;
+    let schema_edits = [SchemaEdit {
+        dataset: dataset.clone(),
+        add: vec![AddField {
+            name: "note".into(),
+            kind: "string".into(),
+        }],
+        drop: vec![],
+    }];
+    let staged = workspace.save_changes(&[], Some(&schema_edits)).await?;
+    assert_eq!(
+        workspace.schema(&dataset).await?.workspace_version,
+        Some(staged.version)
+    );
+    let cleared = workspace.save_changes(&[], Some(&[])).await?;
+    let cleared_schema = workspace.schema(&dataset).await?;
+    assert_eq!(cleared_schema.fields, baseline.fields);
+    assert_eq!(cleared_schema.workspace_version, Some(cleared.version));
+
+    let feature = |id, note| json!({"type":"Feature","id":id,"properties":{"note":note},"geometry":{"type":"Point","coordinates":[10,20]}});
+    workspace
+        .save_changes(
+            &[Edit {
+                dataset: dataset.clone(),
+                feature_id: "p1".into(),
+                feature: Some(feature("p1", "first")),
+            }],
+            Some(&schema_edits),
+        )
+        .await?;
+    let saved = workspace
+        .save_batch(&[
+            Edit {
+                dataset: dataset.clone(),
+                feature_id: "p1".into(),
+                feature: Some(feature("p1", "second")),
+            },
+            Edit {
+                dataset: dataset.clone(),
+                feature_id: "p2".into(),
+                feature: Some(feature("p2", "another")),
+            },
+        ])
+        .await?;
+    let staged_schema = workspace.schema(&dataset).await?;
+    assert_eq!(staged_schema.workspace_version, Some(saved.version));
+    assert!(staged_schema.fields.iter().any(|field| field.name == "note"
+        && field.kind == "text"
+        && field.nullable
+        && field.editable));
+    let diff = workspace.diff(Page::default()).await?;
+    assert_eq!(diff.schema_changes.len(), 1);
+    assert_eq!(diff.schema_changes[0].before, baseline.fields);
+    assert_eq!(diff.schema_changes[0].after, staged_schema.fields);
+    let summary = client
+        .workspace_summary(&project, &workspace.info().id)
+        .await?;
+    assert_eq!(summary.schema_changes, diff.schema_changes);
+    let published = workspace.publish("atomic schema and feature").await?;
+    let head = client
+        .schema(
+            &project,
+            &dataset,
+            SchemaQuery {
+                revision: Some(published.revision),
+                workspace: None,
+            },
+        )
+        .await?;
+    assert_eq!(head.fields, staged_schema.fields);
+    assert_eq!(head.workspace_version, None);
+    assert_eq!(
+        workspace.schema(&dataset).await?.revision,
+        published.revision
+    );
+    let old = client
+        .schema(
+            &project,
+            &dataset,
+            SchemaQuery {
+                revision: Some(baseline.revision),
+                workspace: None,
+            },
+        )
+        .await?;
+    assert_eq!(old, baseline);
+    let commit = client
+        .commit(&project, published.revision, Page::default())
+        .await?;
+    assert_eq!(commit.schema_changes, diff.schema_changes);
+    let first = client
+        .commit(
+            &project,
+            published.revision,
+            Page {
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(first.changes.len(), 1);
+    let second = client
+        .commit(
+            &project,
+            published.revision,
+            Page {
+                after: first.next_after.ok_or("schema commit first-page cursor")?,
+                limit: Some(1),
+            },
+        )
+        .await?;
+    assert_eq!(second.changes.len(), 1);
+    assert_eq!(second.next_after, None);
+    let terminal = client
+        .commit(
+            &project,
+            published.revision,
+            Page {
+                after: second.changes[0].cursor.clone(),
+                limit: Some(1),
+            },
+        )
+        .await?;
+    assert!(terminal.changes.is_empty());
+    for page in [
+        first.schema_changes,
+        second.schema_changes,
+        terminal.schema_changes,
+    ] {
+        assert_eq!(page, diff.schema_changes);
+    }
+    assert_eq!(
+        client
+            .commit_summary(&project, published.revision)
+            .await?
+            .schema_changes,
+        diff.schema_changes
+    );
+    let features = client
+        .features(
+            &project,
+            &dataset,
+            FeatureQuery {
+                revision: Some(published.revision),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(features.features[0]["properties"]["note"], "second");
+
+    let (status, response) = http(
+        server.http,
+        "/api/v1/schema",
+        Some(common::KEY),
+        Some(
+            &json!({"project":project,"dataset":dataset,"revision":published.revision}).to_string(),
+        ),
+    )?;
+    assert_eq!(status, 200);
+    let response: Value =
+        serde_json::from_str(response.split_once("\r\n\r\n").ok_or("HTTP body")?.1)?;
+    assert_eq!(response["revision"], published.revision);
+    assert!(
+        response["fields"]
+            .as_array()
+            .ok_or("schema fields")?
+            .iter()
+            .any(|field| field["name"] == "note" && field["type"] == "text")
     );
     Ok(())
 }

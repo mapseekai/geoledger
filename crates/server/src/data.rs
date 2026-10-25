@@ -151,31 +151,28 @@ pub(crate) async fn restore(
         let mut staging = target.clone().into_os_string();
         staging.push(".restoring");
         let staging = PathBuf::from(staging);
-        {
-            let mut source = File::open(&input)?;
-            let mut copy = create_private(&staging)
-                .map_err(|e| format!("cannot create {}: {e}", staging.display()))?;
-            std::io::copy(&mut source, &mut copy)?;
-            copy.flush()?;
-            copy.sync_all()?;
-        }
-        let checked = Application::verify_sqlite_file(&staging, timeout)
-            .map_err(BoxError::from)
-            .and_then(|()| {
-                Ok(Application::new(geoledger_engine::Storage::Sqlite(staging.clone()))
-                    .with_timeout(timeout)
-                    .data_summary()?)
-            });
-        let summary = match checked {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = std::fs::remove_file(&staging);
-                return Err(e);
+        let mut source = File::open(&input)?;
+        let copy = create_private(&staging)
+            .map_err(|e| format!("cannot create {}: {e}", staging.display()))?;
+        let result = (|| -> Result<DataSummary, BoxError> {
+            {
+                let mut copy = copy;
+                std::io::copy(&mut source, &mut copy)?;
+                copy.flush()?;
+                copy.sync_all()?;
             }
-        };
-        // A target created since the initial check must never be overwritten.
-        std::fs::hard_link(&staging, &target)?;
-        std::fs::remove_file(&staging)?;
+            Application::verify_sqlite_file(&staging, timeout)?;
+            let summary = Application::new(geoledger_engine::Storage::Sqlite(staging.clone()))
+                .with_timeout(timeout)
+                .data_summary()?;
+            // A target created since the initial check must never be overwritten.
+            std::fs::hard_link(&staging, &target)?;
+            Ok(summary)
+        })();
+        // Only clean up staging after this attempt successfully created it.
+        let cleanup = std::fs::remove_file(&staging);
+        let summary = result?;
+        cleanup?;
         if let Some(dir) = target.parent() {
             #[cfg(unix)]
             File::open(dir)?.sync_all()?;

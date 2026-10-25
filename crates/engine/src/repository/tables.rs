@@ -11,7 +11,8 @@ pub trait PostgisTables: Send {
             "business tables require the PostGIS backend",
         ))
     }
-    /// Source rows (id, properties JSON, geometry JSON), ordered by id with C collation.
+    /// Source rows (id, properties JSON, geometry JSON), in native primary-key order.
+    /// An empty cursor starts the scan; subsequent cursors are the last returned id.
     fn postgis_table_page(
         &mut self,
         source: &crate::PostgisTable,
@@ -28,8 +29,9 @@ pub trait PostgisTables: Send {
         project: &str,
         dataset: &str,
         source: &crate::PostgisTable,
+        revision: i64,
     ) -> Result<()> {
-        let _ = (project, dataset, source);
+        let _ = (project, dataset, source, revision);
         Err(crate::Error::new(
             400,
             "business tables require the PostGIS backend",
@@ -56,7 +58,7 @@ mod tests {
         for error in [
             backend.inspect_postgis_table(&table).err(),
             backend.postgis_table_page(&table, "").err(),
-            backend.bind_postgis_table("p", "d", &table).err(),
+            backend.bind_postgis_table("p", "d", &table, 1).err(),
         ] {
             assert!(matches!(error, Some(e) if e.status == 400));
         }

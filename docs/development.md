@@ -204,7 +204,7 @@ GL_LARGE_GEOJSON=./polygons.geojson cargo test --release -p geoledger-engine --t
 
 ### 已有 PostGIS 表回归
 
-`./scripts/check.sh` 在设置 `GL_TEST_DATABASE_URL` 后执行 `postgis_table` 专项测试，覆盖初始快照、管理员权限、原表增删改、约束失败回滚、重复发布、撤销、外部修改检测、逻辑导入独立副本和解绑保留。
+`./scripts/check.sh` 在设置 `GL_TEST_DATABASE_URL` 后执行 `postgis_table` 专项测试，覆盖不复制数据的初始纳管、管理员权限、原表增删改、约束失败回滚、重复发布、撤销、外部修改检测、逻辑导入独立副本和解绑保留。
 
 `scripts/test-console-postgis.py` 验证完整 Web 纳管与发布。使用隔离 PostGIS 服务，在当前数据库准备 `business.roads(id bigint PRIMARY KEY, name text NOT NULL, geom geometry(LineString,4326))` 及一条要素，并使用数据库平台管理员授权测试操作。脚本接收与上传测试相同的 `--url`、`--api-key-file`、`--chromium` 和 `--screenshots` 参数。
 

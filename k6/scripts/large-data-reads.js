@@ -26,27 +26,40 @@ export const options = {
     'http_req_duration{op:late_page}': ['p(95)<500'],
     'http_req_duration{op:empty_bbox}': ['p(95)<500'],
     'http_req_duration{op:single}': ['p(95)<500'],
+    'http_req_duration{view:current}': ['p(95)<500'],
+    'http_req_duration{view:history}': ['p(95)<500'],
   },
   summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
 };
-export default function () {
+export function setup() {
+  const response = http.post(`${base}/api/v1/get_project`, JSON.stringify({ project: fixture.project }), {
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+  if (response.status !== 200) fail('could not read the current project revision');
+  return { head: response.json('head') };
+}
+
+export default function ({ head }) {
   const variants = [
     ['first_page', { limit: 20 }],
     ['late_page', { limit: 20, after: String(Math.max(0, fixture.features - 21)).padStart(12, '0') }],
     ['empty_bbox', { limit: 20, bbox: [0, 0, 0.00001, 0.00001] }],
     ['single', { feature_id: '000000000001' }],
   ];
-  const [op, query] = variants[exec.scenario.iterationInTest % variants.length];
+  const iteration = exec.scenario.iterationInTest;
+  const [op, query] = variants[iteration % variants.length];
+  const current = Math.floor(iteration / variants.length) % 2 === 0;
+  const view = current ? 'current' : 'history';
   const response = http.post(`${base}/api/v1/features`, JSON.stringify({
-    project: fixture.project, dataset: fixture.dataset, revision: fixture.revision, ...query,
-  }), { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, tags: { op } });
+    project: fixture.project, dataset: fixture.dataset, ...(current ? {} : { revision: fixture.revision }), ...query,
+  }), { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, tags: { op, view } });
   check(response, {
     'response 200': r => r.status === 200,
     'correct response shape': r => {
       if (r.status !== 200) return false;
       try {
         const data = r.json();
-        return op === 'single' ? data.id === '000000000001' : Array.isArray(data.features) && data.revision === fixture.revision;
+        return op === 'single' ? data.id === '000000000001' : Array.isArray(data.features) && data.revision === (current ? head : fixture.revision);
       } catch (_) { return false; }
     },
   });

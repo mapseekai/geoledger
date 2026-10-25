@@ -447,48 +447,23 @@ pub(super) fn create_dataset(
         return Err(Error::new(400, "coordinate_dimension must be 2 or 3"));
     }
     text(&crs, 16384)?;
-    t.insert_dataset(&r.project, &d, &r.name, &family, dimension, &crs)?;
+    t.insert_dataset(
+        &r.project,
+        &d,
+        &r.name,
+        &family,
+        dimension,
+        &crs,
+        r.postgis_table.is_none(),
+    )?;
     if let Some(source) = &r.postgis_table {
+        let revision = current.checked_add(1).ok_or_else(bad)?;
+        t.bind_postgis_table(&r.project, &d, source, revision)?;
         let w = Uuid::new_v4().to_string();
         t.insert_workspace(&r.project, &w, s, current)?;
-        t.begin_merge()?;
-        let mut after = String::new();
-        loop {
-            let rows = t.postgis_table_page(source, &after)?;
-            if rows.is_empty() {
-                break;
-            }
-            for row in rows {
-                let key: String = row.get(0usize)?;
-                let properties: String = row.get(1usize)?;
-                let geometry: Option<String> = row.get(2usize)?;
-                let feature = Feature {
-                    kind: "Feature".into(),
-                    id: key.clone(),
-                    properties: codec::stored(&properties)?,
-                    geometry: geometry
-                        .map(|v| codec::stored(&v))
-                        .transpose()?
-                        .unwrap_or(Value::Null),
-                };
-                let value = normalize(feature, &key)?;
-                validate_dataset_geometry(t, &r.project, &d, &value)?;
-                t.stage_merge(
-                    &d,
-                    &key,
-                    &None,
-                    &Some(serde_json::to_string(&value).map_err(Error::stored_json)?),
-                )?;
-                after = key;
-            }
-        }
-        let revision = current.checked_add(1).ok_or_else(bad)?;
         t.append_commit(&r.project, revision, &w, s, "Register table")?;
-        t.append_changes(&r.project, revision)?;
-        t.append_history(&r.project, revision)?;
         t.advance_head(&r.project, revision)?;
         t.advance_workspace(&r.project, &w, "published")?;
-        t.bind_postgis_table(&r.project, &d, source)?;
     }
     audit(t, &r.project, s, "create_dataset", json!({"dataset":d}))?;
     Ok(
@@ -581,7 +556,9 @@ pub(super) struct Save {
     pub(super) project: String,
     pub(super) workspace: String,
     pub(super) expected_workspace_version: i64,
+    #[serde(default)]
     pub(super) edits: Vec<Edit>,
+    pub(super) schema_edits: Option<Vec<SchemaEdit>>,
 }
 fn draft_delta(
     t: &mut (impl DatasetRepository + ?Sized),
@@ -625,8 +602,11 @@ pub(super) fn save(
         &r.workspace,
         Some(r.expected_workspace_version),
     )?;
-    if r.edits.is_empty() || r.edits.len() > 100 {
+    if (r.edits.is_empty() && r.schema_edits.is_none()) || r.edits.len() > 100 {
         return Err(bad());
+    }
+    if let Some(edits) = r.schema_edits {
+        save_schema_edits(t, &r.project, &r.workspace, base, edits)?;
     }
     // Preserve the chosen value and its origin when subsequent edits invalidate it.
     // In particular an explicit deletion may equal an absent original base.
@@ -641,7 +621,7 @@ pub(super) fn save(
         if !seen.insert((e.dataset.clone(), e.feature_id.clone())) {
             return Err(bad());
         }
-        let value = e
+        let mut value = e
             .feature
             .map(|f| {
                 let value = normalize(f.clone(), &e.feature_id)?;
@@ -655,6 +635,24 @@ pub(super) fn save(
             })
             .transpose()?;
         let context = t.edit_base(&r.project, &r.workspace, &e.dataset, &e.feature_id, base)?;
+        let definition = effective_projection(t, &r.project, &e.dataset, base, Some(&r.workspace))?;
+        if let Some(value) = &mut value {
+            validate_properties(&value.properties, &definition)?;
+            let previous = if definition.dropped.is_empty() {
+                None
+            } else if context.get::<_, bool>(5usize)? {
+                stored_row(&context, 3, 4)?
+            } else {
+                stored_row(&context, 1, 2)?
+            };
+            for name in &definition.dropped {
+                if !value.properties.contains_key(name)
+                    && let Some(old) = previous.as_ref().and_then(|p| p.properties.get(name))
+                {
+                    value.properties.insert(name.clone(), old.clone());
+                }
+            }
+        }
         if !context.get::<_, bool>(0usize)? && value == stored_row(&context, 1, 2)? {
             t.remove_delta(&r.project, &r.workspace, &e.dataset, &e.feature_id)?;
         } else {
@@ -679,6 +677,7 @@ pub(super) fn save(
     }
     t.put_deltas(&r.project, &r.workspace, &deltas)?;
     let count: i64 = t.count_deltas(&r.project, &r.workspace)?.get(0usize)?;
+    let schema_count = t.workspace_schemas(&r.project, &r.workspace)?.len();
     let version = bump(t, &r.project, &r.workspace, "open")?;
     audit(
         t,
@@ -687,10 +686,12 @@ pub(super) fn save(
         "save",
         json!({"workspace":r.workspace,"version":version,"topology_warnings":warnings}),
     )?;
-    Ok(json!({"version":version,"changes":count,"warnings":warnings}))
+    Ok(json!({"version":version,"changes":count + schema_count as i64,"warnings":warnings}))
 }
 pub(super) fn discard(
-    t: &mut (impl AuditRepository + ProjectRepository + WorkspaceRepository + ?Sized),
+    t: &mut (
+             impl AuditRepository + DatasetRepository + ProjectRepository + WorkspaceRepository + ?Sized
+         ),
     s: &str,
     r: Version,
 ) -> Result<Value> {
@@ -702,6 +703,8 @@ pub(super) fn discard(
         Some(r.expected_workspace_version),
     )?;
     let v = bump(t, &r.project, &r.workspace, "discarded")?;
+    t.clear_deltas(&r.project, &r.workspace)?;
+    t.clear_workspace_schemas(&r.project, &r.workspace)?;
     audit(
         t,
         &r.project,

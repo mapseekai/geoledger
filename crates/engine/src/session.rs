@@ -9,6 +9,7 @@ pub(crate) mod postgres;
 mod project;
 mod publication;
 mod query;
+mod schema;
 mod tables;
 mod workspace;
 use crate::repository::*;
@@ -16,8 +17,11 @@ use crate::{Error, FORMAT_VERSION, Result, Storage};
 use rusqlite::functions::FunctionFlags;
 use serde_json::value::RawValue;
 use std::{
-    collections::HashMap,
-    sync::Arc,
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -74,12 +78,14 @@ pub(crate) struct Client {
     transaction: bool,
     result_limit: usize,
     response_reservation: Option<crate::ResponseReservation>,
+    dataset_write_allowed: Arc<AtomicBool>,
 }
 impl Client {
     pub fn open(storage: &Storage, pool: &Arc<postgres::Pool>, timeout: Duration) -> Result<Self> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or_else(|| Error::new(400, "invalid deadline"))?;
+        let dataset_write_allowed = Arc::new(AtomicBool::new(false));
         let backend = match storage {
             Storage::Postgis(dsn) => Backend::Postgis(pool.connect(dsn, timeout)?),
             Storage::Sqlite(path) => {
@@ -147,6 +153,14 @@ impl Client {
                     }
                     Ok(None::<String>)
                 }).map_err(sqlite_error)?;
+                let allowed = dataset_write_allowed.clone();
+                c.create_scalar_function(
+                    "gl_dataset_write_allowed",
+                    0,
+                    FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_INNOCUOUS,
+                    move |_| Ok(allowed.load(Ordering::Relaxed)),
+                )
+                .map_err(sqlite_error)?;
                 drop(c);
                 Backend::Sqlite(native)
             }
@@ -157,6 +171,7 @@ impl Client {
             transaction: false,
             result_limit: usize::MAX,
             response_reservation: None,
+            dataset_write_allowed,
         })
     }
     fn check(&self) -> Result<()> {
@@ -429,6 +444,29 @@ impl Client {
                 "storage format must match this server; initialize a fresh database",
             ));
         }
+        if !sqlite {
+            let stored = t
+                .query_one(
+                    "SELECT database_oid::bigint,format_oid::bigint FROM gl_format WHERE singleton=true",
+                    &[],
+                )?;
+            let current = t
+                .query_one(
+                    "SELECT (SELECT oid::bigint FROM pg_database WHERE datname=current_database()),'public.gl_format'::regclass::oid::bigint",
+                    &[],
+                )?;
+            let database_oid: i64 = current.get(0usize)?;
+            let format_oid: i64 = current.get(1usize)?;
+            if stored.get::<_, i64>(0usize)? != database_oid
+                || stored.get::<_, i64>(1usize)? != format_oid
+            {
+                t.rebind_restored_sources()?;
+                t.execute(
+                    "UPDATE gl_format SET database_oid=$1::bigint::oid,format_oid=$2::bigint::oid WHERE singleton=true",
+                    &[&database_oid,&format_oid],
+                )?;
+            }
+        }
         t.commit()
     }
 }
@@ -453,6 +491,7 @@ impl Drop for Client {
 struct TransactionState {
     datasets: HashMap<(String, String), Row>,
     heads: HashMap<String, i64>,
+    verified_sources: HashSet<(String, String)>,
     stage: Vec<(String, String, Option<String>, Option<String>)>,
     stage_bytes: usize,
     custom_spatial_plan: bool,
@@ -621,6 +660,31 @@ pub(crate) fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> R
 mod tests {
     use super::*;
 
+    fn seed_current_from_history(
+        t: &mut SqlTransaction,
+        project: &str,
+        dataset: &str,
+    ) -> Result<()> {
+        t.create_dataset_table(project, dataset)?;
+        let table = t
+            .dataset_table(project, dataset)?
+            .ok_or_else(|| Error::new(500, "missing fixture table"))?;
+        let columns = t.geometry_columns();
+        if matches!(t.0.backend, Backend::Postgis(_)) {
+            t.query_one("SELECT set_config('geoledger.publication_table',($1::text::regclass::oid)::text,true)", &[&table])?;
+        }
+        t.with_dataset_writes(|t| t.execute(&format!("INSERT INTO {table}(feature_id,valid_from,properties,geometry_json,{columns}) SELECT feature_id,valid_from,properties,geometry_json,{columns} FROM gl_history WHERE project=$1 AND dataset=$2 AND valid_to IS NULL AND properties IS NOT NULL"), &[&project,&dataset]))?;
+        if matches!(t.0.backend, Backend::Postgis(_)) {
+            t.batch_execute("SET LOCAL geoledger.publication_table = ''")?;
+        }
+        t.execute("INSERT INTO gl_purge VALUES($1)", &[&project])?;
+        t.execute(
+            "DELETE FROM gl_history WHERE project=$1 AND dataset=$2 AND valid_to IS NULL",
+            &[&project, &dataset],
+        )?;
+        t.execute("DELETE FROM gl_purge WHERE project=$1", &[&project])
+    }
+
     fn capability_atomicity(storage: Storage) -> Result<()> {
         let timeout = Duration::from_secs(30);
         let backend = SqlStorage {
@@ -656,7 +720,15 @@ mod tests {
             projects.insert_project(&project, "Atomic capabilities")?;
             projects.insert_owner(&project, &subject)?;
             let datasets: &mut dyn DatasetRepository = owner.as_mut();
-            datasets.insert_dataset(&project, &dataset, "Features", "point", 2, "EPSG:4326")?;
+            datasets.insert_dataset(
+                &project,
+                &dataset,
+                "Features",
+                "point",
+                2,
+                "EPSG:4326",
+                true,
+            )?;
             let drafts: &mut dyn WorkspaceRepository = owner.as_mut();
             drafts.insert_workspace(&project, &workspace, &subject, 0)?;
             let publication: &mut dyn PublicationRepository = owner.as_mut();
@@ -931,6 +1003,7 @@ mod tests {
         SELECT project,dataset,feature_id,1,properties FROM gl_workspace_changes WHERE feature_id<>'seed';
         UPDATE gl_workspace_changes SET resolved_head=0 WHERE feature_id='00000001';"#,
     )?;
+            seed_current_from_history(&mut t, "p", "d")?;
             let steps = Arc::new(AtomicUsize::new(0));
             let observed = steps.clone();
             if let Backend::Sqlite(c) = &t.0.backend {
@@ -1096,6 +1169,8 @@ mod tests {
         INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties,geom)
         SELECT project,'w',dataset,feature_id,properties,geom FROM gl_history WHERE dataset='d' AND feature_id>'00050000';
     "#)?;
+            seed_current_from_history(&mut t, "p", "d")?;
+            seed_current_from_history(&mut t, "p", "other")?;
             let steps = Arc::new(AtomicUsize::new(0));
             let observed = steps.clone();
             if let Backend::Sqlite(c) = &t.0.backend {
@@ -1173,6 +1248,7 @@ mod tests {
             let mut t =
                 Client::open(&storage, &pool, Duration::from_secs(30))?.transaction(false)?;
             t.batch_execute("INSERT INTO gl_projects(id,name) VALUES('p','p'); INSERT INTO gl_project_members(project,subject,role) VALUES('p','alice','owner'); INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('p','d','points','point'); INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('p','w','alice',0); INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES('p',1,'w','alice','seed'),('p',2,'w','alice','edit'); WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<5000) INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties) SELECT 'p','d',printf('%08d',n),1,'{}' FROM ids;")?;
+            seed_current_from_history(&mut t, "p", "d")?;
             t.begin_merge()?;
             t.stage_merge("d", "00001000", &Some("{}".into()), &None)?;
             t.flush_stage()?;
@@ -1201,14 +1277,17 @@ mod tests {
                     .get::<_, i64>(0usize)?,
                 1
             );
+            let table = t
+                .dataset_table("p", "d")?
+                .ok_or_else(|| Error::new(500, "fixture table"))?;
             assert_eq!(
-        t.query_one(
-            "SELECT count(*) FROM gl_history WHERE feature_id='00001001' AND valid_to IS NULL",
-            &[]
-        )?
-        .get::<_, i64>(0usize)?,
-        1
-    );
+                t.query_one(
+                    &format!("SELECT count(*) FROM {table} WHERE feature_id='00001001'"),
+                    &[]
+                )?
+                .get::<_, i64>(0usize)?,
+                1
+            );
             Ok(())
         }
     }
@@ -1299,6 +1378,14 @@ mod tests {
             let db = rusqlite::Connection::open(&path)?;
             let db = geoledger_spatialite::load_configured(db)?;
             db.read()?.execute_batch(&format!("PRAGMA foreign_keys=ON; BEGIN; INSERT INTO gl_projects(id,name,head) VALUES('{p}','cache',2); INSERT INTO gl_project_members(project,subject,role) VALUES('{p}','alice','owner'); INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('{p}','{d}','points','point'); INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('{p}','{w}','alice',1); INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES('{p}',1,'{w}','alice','base'),('{p}',2,'{w}','alice','current'); WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<128) INSERT INTO gl_history(project,dataset,feature_id,valid_from,valid_to,properties) SELECT '{p}','{d}',printf('%08d',n),1,2,'{{\"a\":0}}' FROM ids; INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties) SELECT project,dataset,feature_id,2,'{{\"a\":1}}' FROM gl_history WHERE project='{p}'; INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties) SELECT project,'{w}',dataset,feature_id,'{{\"a\":2}}' FROM gl_history WHERE project='{p}' AND valid_from=1; COMMIT;"))?;
+            let mut fixture = Client::open(
+                &Storage::Sqlite(path.clone()),
+                &Arc::new(postgres::Pool::default()),
+                Duration::from_secs(30),
+            )?
+            .transaction(false)?;
+            seed_current_from_history(&mut fixture, &p, &d)?;
+            fixture.commit()?;
             let query = |after: &str| {
                 app.execute(
                     "alice",
@@ -1351,6 +1438,7 @@ mod tests {
             let d = uuid::Uuid::new_v4().to_string();
             let w = uuid::Uuid::new_v4().to_string();
             t.batch_execute(&format!("INSERT INTO gl_projects(id,name,head) VALUES('{p}','history plans',1000); INSERT INTO gl_project_members(project,subject,role) VALUES('{p}','alice','owner'); INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('{p}','{d}','points','point'); INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('{p}','{w}','alice',0); INSERT INTO gl_commits(project,revision,workspace,subject,message) SELECT '{p}',n,'{w}','alice','version' FROM generate_series(1,1000)n; INSERT INTO gl_history(project,dataset,feature_id,valid_from,valid_to,properties,geometry_json,geom) SELECT '{p}','{d}',lpad(k::text,8,'0'),v,CASE WHEN v<1000 THEN v+1 END,'{{\"v\":'||v::text||'}}','{{\"type\":\"Point\",\"coordinates\":[0,0]}}',ST_SetSRID(ST_MakePoint(0,0),0) FROM generate_series(1,64)k CROSS JOIN generate_series(1,1000)v; ANALYZE gl_history;"))?;
+            seed_current_from_history(&mut t, &p, &d)?;
             t.project_head(&p, false)?.ok_or("project")?;
             let query = crate::repository::FeatureQuery {
                 project: p.clone(),
@@ -1365,7 +1453,7 @@ mod tests {
             for _ in 0..10 {
                 assert_eq!(t.feature_page(&query)?.len(), 32);
             }
-            let statements=t.query("SELECT name,generic_plans,custom_plans FROM pg_prepared_statements WHERE statement LIKE 'WITH base AS MATERIALIZED%'",&[])?;
+            let statements=t.query("SELECT name,generic_plans,custom_plans FROM pg_prepared_statements WHERE statement LIKE 'WITH current AS MATERIALIZED%'",&[])?;
             let statement = statements.first().ok_or("cached spatial statement")?;
             assert_eq!(
                 statement.get::<_, i64>(1usize)?,
@@ -1381,15 +1469,15 @@ mod tests {
                 .collect::<Result<Vec<_>>>()?
                 .join("\n");
             assert!(
-                plan.contains("history_live"),
-                "current-head query missed partial index: {plan}"
+                !plan.contains("gl_history"),
+                "current-head query scanned historical bodies: {plan}"
             );
             assert!(
                 !plan.contains("Rows Removed by Filter: 31968"),
                 "old versions still scanned: {plan}"
             );
             eprintln!(
-                "hot_bbox_executions=10 generic_plans=0 current_index=history_live logical_features=64 versions_each=1000 page_rows=32\n{plan}"
+                "hot_bbox_executions=10 generic_plans=0 current_rows=64 historical_versions_each=999 page_rows=32\n{plan}"
             );
             let historic = crate::repository::FeatureQuery {
                 revision: 1,
@@ -1552,7 +1640,7 @@ mod tests {
 
         #[test]
         #[ignore = "requires isolated geoledger_test PostGIS database"]
-        fn postgis_hot_spatial_queries_publication_looks_up_changed_history() -> TestResult {
+        fn postgis_hot_spatial_queries_publication_looks_up_changed_current_rows() -> TestResult {
             let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
             let mut admin = ::postgres::Client::connect(&dsn, ::postgres::NoTls)?;
             let database: String = admin.query_one("SELECT current_database()", &[])?.get(0);
@@ -1588,6 +1676,7 @@ mod tests {
                 if project == &background {
                     t.batch_execute("ANALYZE gl_history")?;
                 }
+                seed_current_from_history(&mut t, project, "d")?;
             }
             t.batch_execute("SET LOCAL plan_cache_mode=force_custom_plan")?;
             t.begin_merge()?;
@@ -1597,32 +1686,25 @@ mod tests {
                 t.stage_merge("d", &format!("new-{n}"), &None, &Some("{}".into()))?;
             }
             t.close_history(&project, 2)?;
-            let sql: String = t.query_one("SELECT statement FROM pg_prepared_statements WHERE statement LIKE 'UPDATE gl_history%SET valid_to%'", &[])?.get(0usize)?;
+            let table = t.dataset_table(&project, "d")?.ok_or("managed table")?;
             for mode in ["force_custom_plan", "force_generic_plan"] {
                 t.batch_execute(&format!("SET LOCAL plan_cache_mode={mode}"))?;
                 let plan = t
                     .query(
-                        &format!("EXPLAIN (ANALYZE, COSTS OFF) {sql}"),
-                        &[&project, &2_i64],
+                        &format!("EXPLAIN (ANALYZE, COSTS OFF) SELECT valid_from FROM {table} WHERE feature_id=$1"),
+                        &[&"00000001"],
                     )?
                     .iter()
                     .map(|r| r.get::<_, String>(0usize))
                     .collect::<Result<Vec<_>>>()?
                     .join("\n");
                 assert!(
-                    plan.contains("Index Scan using history_live"),
-                    "publication lost live-key lookup ({mode}): {plan}"
+                    plan.contains(&format!("Index Scan using {table}_pkey")),
+                    "publication lost current-key lookup ({mode}): {plan}"
                 );
                 assert!(
-                    plan.lines().any(|line| line.contains("Index Cond:")
-                        && line.contains("project")
-                        && line.contains("dataset")
-                        && line.contains("feature_id")),
-                    "publication scanned a project prefix ({mode}): {plan}"
-                );
-                assert!(
-                    !plan.contains("Seq Scan on gl_history"),
-                    "small publication scanned history: {plan}"
+                    !plan.contains("Seq Scan"),
+                    "small publication scanned the full current table: {plan}"
                 );
                 eprintln!("{mode}: {plan}");
             }
@@ -1635,12 +1717,9 @@ mod tests {
                 2
             );
             assert_eq!(
-                t.query_one(
-                    "SELECT count(*) FROM gl_history WHERE project=$1 AND valid_to IS NULL",
-                    &[&project]
-                )?
-                .get::<_, i64>(0usize)?,
-                9998
+                t.query_one(&format!("SELECT count(*) FROM {table}"), &[])?
+                    .get::<_, i64>(0usize)?,
+                10_000
             );
             Ok(())
         }

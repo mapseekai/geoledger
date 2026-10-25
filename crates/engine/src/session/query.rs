@@ -20,11 +20,56 @@ impl FeatureRepository for SqlTransaction {
         key: &str,
         revision: i64,
     ) -> Result<Option<Row>> {
-        self.query_opt("SELECT properties,geometry_json FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=$3 AND valid_from<=$4 AND (valid_to IS NULL OR valid_to>$4) ORDER BY valid_from DESC LIMIT 1", &[&project, &dataset, &key, &revision])
+        if let Some(row) = self.query_opt("SELECT properties,geometry_json FROM gl_history WHERE project=$1 AND dataset=$2 AND feature_id=$3 AND valid_from<=$4 AND valid_to>$4 ORDER BY valid_from DESC LIMIT 1", &[&project, &dataset, &key, &revision])? {
+            return Ok(Some(row));
+        }
+        self.current_at(project, dataset, key, revision)
     }
 }
 
 impl SqlTransaction {
+    pub(super) fn current_at(
+        &mut self,
+        project: &str,
+        dataset: &str,
+        key: &str,
+        revision: i64,
+    ) -> Result<Option<Row>> {
+        let Some(metadata) = self.dataset_exists(project, dataset)? else {
+            return Ok(None);
+        };
+        if let Some(table) = metadata.get::<_, Option<String>>(5usize)? {
+            super::dataset::check_table_name(&table)?;
+            return self.query_opt(&format!("SELECT properties,geometry_json FROM {table} WHERE feature_id=$1 AND valid_from<=$2"), &[&key,&revision]);
+        }
+        let Some(source) = metadata.get::<_, Option<String>>(3usize)? else {
+            return Ok(None);
+        };
+        let source: super::tables::Source = crate::codec::stored(&source)?;
+        self.ensure_source_clean(project, dataset, &source)?;
+        let table = super::tables::relation(&source.table);
+        let id = super::tables::quote(&source.table.id_column);
+        let geom = super::tables::quote(&source.table.geometry_column);
+        let start: i64 = metadata.get(6usize)?;
+        self.query_opt(&format!("SELECT (to_jsonb(t)-$5::text-$6::text)::text,ST_AsGeoJSON(t.{geom},17,0) FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{id}::text COLLATE \"C\" WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($5::text,$3::text))).{id} AND coalesce(v.valid_from,$7::bigint)<=$4"), &[&project,&dataset,&key,&revision,&source.table.id_column,&source.table.geometry_column,&start])
+    }
+
+    pub(super) fn current_start(&mut self, project: &str, dataset: &str, key: &str) -> Result<i64> {
+        let metadata = self
+            .dataset_exists(project, dataset)?
+            .ok_or_else(|| Error::new(500, "missing dataset"))?;
+        if let Some(table) = metadata.get::<_, Option<String>>(5usize)? {
+            super::dataset::check_table_name(&table)?;
+            return self
+                .query_one(
+                    &format!("SELECT valid_from FROM {table} WHERE feature_id=$1"),
+                    &[&key],
+                )?
+                .get(0usize);
+        }
+        let start: i64 = metadata.get(6usize)?;
+        self.query_one("SELECT coalesce((SELECT valid_from FROM gl_source_versions WHERE project=$1 AND dataset=$2 AND feature_id=$3),$4)", &[&project,&dataset,&key,&start])?.get(0usize)
+    }
     fn feature_rows(
         &mut self,
         r: &crate::repository::FeatureQuery,
@@ -41,37 +86,24 @@ impl SqlTransaction {
             self.1.custom_spatial_plan = true;
         }
         let latest = self.1.heads.get(&r.project) == Some(&r.revision);
-        let visible = if latest {
-            "h.valid_to IS NULL"
-        } else {
-            "(h.valid_to IS NULL OR h.valid_to>$3)"
-        };
-        // Bound both UNION branches before geometry/JSON expansion and final
-        // sorting. A top-level LIMIT alone let PostgreSQL scan and serialize
-        // the entire remaining dataset for each 32-row page.
+        let metadata = self
+            .dataset_exists(&r.project, &r.dataset)?
+            .ok_or_else(|| Error::new(404, "dataset not found"))?;
+        let managed: Option<String> = metadata.get(5usize)?;
         let key_filter = if r.feature_id.is_some() {
-            "feature_id=$6"
+            "h.feature_id=$6"
         } else {
             "CAST($6 AS text) IS NULL"
         };
-        let sparse_history = self.sparse_spatial_candidates("history", r)?;
         let sparse_draft = self.sparse_spatial_candidates("workspace_changes", r)?;
-        let spatial_filter = self.spatial_filter("h", "history", r.bbox.is_some(), sparse_history);
-        let draft_spatial_filter =
+        let draft_filter =
             self.spatial_filter("", "workspace_changes", r.bbox.is_some(), sparse_draft);
-        let (spatial_lookup, draft_lookup) = if matches!(self.0.backend, Backend::Sqlite(_)) {
-            (
-                if latest {
-                    " INDEXED BY history_live"
-                } else {
-                    " INDEXED BY sqlite_autoindex_gl_history_1"
-                },
-                " INDEXED BY sqlite_autoindex_gl_workspace_changes_1",
-            )
+        let draft_lookup = if matches!(self.0.backend, Backend::Sqlite(_)) {
+            " INDEXED BY sqlite_autoindex_gl_workspace_changes_1"
         } else {
-            ("", "")
+            ""
         };
-        let base_payload = if include_payload {
+        let payload = if include_payload {
             ",h.properties,h.geometry_json"
         } else {
             ""
@@ -81,24 +113,82 @@ impl SqlTransaction {
         } else {
             ""
         };
-        let sql = format!("WITH base AS MATERIALIZED (
-            SELECT h.feature_id{base_payload} FROM gl_history h{spatial_lookup}
-            WHERE h.project=$1 AND h.dataset=$2
-              AND h.valid_from<=$3 AND {visible}
-              AND h.properties IS NOT NULL AND h.feature_id>$5 AND {key_filter}
-              AND ({spatial_filter})
-              AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c
-                WHERE c.project=h.project AND c.dataset=h.dataset AND c.feature_id=h.feature_id AND c.workspace=$4)
-            ORDER BY h.feature_id LIMIT $12
-          ), draft AS MATERIALIZED (
-            SELECT feature_id{draft_payload} FROM gl_workspace_changes{draft_lookup}
-            WHERE project=$1 AND dataset=$2 AND workspace=$4
-              AND properties IS NOT NULL AND feature_id>$5 AND {key_filter}
-              AND ({draft_spatial_filter})
-            ORDER BY feature_id LIMIT $12
-          ), page AS MATERIALIZED (
-            SELECT * FROM base UNION ALL SELECT * FROM draft ORDER BY feature_id LIMIT $12
-          ) SELECT * FROM page ORDER BY feature_id");
+        let current = if let Some(table) = managed {
+            super::dataset::check_table_name(&table)?;
+            let sparse = self.sparse_spatial_candidates(&table[3..], r)?;
+            let filter = self.spatial_filter("h", &table[3..], r.bbox.is_some(), sparse);
+            let lookup = if matches!(self.0.backend, Backend::Sqlite(_)) {
+                format!(" INDEXED BY sqlite_autoindex_{table}_1")
+            } else {
+                String::new()
+            };
+            format!(
+                "SELECT h.feature_id{payload} FROM {table} h{lookup} WHERE h.valid_from<=$3 AND h.feature_id>$5 AND {key_filter} AND ({filter}) AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c WHERE c.project=$1 AND c.dataset=$2 AND c.workspace=$4 AND c.feature_id=h.feature_id) ORDER BY h.feature_id LIMIT $12"
+            )
+        } else {
+            let source: String = metadata
+                .get::<_, Option<String>>(3usize)?
+                .ok_or_else(|| Error::new(500, "dataset has no storage table"))?;
+            let source: super::tables::Source = crate::codec::stored(&source)?;
+            self.ensure_source_clean(&r.project, &r.dataset, &source)?;
+            let table = super::tables::relation(&source.table);
+            let id = super::tables::quote(&source.table.id_column);
+            let geom = super::tables::quote(&source.table.geometry_column);
+            let key = format!("t.{id}::text COLLATE \"C\"");
+            let source_payload = if include_payload {
+                format!(
+                    ",(to_jsonb(t)-'{}'-'{}')::text,ST_AsGeoJSON(t.{geom},17,0)",
+                    source.table.id_column.replace('\'', "''"),
+                    source.table.geometry_column.replace('\'', "''")
+                )
+            } else {
+                String::new()
+            };
+            let start: i64 = metadata.get(6usize)?;
+            let filter = if r.bbox.is_some() {
+                format!(
+                    "$7 AND ST_Intersects(t.{geom},ST_MakeEnvelope($8,$9,$10,$11,{}))",
+                    source.srid
+                )
+            } else {
+                "NOT $7 AND CAST($8 AS double precision) IS NOT NULL AND CAST($9 AS double precision) IS NOT NULL AND CAST($10 AS double precision) IS NOT NULL AND CAST($11 AS double precision) IS NOT NULL".to_owned()
+            };
+            let source_key_filter = if r.feature_id.is_some() {
+                format!("{key}=$6")
+            } else {
+                "CAST($6 AS text) IS NULL".to_owned()
+            };
+            format!(
+                "SELECT {key} AS feature_id{source_payload} FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{id}::text COLLATE \"C\" WHERE coalesce(v.valid_from,{start})<=$3 AND {key}>$5 AND {source_key_filter} AND ({filter}) AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c WHERE c.project=$1 AND c.dataset=$2 AND c.workspace=$4 AND c.feature_id=t.{id}::text COLLATE \"C\") ORDER BY {key} LIMIT $12"
+            )
+        };
+        let historical = if latest {
+            String::new()
+        } else {
+            let sparse = self.sparse_spatial_candidates("history", r)?;
+            let filter = self.spatial_filter("h", "history", r.bbox.is_some(), sparse);
+            let lookup = if matches!(self.0.backend, Backend::Sqlite(_)) {
+                " INDEXED BY sqlite_autoindex_gl_history_1"
+            } else {
+                ""
+            };
+            format!(
+                ", historic AS MATERIALIZED (SELECT h.feature_id{payload} FROM gl_history h{lookup} WHERE h.project=$1 AND h.dataset=$2 AND h.valid_from<=$3 AND h.valid_to>$3 AND h.properties IS NOT NULL AND h.feature_id>$5 AND {key_filter} AND ({filter}) AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c WHERE c.project=$1 AND c.dataset=$2 AND c.workspace=$4 AND c.feature_id=h.feature_id) ORDER BY h.feature_id LIMIT $12)"
+            )
+        };
+        let historic_union = if latest {
+            ""
+        } else {
+            " UNION ALL SELECT * FROM historic"
+        };
+        let sql = format!(
+            "WITH current AS MATERIALIZED ({current}){historical}, base AS MATERIALIZED (SELECT * FROM current{historic_union} ORDER BY feature_id LIMIT $12), draft AS MATERIALIZED (SELECT feature_id{draft_payload} FROM gl_workspace_changes{draft_lookup} WHERE project=$1 AND dataset=$2 AND workspace=$4 AND properties IS NOT NULL AND feature_id>$5 AND {draft_key_filter} AND ({draft_filter}) ORDER BY feature_id LIMIT $12), page AS MATERIALIZED (SELECT * FROM base UNION ALL SELECT * FROM draft ORDER BY feature_id LIMIT $12) SELECT * FROM page ORDER BY feature_id",
+            draft_key_filter = if r.feature_id.is_some() {
+                "feature_id=$6"
+            } else {
+                "CAST($6 AS text) IS NULL"
+            }
+        );
         self.query(
             &sql,
             &[
@@ -142,14 +232,20 @@ impl SqlTransaction {
         let (scope, visible, visibility_columns) = if table == "history" {
             (
                 "project=$1 AND dataset=$2 AND feature_id>$5",
-                "valid_from<=$3 AND (valid_to IS NULL OR valid_to>$3) AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c INDEXED BY sqlite_autoindex_gl_workspace_changes_1 WHERE c.project=$1 AND c.workspace=$4 AND c.dataset=$2 AND c.feature_id=prefix.feature_id)",
+                "valid_from<=$3 AND valid_to>$3 AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c INDEXED BY sqlite_autoindex_gl_workspace_changes_1 WHERE c.project=$1 AND c.workspace=$4 AND c.dataset=$2 AND c.feature_id=prefix.feature_id)",
                 ",valid_from,valid_to",
             )
-        } else {
+        } else if table == "workspace_changes" {
             (
                 "project=$1 AND workspace=$4 AND dataset=$2 AND feature_id>$5",
                 "CAST($3 AS bigint) IS NOT NULL",
                 "",
+            )
+        } else {
+            (
+                "feature_id>$5",
+                "valid_from<=$3 AND NOT EXISTS(SELECT 1 FROM gl_workspace_changes c INDEXED BY sqlite_autoindex_gl_workspace_changes_1 WHERE c.project=$1 AND c.workspace=$4 AND c.dataset=$2 AND c.feature_id=prefix.feature_id)",
+                ",valid_from",
             )
         };
         let row = self.query_one(
@@ -190,4 +286,10 @@ impl SqlTransaction {
             ),
         }
     }
+}
+
+pub(super) fn version_cells(row: Option<Row>) -> [Cell; 2] {
+    row.map_or([Cell::Null, Cell::Null], |row| {
+        [row.0[0].clone(), row.0[1].clone()]
+    })
 }

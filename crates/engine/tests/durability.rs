@@ -73,11 +73,19 @@ fn sqlite_commit_failure_preserves_atomic_history_and_original_request_can_retry
     drop(app);
     let app = Application::new(Storage::Sqlite(path));
     assert_eq!(app.execute("alice", "publish", request)?, result);
+    let next = app.execute("alice", "create_workspace", json!({"project":p}))?["workspace"].clone();
+    app.execute("alice", "save", json!({"project":p,"workspace":next,"expected_workspace_version":0,"edits":[{"dataset":d,"feature_id":"one","feature":{"type":"Feature","id":"one","properties":{"updated":true},"geometry":null}}]}))?;
+    app.execute("alice", "publish", json!({"project":p,"workspace":next,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"archive prior value"}))?;
+    assert_eq!(
+        control.query_row("SELECT count(*) FROM gl_history", [], |r| r
+            .get::<_, i64>(0))?,
+        1
+    );
     for sql in [
         "DELETE FROM gl_commits",
         "UPDATE gl_history SET properties='{}'",
         "DELETE FROM gl_idempotency",
-        "UPDATE gl_commit_changes SET after_value=NULL",
+        "UPDATE gl_commit_changes SET has_after=false",
     ] {
         assert!(control.execute(sql, []).is_err(), "immutable {sql}");
     }

@@ -156,6 +156,7 @@ fn features_pagination_returns_a_cursor_only_when_the_snapshot_has_more_results(
     )?;
     assert_feature_pages(&f, json!({"workspace":empty}), &ids, 0, Some(1))?;
     f.publish(&f.alice, &empty, 1)?;
+    assert_feature_pages(&f, json!({"workspace":empty}), &ids, 1, Some(2))?;
     assert_feature_pages(&f, json!({}), &ids, 1, None)?;
     assert_feature_pages(&f, json!({"revision":1}), &ids, 1, None)?;
     Ok(())
@@ -225,6 +226,78 @@ fn features_pagination_uses_bbox_matches_after_workspace_moves_and_deletes() -> 
     )?;
     assert_feature_pages(&f, json!({"revision":2,"bbox":bounds}), &visible, 2, None)?;
     assert_feature_pages(&f, json!({"bbox":bounds}), &visible, 2, None)?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":draft,"bbox":bounds}),
+        &visible,
+        2,
+        Some(2),
+    )?;
+    assert_feature_pages(&f, json!({"workspace":draft}), &all, 2, Some(2))?;
+
+    let later = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":later,"expected_workspace_version":0,"edits":[
+            {"dataset":f.d,"feature_id":"bb","feature":null},
+            f.edit("d",json!({"later":true}),point(20.,20.)),
+            f.edit("aa",json!({}),point(0.,0.))
+        ]}),
+    )?;
+    f.publish(&f.alice, &later, 1)?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":draft,"bbox":bounds}),
+        &visible,
+        2,
+        Some(2),
+    )?;
+    assert_feature_pages(&f, json!({"workspace":draft}), &all, 2, Some(2))?;
+    let published = f.call(
+        &f.alice,
+        "features",
+        json!({"dataset":f.d,"workspace":draft,"feature_id":"d"}),
+    )?;
+    assert_eq!(published["geometry"], point(0., 0.));
+    assert_eq!(published["revision"], 2);
+    assert_eq!(published["workspace_version"], 2);
+    assert_eq!(
+        f.call(&f.bob, "features", json!({"dataset":f.d,"workspace":draft}),)
+            .unwrap_err()
+            .status,
+        404
+    );
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "features",
+            json!({"dataset":f.d,"workspace":draft,"feature_id":"c"}),
+        )
+        .unwrap_err()
+        .status,
+        404
+    );
+    assert_eq!(
+        f.call(&f.alice, "get_workspace", json!({"workspace":draft}))?["base_revision"],
+        1
+    );
+    assert_eq!(
+        f.call(&f.alice, "diff", json!({"workspace":draft}))?["base_revision"],
+        1
+    );
+    f.call(
+        &f.alice,
+        "discard",
+        json!({"workspace":pinned,"expected_workspace_version":0}),
+    )?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":pinned,"bbox":bounds}),
+        &original,
+        1,
+        Some(1),
+    )?;
     Ok(())
 }
 
@@ -548,8 +621,16 @@ fn merge_pinned_isolation_conflict_rebase_and_restore() -> TestResult {
     assert_eq!(f.get(&f.bob, Some(&unedited))["properties"]["a"], 1);
     assert_eq!(f.get(&f.bob, Some(&unedited))["workspace_version"], 0);
     assert_eq!(f.get(&f.bob, Some(&b))["properties"], json!({"a":1,"b":2}));
+    assert_eq!(
+        f.call(&f.bob, "diff", json!({"workspace":b}))?["changes"][0]["draft"]["properties"],
+        json!({"a":1,"b":2})
+    );
     f.publish(&f.bob, &b, 1)?;
     assert_eq!(f.get(&f.alice, None)["properties"], json!({"a":2,"b":2}));
+    assert_eq!(
+        f.call(&f.bob, "diff", json!({"workspace":b}))?["changes"][0]["draft"]["properties"],
+        json!({"a":2,"b":2})
+    );
     let historical = f.call(
         &f.alice,
         "features",
@@ -1641,6 +1722,111 @@ fn topology_warnings_preserve_original_polygon_through_publication() -> TestResu
 }
 
 #[test]
+fn published_workspace_summary_keeps_its_base_after_concurrent_insert_or_delete() -> TestResult {
+    for concurrent_insert in [true, false] {
+        let f = Fixture::new()?;
+        let seed = f.ws(&f.alice);
+        f.call(
+            &f.alice,
+            "save",
+            json!({"workspace":seed,"expected_workspace_version":0,"edits":[
+                f.edit("changed",json!({"n":1}),Value::Null),
+                f.edit("removed",json!({}),Value::Null)
+            ]}),
+        )?;
+        f.publish(&f.alice, &seed, 1)?;
+        let draft = f.ws(&f.alice);
+        let competing = f.ws(&f.bob);
+        f.call(
+            &f.alice,
+            "save",
+            json!({"workspace":draft,"expected_workspace_version":0,"edits":[
+                f.edit("added",json!({"n":2}),Value::Null),
+                f.edit("changed",json!({"n":2}),Value::Null),
+                {"dataset":f.d,"feature_id":"removed","feature":null}
+            ]}),
+        )?;
+        let concurrent_edit = if concurrent_insert {
+            f.edit("added", json!({"n":1}), Value::Null)
+        } else {
+            json!({"dataset":f.d,"feature_id":"changed","feature":null})
+        };
+        f.call(
+            &f.bob,
+            "save",
+            json!({"workspace":competing,"expected_workspace_version":0,"edits":[concurrent_edit]}),
+        )?;
+        f.publish(&f.bob, &competing, 1)?;
+        let conflict_key = if concurrent_insert {
+            "added"
+        } else {
+            "changed"
+        };
+        f.call(
+            &f.alice,
+            "resolve",
+            json!({"workspace":draft,"expected_workspace_version":1,"expected_head":2,
+                "resolutions":[f.edit(conflict_key,json!({"n":3}),Value::Null)]}),
+        )?;
+        let before = f.call(&f.alice, "diff", json!({"workspace":draft}))?;
+        assert_eq!(before["base_revision"], 1);
+        let expected = json!({"added":1,"deleted":1,"modified":1});
+        assert_eq!(
+            f.call(&f.alice, "workspace_summary", json!({"workspace":draft}))?["total"],
+            expected
+        );
+        f.publish(&f.alice, &draft, 2)?;
+        let after = f.call(&f.alice, "diff", json!({"workspace":draft}))?;
+        assert_eq!(after["base_revision"], before["base_revision"]);
+        assert_eq!(after["changes"], before["changes"]);
+        let summary = f.call(&f.alice, "workspace_summary", json!({"workspace":draft}))?;
+        assert_eq!(summary["version"], 3);
+        assert_eq!(summary["total"], expected);
+        assert_eq!(
+            f.call(&f.bob, "workspace_summary", json!({"workspace":draft}))
+                .unwrap_err()
+                .status,
+            404
+        );
+        let commit = f.call(&f.alice, "commit", json!({"revision":3}))?;
+        assert_eq!(commit["changes"][0]["before"].is_null(), !concurrent_insert);
+        assert_eq!(commit["changes"][1]["before"].is_null(), !concurrent_insert);
+        let commit_summary = f.call(&f.alice, "commit_summary", json!({"revision":3}))?;
+        assert_eq!(
+            commit_summary["total"],
+            if concurrent_insert {
+                json!({"added":0,"deleted":1,"modified":2})
+            } else {
+                json!({"added":2,"deleted":1,"modified":0})
+            }
+        );
+
+        // Later current rows must not change either historical classification.
+        let later = f.ws(&f.alice);
+        f.call(
+            &f.alice,
+            "save",
+            json!({"workspace":later,"expected_workspace_version":0,"edits":[
+                {"dataset":f.d,"feature_id":"added","feature":null},
+                f.edit("changed",json!({"n":4}),Value::Null),
+                f.edit("removed",json!({"restored":true}),Value::Null)
+            ]}),
+        )?;
+        f.publish(&f.alice, &later, 1)?;
+        assert_eq!(
+            f.call(&f.alice, "workspace_summary", json!({"workspace":draft}))?,
+            summary
+        );
+        assert_eq!(f.call(&f.alice, "diff", json!({"workspace":draft}))?, after);
+        assert_eq!(
+            f.call(&f.alice, "commit_summary", json!({"revision":3}))?,
+            commit_summary
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn summaries_count_mixed_datasets_and_follow_rename_delete_and_authorization() -> TestResult {
     let f = Fixture::new()?;
     let seed = f.ws(&f.alice);
@@ -1672,6 +1858,13 @@ fn summaries_count_mixed_datasets_and_follow_rename_delete_and_authorization() -
             .is_err()
     );
     f.publish(&f.alice, &w, 1)?;
+    let published = f.app.clone().with_response_limit(2048).execute(
+        &f.alice,
+        "workspace_summary",
+        json!({"project":f.p,"workspace":w}),
+    )?;
+    assert_eq!(published["total"], draft["total"]);
+    assert_eq!(published["datasets"], draft["datasets"]);
     let commit = f.call(&f.viewer, "commit_summary", json!({"revision":2}))?;
     assert_eq!(commit["total"], draft["total"]);
     assert_eq!(commit["datasets"], draft["datasets"]);
@@ -1707,6 +1900,9 @@ fn summaries_count_mixed_datasets_and_follow_rename_delete_and_authorization() -
         json!({"added":0,"deleted":1,"modified":1})
     );
     assert_eq!(remaining["datasets"].as_array().unwrap().len(), 1);
+    let remaining_workspace = f.call(&f.alice, "workspace_summary", json!({"workspace":w}))?;
+    assert_eq!(remaining_workspace["total"], remaining["total"]);
+    assert_eq!(remaining_workspace["datasets"], remaining["datasets"]);
     Ok(())
 }
 
