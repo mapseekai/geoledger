@@ -8,7 +8,7 @@ import importlib.metadata, json, subprocess
 assert importlib.metadata.version('grpcio-tools') == '1.78.0', 'install grpcio-tools==1.78.0'
 assert subprocess.check_output(['protoc-gen-go', '--version'], text=True).strip() == 'protoc-gen-go v1.36.12'
 assert subprocess.check_output(['protoc-gen-go-grpc', '--version'], text=True).strip() == 'protoc-gen-go-grpc 1.5.1'
-assert json.load(open('sdk/ts/node_modules/ts-proto/package.json'))['version'] == '2.13.0'
+assert json.load(open('sdk/ts/node_modules/ts-proto/package.json'))['version'] == '2.18.0'
 CHECK
 # Generated network bindings are implementation details, never package-root exports.
 "$python" -m grpc_tools.protoc -I proto --go_out=sdk/go --go_opt=module=github.com/mapseekai/geoledger/sdk/go --go-grpc_out=sdk/go --go-grpc_opt=module=github.com/mapseekai/geoledger/sdk/go proto/geoledger/v1/geoledger.proto

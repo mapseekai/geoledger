@@ -20,14 +20,14 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.16.0",
-    "@grpc/grpc-js": "1.14.5",
-    "lossless-json": "4.3.1"
+    "@grpc/grpc-js": "1.14.6",
+    "lossless-json": "4.3.2"
   },
   "devDependencies": {
-    "@types/node": "26.6.4",
-    "oxlint": "1.87.0",
+    "@types/node": "26.6.5",
+    "oxlint": "1.89.0",
     "oxlint-tsgolint": "7.0.2004",
-    "ts-proto": "2.13.0",
+    "ts-proto": "2.18.0",
     "typescript": "7.0.2"
   },
   "exports": {
