@@ -39,6 +39,7 @@ with sync_playwright() as pw:
     page.get_by_label('版本说明',exact=True).fill('Web table binding')
     page.get_by_role('button',name='确认发布',exact=True).click()
     expect(page.get_by_role('heading',name='版本 r2 已发布',exact=True)).to_be_visible(timeout=30000)
+    expect(page.locator('.context-card .context-stats dd').first).to_have_text('r2')
     page.get_by_role('button',name='完成',exact=True).click()
     expect(page.locator('.map-progress')).to_have_count(0,timeout=30000)
     expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_have_count(0)
@@ -47,4 +48,4 @@ with sync_playwright() as pw:
     Path(a.screenshots).mkdir(parents=True,exist_ok=True);page.screenshot(path=str(Path(a.screenshots)/'postgis-bound-table.png'),full_page=True)
     assert not errors,errors
     browser.close()
-print('PostGIS browser: existing table registration, inferred schema, initial snapshot, edit and publication passed')
+print('PostGIS browser: existing table registration, inferred schema, source-backed initial view, edit and publication passed')

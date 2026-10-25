@@ -36,6 +36,7 @@ const (
 	GeoLedger_SaveStream_FullMethodName       = "/geoledger.v1.GeoLedger/SaveStream"
 	GeoLedger_Discard_FullMethodName          = "/geoledger.v1.GeoLedger/Discard"
 	GeoLedger_Features_FullMethodName         = "/geoledger.v1.GeoLedger/Features"
+	GeoLedger_Schema_FullMethodName           = "/geoledger.v1.GeoLedger/Schema"
 	GeoLedger_FeaturesStream_FullMethodName   = "/geoledger.v1.GeoLedger/FeaturesStream"
 	GeoLedger_WorkspaceSummary_FullMethodName = "/geoledger.v1.GeoLedger/WorkspaceSummary"
 	GeoLedger_CommitSummary_FullMethodName    = "/geoledger.v1.GeoLedger/CommitSummary"
@@ -80,6 +81,7 @@ type GeoLedgerClient interface {
 	SaveStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[DataChunk, SaveReply], error)
 	Discard(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*DiscardReply, error)
 	Features(ctx context.Context, in *FeaturesRequest, opts ...grpc.CallOption) (*FeaturesReply, error)
+	Schema(ctx context.Context, in *SchemaRequest, opts ...grpc.CallOption) (*SchemaReply, error)
 	// Concatenated chunks encode one snapshot-consistent FeaturesReply.
 	FeaturesStream(ctx context.Context, in *FeaturesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error)
 	WorkspaceSummary(ctx context.Context, in *WorkspaceRequest, opts ...grpc.CallOption) (*ChangeSummaryReply, error)
@@ -274,6 +276,16 @@ func (c *geoLedgerClient) Features(ctx context.Context, in *FeaturesRequest, opt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FeaturesReply)
 	err := c.cc.Invoke(ctx, GeoLedger_Features_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *geoLedgerClient) Schema(ctx context.Context, in *SchemaRequest, opts ...grpc.CallOption) (*SchemaReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SchemaReply)
+	err := c.cc.Invoke(ctx, GeoLedger_Schema_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +487,7 @@ type GeoLedgerServer interface {
 	SaveStream(grpc.ClientStreamingServer[DataChunk, SaveReply]) error
 	Discard(context.Context, *VersionRequest) (*DiscardReply, error)
 	Features(context.Context, *FeaturesRequest) (*FeaturesReply, error)
+	Schema(context.Context, *SchemaRequest) (*SchemaReply, error)
 	// Concatenated chunks encode one snapshot-consistent FeaturesReply.
 	FeaturesStream(*FeaturesRequest, grpc.ServerStreamingServer[DataChunk]) error
 	WorkspaceSummary(context.Context, *WorkspaceRequest) (*ChangeSummaryReply, error)
@@ -552,6 +565,9 @@ func (UnimplementedGeoLedgerServer) Discard(context.Context, *VersionRequest) (*
 }
 func (UnimplementedGeoLedgerServer) Features(context.Context, *FeaturesRequest) (*FeaturesReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Features not implemented")
+}
+func (UnimplementedGeoLedgerServer) Schema(context.Context, *SchemaRequest) (*SchemaReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Schema not implemented")
 }
 func (UnimplementedGeoLedgerServer) FeaturesStream(*FeaturesRequest, grpc.ServerStreamingServer[DataChunk]) error {
 	return status.Errorf(codes.Unimplemented, "method FeaturesStream not implemented")
@@ -917,6 +933,24 @@ func _GeoLedger_Features_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GeoLedger_Schema_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SchemaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GeoLedgerServer).Schema(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GeoLedger_Schema_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GeoLedgerServer).Schema(ctx, req.(*SchemaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GeoLedger_FeaturesStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(FeaturesRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1268,6 +1302,10 @@ var GeoLedger_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Features",
 			Handler:    _GeoLedger_Features_Handler,
+		},
+		{
+			MethodName: "Schema",
+			Handler:    _GeoLedger_Schema_Handler,
 		},
 		{
 			MethodName: "WorkspaceSummary",

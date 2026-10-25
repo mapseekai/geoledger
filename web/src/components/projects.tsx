@@ -267,10 +267,12 @@ export function Datasets({
   project,
   writable,
   backend,
+  projectChanged,
 }: {
   backend?: string;
   project: Project;
   writable: boolean;
+  projectChanged: () => void;
 }) {
   const [selected, setSelected] = useState<Dataset>(),
     [create, setCreate] = useState(false),
@@ -296,6 +298,7 @@ export function Datasets({
         project={project}
         dataset={selected}
         initialWorkspace={initialWorkspace}
+        projectChanged={projectChanged}
         writable={writable}
         back={() => {
           setSelected(undefined);
@@ -439,6 +442,7 @@ export function Datasets({
             page.reset();
           }}
           created={(dataset, workspace) => {
+            projectChanged();
             setCreate(false);
             setRefresh((n) => n + 1);
             page.reset();

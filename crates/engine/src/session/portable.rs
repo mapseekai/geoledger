@@ -1,7 +1,7 @@
 //! Logical export, import and verification of a whole database as JSON lines.
 //!
 //! File layout (one JSON object per line):
-//! 1. header `{"geoledger_export":1,"format":16,"backend":"sqlite"}`
+//! 1. header `{"geoledger_export":1,"format":19,"backend":"sqlite"}`
 //! 2. per table, in foreign-key order: `{"table":..,"columns":[..]}`, one
 //!    `{"r":[..]}` line per row, then `{"table_end":..,"rows":N,"digest":hex}`
 //! 3. trailer `{"end":true,"checksum":hex}` where checksum is the SHA-256 hash of
@@ -11,7 +11,7 @@
 //! 2^256), so SQLite and PostgreSQL exports of the same data compare equal even
 //! though each backend pages rows in its own collation order. They detect
 //! corruption and incomplete copies; they are not a signature.
-use super::{Backend, Cell, Client, Parameter, SqlTransaction};
+use super::{Backend, Cell, Client, Parameter, Row, SqlTransaction};
 use crate::{Error, FORMAT_VERSION, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -36,7 +36,7 @@ struct Table {
     key: usize,
 }
 use Kind::{Bool, Int, Text};
-/// Portable version tables of format 16 in foreign-key order. Spatial indexes
+/// Portable version tables of format 19 in foreign-key order. Spatial indexes
 /// and gl_format are rebuilt; business-table binding state stays with its source.
 const TABLES: &[Table] = &[
     Table {
@@ -68,6 +68,7 @@ const TABLES: &[Table] = &[
             ("geometry_type", Text, false),
             ("coordinate_dimension", Int, false),
             ("crs", Text, false),
+            ("source_revision", Int, false),
         ],
         key: 2,
     },
@@ -96,6 +97,26 @@ const TABLES: &[Table] = &[
         key: 2,
     },
     Table {
+        name: "gl_schema_history",
+        columns: &[
+            ("project", Text, false),
+            ("dataset", Text, false),
+            ("revision", Int, false),
+            ("definition", Text, false),
+        ],
+        key: 3,
+    },
+    Table {
+        name: "gl_workspace_schemas",
+        columns: &[
+            ("project", Text, false),
+            ("workspace", Text, false),
+            ("dataset", Text, false),
+            ("definition", Text, false),
+        ],
+        key: 3,
+    },
+    Table {
         name: "gl_history",
         columns: &[
             ("project", Text, false),
@@ -115,8 +136,8 @@ const TABLES: &[Table] = &[
             ("revision", Int, false),
             ("dataset", Text, false),
             ("feature_id", Text, false),
-            ("before_value", Text, true),
-            ("after_value", Text, true),
+            ("had_before", Bool, false),
+            ("has_after", Bool, false),
         ],
         key: 4,
     },
@@ -156,6 +177,18 @@ const TABLES: &[Table] = &[
             ("created_at", Text, false),
         ],
         key: 1,
+    },
+    Table {
+        name: "gl_current_features",
+        columns: &[
+            ("project", Text, false),
+            ("dataset", Text, false),
+            ("feature_id", Text, false),
+            ("valid_from", Int, false),
+            ("properties", Text, false),
+            ("geometry_json", Text, true),
+        ],
+        key: 3,
     },
 ];
 
@@ -274,6 +307,51 @@ fn emit(out: &mut dyn Write, checksum: &mut Sha256, value: &Value) -> Result<()>
     checksum.update(text.as_bytes());
     out.write_all(text.as_bytes()).map_err(io_error)
 }
+
+fn current_page(t: &mut SqlTransaction, last: Option<&[Cell]>) -> Result<Vec<Row>> {
+    let cursor = last
+        .map(|cells| -> Result<(String, String, String)> {
+            let text = |i| match &cells[i] {
+                Cell::Text(v) => Ok(v.clone()),
+                _ => Err(corrupt("current feature cursor")),
+            };
+            Ok((text(0)?, text(1)?, text(2)?))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let mut pair = (cursor.0, cursor.1);
+    let mut strict = false;
+    loop {
+        let comparison = if strict { ">" } else { ">=" };
+        let Some(dataset) = t.query_opt(&format!("SELECT project,id,storage_table,postgis_source,source_revision FROM gl_datasets WHERE (project,id){comparison}($1,$2) ORDER BY project,id LIMIT 1"), &[&pair.0,&pair.1])? else { return Ok(Vec::new()); };
+        let project: String = dataset.get(0usize)?;
+        let id: String = dataset.get(1usize)?;
+        let after = if project == pair.0 && id == pair.1 {
+            cursor.2.as_str()
+        } else {
+            ""
+        };
+        let rows = if let Some(table) = dataset.get::<_, Option<String>>(2usize)? {
+            super::dataset::check_table_name(&table)?;
+            t.query(&format!("SELECT CAST($1 AS text),CAST($2 AS text),feature_id,valid_from,properties,geometry_json FROM {table} WHERE feature_id>$3 ORDER BY feature_id LIMIT {PAGE}"), &[&project,&id,&after])?
+        } else if let Some(source) = dataset.get::<_, Option<String>>(3usize)? {
+            let source: super::tables::Source = crate::codec::stored(&source)?;
+            t.ensure_source_clean(&project, &id, &source)?;
+            let table = super::tables::relation(&source.table);
+            let key = super::tables::quote(&source.table.id_column);
+            let geom = super::tables::quote(&source.table.geometry_column);
+            let start: i64 = dataset.get(4usize)?;
+            t.query(&format!("SELECT CAST($1 AS text),CAST($2 AS text),t.{key}::text COLLATE \"C\",coalesce(v.valid_from,$4::bigint),(to_jsonb(t)-$5::text-$6::text)::text,ST_AsGeoJSON(t.{geom},17,0) FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{key}::text COLLATE \"C\" WHERE t.{key}::text COLLATE \"C\">$3 ORDER BY t.{key}::text COLLATE \"C\" LIMIT {PAGE}"), &[&project,&id,&after,&start,&source.table.id_column,&source.table.geometry_column])?
+        } else {
+            Vec::new()
+        };
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+        pair = (project, id);
+        strict = true;
+    }
+}
 /// Stream every table inside one consistent read transaction. Returns the
 /// summary that the trailer and table_end lines carry.
 pub(crate) fn export(
@@ -318,12 +396,16 @@ pub(crate) fn export(
         let mut digest = Digest::new();
         let mut last: Option<Vec<Cell>> = None;
         loop {
-            let rows = match &last {
-                None => t.query(&first, &[])?,
-                Some(cells) => {
-                    let params: Vec<&dyn Parameter> =
-                        cells.iter().map(|c| c as &dyn Parameter).collect();
-                    t.query(&next, &params)?
+            let rows = if table.name == "gl_current_features" {
+                current_page(t, last.as_deref())?
+            } else {
+                match &last {
+                    None => t.query(&first, &[])?,
+                    Some(cells) => {
+                        let params: Vec<&dyn Parameter> =
+                            cells.iter().map(|c| c as &dyn Parameter).collect();
+                        t.query(&next, &params)?
+                    }
                 }
             };
             let count = rows.len();
@@ -346,7 +428,8 @@ pub(crate) fn export(
                 out.write_all(text.as_bytes()).map_err(io_error)?;
                 last = Some(cells.into_iter().take(table.key).collect());
             }
-            if count < PAGE as usize {
+            // A current-feature page ends at each dataset boundary, even when short.
+            if count == 0 || (count < PAGE as usize && table.name != "gl_current_features") {
                 break;
             }
         }
@@ -452,12 +535,64 @@ pub(crate) fn read(
     Ok(DataSummary { format, tables })
 }
 
+fn import_current_batch(t: &mut SqlTransaction, rows: Vec<Vec<Cell>>) -> Result<()> {
+    let mut index = 0;
+    while index < rows.len() {
+        let (project, dataset) = match (&rows[index][0], &rows[index][1]) {
+            (Cell::Text(project), Cell::Text(dataset)) => (project.as_str(), dataset.as_str()),
+            _ => return Err(corrupt("current feature identity")),
+        };
+        let mut end = index + 1;
+        while end < rows.len()
+            && matches!((&rows[end][0],&rows[end][1]),(Cell::Text(p),Cell::Text(d)) if p==project && d==dataset)
+        {
+            end += 1;
+        }
+        if t.dataset_table(project, dataset)?.is_none() {
+            t.create_dataset_table(project, dataset)?;
+        }
+        let table = t
+            .dataset_table(project, dataset)?
+            .ok_or_else(|| corrupt("missing current dataset"))?;
+        let columns = t.geometry_columns();
+        let values = (index..end)
+            .map(|r| {
+                let n = (r - index) * 4 + 1;
+                format!(
+                    "(${n},${},${},${},{})",
+                    n + 1,
+                    n + 2,
+                    n + 3,
+                    t.geometry_values(&format!("${}", n + 3))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let params: Vec<&dyn Parameter> = rows[index..end]
+            .iter()
+            .flat_map(|r| r[2..6].iter().map(|c| c as &dyn Parameter))
+            .collect();
+        if matches!(t.0.backend, Backend::Postgis(_)) {
+            t.query_one("SELECT set_config('geoledger.publication_table',($1::text::regclass::oid)::text,true)", &[&table])?;
+        }
+        t.with_dataset_writes(|t| t.execute(&format!("INSERT INTO {table}(feature_id,valid_from,properties,geometry_json,{columns}) VALUES {values}"),&params))?;
+        if matches!(t.0.backend, Backend::Postgis(_)) {
+            t.batch_execute("SET LOCAL geoledger.publication_table = ''")?;
+        }
+        index = end;
+    }
+    Ok(())
+}
+
 /// Import into an initialized, empty database inside one write transaction;
 /// nothing is committed unless the whole file validates.
 pub(crate) fn import(client: Client, input: &mut dyn BufRead) -> Result<DataSummary> {
     let postgis = matches!(client.backend, Backend::Postgis(_));
     let mut t = client.transaction(false)?;
     for table in TABLES {
+        if table.name == "gl_current_features" {
+            continue;
+        }
         if t.query_opt(&format!("SELECT 1 FROM {} LIMIT 1", table.name), &[])?
             .is_some()
         {
@@ -468,6 +603,9 @@ pub(crate) fn import(client: Client, input: &mut dyn BufRead) -> Result<DataSumm
         }
     }
     let summary = read(input, |name, columns, rows| {
+        if name == "gl_current_features" {
+            return import_current_batch(&mut t, rows);
+        }
         let width = columns.len();
         let mut names = columns.iter().map(|c| c.0).collect::<Vec<_>>().join(",");
         let geometry = columns.iter().position(|c| c.0 == "geometry_json");
@@ -499,6 +637,21 @@ pub(crate) fn import(client: Client, input: &mut dyn BufRead) -> Result<DataSumm
             rows.iter().flatten().map(|c| c as &dyn Parameter).collect();
         t.execute(&sql, &params)
     })?;
+    let mut after = (String::new(), String::new());
+    loop {
+        let datasets = t.query("SELECT project,id FROM gl_datasets WHERE (project,id)>($1,$2) ORDER BY project,id LIMIT 32", &[&after.0, &after.1])?;
+        if datasets.is_empty() {
+            break;
+        }
+        for row in datasets {
+            let project: String = row.get(0usize)?;
+            let dataset: String = row.get(1usize)?;
+            if t.dataset_table(&project, &dataset)?.is_none() {
+                t.create_dataset_table(&project, &dataset)?;
+            }
+            after = (project, dataset);
+        }
+    }
     if postgis {
         t.query_one(
             "SELECT setval(pg_get_serial_sequence('gl_audit_events','id'), (SELECT coalesce(max(id),0) FROM gl_audit_events)+1, false)",

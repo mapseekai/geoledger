@@ -67,6 +67,36 @@ type FeaturePage struct {
 	NextAfter        *string           `json:"next_after"`
 }
 
+type SchemaField struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Nullable bool   `json:"nullable"`
+	Editable bool   `json:"editable"`
+}
+type DatasetSchema struct {
+	Revision         int64         `json:"revision"`
+	WorkspaceVersion *int64        `json:"workspace_version"`
+	Fields           []SchemaField `json:"fields"`
+}
+type SchemaQuery struct {
+	Workspace *string `json:"workspace,omitempty"`
+	Revision  *int64  `json:"revision,omitempty"`
+}
+type AddField struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+type SchemaEdit struct {
+	Dataset string     `json:"dataset"`
+	Add     []AddField `json:"add"`
+	Drop    []string   `json:"drop"`
+}
+type SchemaChange struct {
+	Dataset string        `json:"dataset"`
+	Before  []SchemaField `json:"before"`
+	After   []SchemaField `json:"after"`
+}
+
 type Change struct {
 	Cursor    string          `json:"cursor"`
 	Dataset   string          `json:"dataset"`
@@ -78,10 +108,11 @@ type Change struct {
 }
 
 type Diff struct {
-	BaseRevision int64    `json:"base_revision"`
-	Version      int64    `json:"version"`
-	Changes      []Change `json:"changes"`
-	NextAfter    *string  `json:"next_after"`
+	SchemaChanges []SchemaChange `json:"schema_changes"`
+	BaseRevision  int64          `json:"base_revision"`
+	Version       int64          `json:"version"`
+	Changes       []Change       `json:"changes"`
+	NextAfter     *string        `json:"next_after"`
 }
 
 type Conflict struct {
@@ -122,9 +153,10 @@ type HistoryPage struct {
 }
 
 type CommitChanges struct {
-	Revision  int64    `json:"revision"`
-	Changes   []Change `json:"changes"`
-	NextAfter *string  `json:"next_after"`
+	SchemaChanges []SchemaChange `json:"schema_changes"`
+	Revision      int64          `json:"revision"`
+	Changes       []Change       `json:"changes"`
+	NextAfter     *string        `json:"next_after"`
 }
 
 type AuditEvent struct {
@@ -225,8 +257,9 @@ type DatasetChangeCounts struct {
 	Modified int64  `json:"modified"`
 }
 type ChangeSummary struct {
-	Total    ChangeCounts          `json:"total"`
-	Datasets []DatasetChangeCounts `json:"datasets"`
-	Version  *int64                `json:"version,omitempty"`
-	Revision *int64                `json:"revision,omitempty"`
+	SchemaChanges []SchemaChange        `json:"schema_changes"`
+	Total         ChangeCounts          `json:"total"`
+	Datasets      []DatasetChangeCounts `json:"datasets"`
+	Version       *int64                `json:"version,omitempty"`
+	Revision      *int64                `json:"revision,omitempty"`
 }

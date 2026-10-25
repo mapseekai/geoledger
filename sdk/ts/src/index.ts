@@ -23,6 +23,12 @@ export type {
   SaveResult,
   DiscardResult,
   FeaturePage,
+  SchemaField,
+  DatasetSchema,
+  SchemaQuery,
+  AddField,
+  SchemaEdit,
+  SchemaChange,
   Change,
   ChangeCounts,
   ChangeSummary,
@@ -482,6 +488,26 @@ export class Client {
     }, convert.decodeFeaturePage);
   }
 
+  schema(
+    project: string,
+    dataset: string,
+    q: model.SchemaQuery = {},
+  ): Promise<model.DatasetSchema> {
+    if (q.workspace !== undefined && q.revision !== undefined)
+      return Promise.reject(
+        invalid("schema query cannot combine workspace and revision"),
+      );
+    return this.#call(
+      (cb) => this.#rpc.schema({
+        project,
+        dataset,
+        workspace: q.workspace,
+        revision: q.revision === undefined ? undefined : revision(q.revision),
+      }, cb),
+      convert.decodeDatasetSchema,
+    );
+  }
+
   workspaceSummary(
     project: string,
     workspace: string,
@@ -565,6 +591,7 @@ export class Client {
     workspace: string,
     version: bigint,
     items: readonly model.Edit[],
+    schemaEdits?: readonly model.SchemaEdit[],
   ): Promise<model.SaveResult> {
     return this.#call<wire.SaveReply, model.SaveResult>((cb) => {
       const request = {
@@ -572,6 +599,13 @@ export class Client {
         workspace,
         expectedWorkspaceVersion: revision(version),
         edits: edits(items),
+        schemaEdits: schemaEdits === undefined ? undefined : {
+          edits: schemaEdits.map((change) => ({
+            dataset: change.dataset,
+            add: [...(change.add ?? [])],
+            drop: [...(change.drop ?? [])],
+          })),
+        },
       };
       const bytes = wire.SaveRequest.encode(request).finish();
       if (bytes.length <= 64 * 1024) {
@@ -787,10 +821,17 @@ export class Workspace {
     return this.saveBatch([{ dataset, featureId, feature: null }]);
   }
   saveBatch(items: readonly model.Edit[]): Promise<model.SaveResult> {
+    return this.saveChanges(items);
+  }
+  /** Undefined preserves schema intent; an empty array clears it relative to base. */
+  saveChanges(
+    items: readonly model.Edit[],
+    schemaEdits?: readonly model.SchemaEdit[],
+  ): Promise<model.SaveResult> {
     return this.#exclusive(async () => {
       this.#editable();
       return this.#update(
-        await this.client.save(this.project, this.id, this.info.version, items),
+        await this.client.save(this.project, this.id, this.info.version, items, schemaEdits),
       );
     });
   }
@@ -806,6 +847,9 @@ export class Workspace {
       ...q,
       workspace: this.id,
     });
+  }
+  schema(dataset: string): Promise<model.DatasetSchema> {
+    return this.client.schema(this.project, dataset, { workspace: this.id });
   }
   diff(p: model.Page = {}): Promise<model.Diff> {
     return this.client.diff(this.project, this.id, p);

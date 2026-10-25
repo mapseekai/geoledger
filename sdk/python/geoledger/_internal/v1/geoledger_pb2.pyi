@@ -129,16 +129,86 @@ class Edit(_message.Message):
     def __init__(self, dataset: _Optional[str] = ..., feature_id: _Optional[str] = ..., feature: _Optional[_Union[Feature, _Mapping]] = ...) -> None: ...
 
 class SaveRequest(_message.Message):
-    __slots__ = ("project", "workspace", "expected_workspace_version", "edits")
+    __slots__ = ("project", "workspace", "expected_workspace_version", "edits", "schema_edits")
     PROJECT_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_FIELD_NUMBER: _ClassVar[int]
     EXPECTED_WORKSPACE_VERSION_FIELD_NUMBER: _ClassVar[int]
     EDITS_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_EDITS_FIELD_NUMBER: _ClassVar[int]
     project: str
     workspace: str
     expected_workspace_version: int
     edits: _containers.RepeatedCompositeFieldContainer[Edit]
-    def __init__(self, project: _Optional[str] = ..., workspace: _Optional[str] = ..., expected_workspace_version: _Optional[int] = ..., edits: _Optional[_Iterable[_Union[Edit, _Mapping]]] = ...) -> None: ...
+    schema_edits: SchemaEdits
+    def __init__(self, project: _Optional[str] = ..., workspace: _Optional[str] = ..., expected_workspace_version: _Optional[int] = ..., edits: _Optional[_Iterable[_Union[Edit, _Mapping]]] = ..., schema_edits: _Optional[_Union[SchemaEdits, _Mapping]] = ...) -> None: ...
+
+class AddField(_message.Message):
+    __slots__ = ("name", "type")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    type: str
+    def __init__(self, name: _Optional[str] = ..., type: _Optional[str] = ...) -> None: ...
+
+class SchemaEdit(_message.Message):
+    __slots__ = ("dataset", "add", "drop")
+    DATASET_FIELD_NUMBER: _ClassVar[int]
+    ADD_FIELD_NUMBER: _ClassVar[int]
+    DROP_FIELD_NUMBER: _ClassVar[int]
+    dataset: str
+    add: _containers.RepeatedCompositeFieldContainer[AddField]
+    drop: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, dataset: _Optional[str] = ..., add: _Optional[_Iterable[_Union[AddField, _Mapping]]] = ..., drop: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class SchemaEdits(_message.Message):
+    __slots__ = ("edits",)
+    EDITS_FIELD_NUMBER: _ClassVar[int]
+    edits: _containers.RepeatedCompositeFieldContainer[SchemaEdit]
+    def __init__(self, edits: _Optional[_Iterable[_Union[SchemaEdit, _Mapping]]] = ...) -> None: ...
+
+class SchemaRequest(_message.Message):
+    __slots__ = ("project", "dataset", "workspace", "revision")
+    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    DATASET_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    project: str
+    dataset: str
+    workspace: str
+    revision: int
+    def __init__(self, project: _Optional[str] = ..., dataset: _Optional[str] = ..., workspace: _Optional[str] = ..., revision: _Optional[int] = ...) -> None: ...
+
+class SchemaField(_message.Message):
+    __slots__ = ("name", "type", "nullable", "editable")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    NULLABLE_FIELD_NUMBER: _ClassVar[int]
+    EDITABLE_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    type: str
+    nullable: bool
+    editable: bool
+    def __init__(self, name: _Optional[str] = ..., type: _Optional[str] = ..., nullable: bool = ..., editable: bool = ...) -> None: ...
+
+class SchemaReply(_message.Message):
+    __slots__ = ("revision", "workspace_version", "fields")
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    FIELDS_FIELD_NUMBER: _ClassVar[int]
+    revision: int
+    workspace_version: int
+    fields: _containers.RepeatedCompositeFieldContainer[SchemaField]
+    def __init__(self, revision: _Optional[int] = ..., workspace_version: _Optional[int] = ..., fields: _Optional[_Iterable[_Union[SchemaField, _Mapping]]] = ...) -> None: ...
+
+class SchemaChange(_message.Message):
+    __slots__ = ("dataset", "before", "after")
+    DATASET_FIELD_NUMBER: _ClassVar[int]
+    BEFORE_FIELD_NUMBER: _ClassVar[int]
+    AFTER_FIELD_NUMBER: _ClassVar[int]
+    dataset: str
+    before: _containers.RepeatedCompositeFieldContainer[SchemaField]
+    after: _containers.RepeatedCompositeFieldContainer[SchemaField]
+    def __init__(self, dataset: _Optional[str] = ..., before: _Optional[_Iterable[_Union[SchemaField, _Mapping]]] = ..., after: _Optional[_Iterable[_Union[SchemaField, _Mapping]]] = ...) -> None: ...
 
 class FeaturesRequest(_message.Message):
     __slots__ = ("project", "dataset", "workspace", "revision", "feature_id", "bbox", "after", "limit")
@@ -381,16 +451,18 @@ class Change(_message.Message):
     def __init__(self, cursor: _Optional[str] = ..., dataset: _Optional[str] = ..., feature_id: _Optional[str] = ..., base: _Optional[_Union[Feature, _Mapping]] = ..., draft: _Optional[_Union[Feature, _Mapping]] = ..., before: _Optional[_Union[Feature, _Mapping]] = ..., after: _Optional[_Union[Feature, _Mapping]] = ...) -> None: ...
 
 class DiffReply(_message.Message):
-    __slots__ = ("base_revision", "version", "changes", "next_after")
+    __slots__ = ("base_revision", "version", "changes", "schema_changes", "next_after")
     BASE_REVISION_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     CHANGES_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_CHANGES_FIELD_NUMBER: _ClassVar[int]
     NEXT_AFTER_FIELD_NUMBER: _ClassVar[int]
     base_revision: int
     version: int
     changes: _containers.RepeatedCompositeFieldContainer[Change]
+    schema_changes: _containers.RepeatedCompositeFieldContainer[SchemaChange]
     next_after: str
-    def __init__(self, base_revision: _Optional[int] = ..., version: _Optional[int] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ..., next_after: _Optional[str] = ...) -> None: ...
+    def __init__(self, base_revision: _Optional[int] = ..., version: _Optional[int] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ..., schema_changes: _Optional[_Iterable[_Union[SchemaChange, _Mapping]]] = ..., next_after: _Optional[str] = ...) -> None: ...
 
 class Conflict(_message.Message):
     __slots__ = ("cursor", "dataset", "feature_id", "fields", "base", "current", "draft", "reason", "resolved_against_revision")
@@ -455,14 +527,16 @@ class HistoryReply(_message.Message):
     def __init__(self, commits: _Optional[_Iterable[_Union[CommitInfo, _Mapping]]] = ..., next_after: _Optional[int] = ...) -> None: ...
 
 class CommitReply(_message.Message):
-    __slots__ = ("revision", "changes", "next_after")
+    __slots__ = ("revision", "changes", "schema_changes", "next_after")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     CHANGES_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_CHANGES_FIELD_NUMBER: _ClassVar[int]
     NEXT_AFTER_FIELD_NUMBER: _ClassVar[int]
     revision: int
     changes: _containers.RepeatedCompositeFieldContainer[Change]
+    schema_changes: _containers.RepeatedCompositeFieldContainer[SchemaChange]
     next_after: str
-    def __init__(self, revision: _Optional[int] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ..., next_after: _Optional[str] = ...) -> None: ...
+    def __init__(self, revision: _Optional[int] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ..., schema_changes: _Optional[_Iterable[_Union[SchemaChange, _Mapping]]] = ..., next_after: _Optional[str] = ...) -> None: ...
 
 class AuditEvent(_message.Message):
     __slots__ = ("id", "subject", "action", "detail_json", "created_at")
@@ -611,16 +685,18 @@ class DatasetChangeCounts(_message.Message):
     def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., added: _Optional[int] = ..., deleted: _Optional[int] = ..., modified: _Optional[int] = ...) -> None: ...
 
 class ChangeSummaryReply(_message.Message):
-    __slots__ = ("total", "datasets", "version", "revision")
+    __slots__ = ("schema_changes", "total", "datasets", "version", "revision")
+    SCHEMA_CHANGES_FIELD_NUMBER: _ClassVar[int]
     TOTAL_FIELD_NUMBER: _ClassVar[int]
     DATASETS_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
+    schema_changes: _containers.RepeatedCompositeFieldContainer[SchemaChange]
     total: ChangeCounts
     datasets: _containers.RepeatedCompositeFieldContainer[DatasetChangeCounts]
     version: int
     revision: int
-    def __init__(self, total: _Optional[_Union[ChangeCounts, _Mapping]] = ..., datasets: _Optional[_Iterable[_Union[DatasetChangeCounts, _Mapping]]] = ..., version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
+    def __init__(self, schema_changes: _Optional[_Iterable[_Union[SchemaChange, _Mapping]]] = ..., total: _Optional[_Union[ChangeCounts, _Mapping]] = ..., datasets: _Optional[_Iterable[_Union[DatasetChangeCounts, _Mapping]]] = ..., version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class PostgisTable(_message.Message):
     __slots__ = ("schema", "table", "id_column", "geometry_column")

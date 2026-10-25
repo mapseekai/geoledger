@@ -116,12 +116,14 @@ export function FeatureExplorer({
   writable,
   back,
   initialWorkspace = "",
+  projectChanged,
 }: {
   initialWorkspace?: string;
   project: Project;
   dataset: Dataset;
   writable: boolean;
   back: () => void;
+  projectChanged: () => void;
 }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]),
     [workspace, setWorkspace] = useState(initialWorkspace),
@@ -228,6 +230,7 @@ export function FeatureExplorer({
         workspaceId={workspace}
         writable={writable}
         source={source}
+        projectChanged={projectChanged}
         alert={<ErrorBox message={task.error || workspaceError} />}
       />
     </section>
@@ -457,6 +460,7 @@ export function FeatureWorkspace({
   writable,
   source,
   alert,
+  projectChanged,
 }: {
   project: Project;
   dataset: Dataset;
@@ -464,6 +468,7 @@ export function FeatureWorkspace({
   writable: boolean;
   source: ReactNode;
   alert: ReactNode;
+  projectChanged: () => void;
 }) {
   const layerState = useLayer(project.id, dataset.id, workspaceId);
   const [topologyWarnings, setTopologyWarnings] = useState<{
@@ -939,6 +944,7 @@ export function FeatureWorkspace({
           }}
           complete={() => {
             setPending(undefined);
+            projectChanged();
             reload();
           }}
         />

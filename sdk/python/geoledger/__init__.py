@@ -15,7 +15,7 @@ import grpc as _grpc
 from ._internal.v1 import geoledger_pb2 as _pb
 from ._internal.v1.geoledger_pb2_grpc import GeoLedgerStub as _Stub
 
-__all__ = ["Client", "Workspace", "Project", "Member", "Dataset", "WorkspaceInfo", "Publication", "Edit", "GeoLedgerError"]
+__all__ = ["Client", "Workspace", "Project", "Member", "Dataset", "WorkspaceInfo", "Publication", "Edit", "AddField", "SchemaEdit", "GeoLedgerError"]
 
 @dataclass(frozen=True)
 class Project:
@@ -60,6 +60,17 @@ class Edit:
     dataset: str
     feature_id: str
     feature: dict[str, Any] | str | None
+
+@dataclass(frozen=True)
+class AddField:
+    name: str
+    type: str
+
+@dataclass(frozen=True)
+class SchemaEdit:
+    dataset: str
+    add: list[AddField] = field(default_factory=list)
+    drop: list[str] = field(default_factory=list)
 
 class GeoLedgerError(Exception):
     def __init__(self, code: str, message: str, *, request_id: str | None = None,
@@ -115,7 +126,7 @@ def _error(error):
 _REQUESTS = {"RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDatasetRequest", "DeleteDataset": "DeleteDatasetRequest", "Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
              "SetMember": "MemberRequest", "CreateDataset": "DatasetRequest", "ListDatasets": "ProjectPageRequest",
              "CreateWorkspace": "ProjectRequest", "ListWorkspaces": "ProjectPageRequest", "GetWorkspace": "WorkspaceRequest",
-             "Save": "SaveRequest", "Discard": "VersionRequest", "Features": "FeaturesRequest", "Diff": "DiffRequest",
+             "Save": "SaveRequest", "Discard": "VersionRequest", "Features": "FeaturesRequest", "Schema": "SchemaRequest", "Diff": "DiffRequest",
              "WorkspaceSummary": "WorkspaceRequest", "CommitSummary": "SummaryCommitRequest",
              "Conflicts": "DiffRequest", "History": "HistoryRequest", "Commit": "CommitRequest", "Audit": "HistoryRequest",
              "Publish": "PublishRequest", "Resolve": "ResolveRequest", "Rebase": "ResolveRequest", "Restore": "RestoreRequest",
@@ -184,6 +195,8 @@ class Client:
                             e["feature"] = {"geojson": raw}
                         converted.append(e)
                     fields[key] = converted
+            if fields.get("schema_edits") is not None:
+                fields["schema_edits"] = {"edits": [asdict(change) if isinstance(change, SchemaEdit) else dict(change) for change in fields["schema_edits"]]}
             request = getattr(_pb, _REQUESTS[operation])(**{k: v for k, v in fields.items() if v is not None})
         except (TypeError, ValueError, KeyError) as e:
             raise _invalid(str(e)) from None
@@ -259,6 +272,11 @@ class Client:
                  feature_id: str | None = None, bbox: list[float] | None = None, after: str = "", limit: int = 100) -> dict[str, Any]:
         return self._call("Features", project=project, dataset=dataset, workspace=workspace, revision=revision, feature_id=feature_id, bbox=bbox, after=after, limit=limit)
 
+    def schema(self, project: str, dataset: str, *, workspace: str | None = None, revision: int | None = None) -> dict[str, Any]:
+        if workspace is not None and revision is not None:
+            raise _invalid("schema query cannot combine workspace and revision")
+        return self._call("Schema", project=project, dataset=dataset, workspace=workspace, revision=revision)
+
     def history(self, project: str, *, after: int = 0, limit: int = 100) -> dict[str, Any]:
         """Ascending commits page; next_after is None at the current snapshot end.
 
@@ -331,7 +349,14 @@ class Workspace:
         return self.save_batch([Edit(dataset, feature_id, None)])
 
     def save_batch(self, edits: list[Edit]) -> dict[str, Any]:
-        return self._mutate("Save", edits=edits)
+        return self.save_changes(edits)
+
+    def save_changes(self, edits: list[Edit], schema_edits: list[SchemaEdit] | None = None) -> dict[str, Any]:
+        """None preserves the existing schema intent; [] clears it relative to base."""
+        return self._mutate("Save", edits=edits, schema_edits=schema_edits)
+
+    def schema(self, dataset: str) -> dict[str, Any]:
+        return self._client.schema(self._project, dataset, workspace=self.id)
 
     def _mutate(self, operation, **fields):
         with self._lock:

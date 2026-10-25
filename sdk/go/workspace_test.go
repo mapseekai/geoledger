@@ -29,6 +29,19 @@ func (s *contractRPC) Save(_ context.Context, request *pb.SaveRequest, _ ...grpc
 	s.saves = append(s.saves, proto.Clone(request).(*pb.SaveRequest))
 	return &pb.SaveReply{Version: request.ExpectedWorkspaceVersion + 1, Changes: 1}, nil
 }
+func (s *contractRPC) Schema(_ context.Context, request *pb.SchemaRequest, _ ...grpc.CallOption) (*pb.SchemaReply, error) {
+	revision := int64(1)
+	if request.Revision != nil {
+		revision = *request.Revision
+	}
+	var version *int64
+	if request.Workspace != nil {
+		v := int64(4)
+		version = &v
+	}
+	return &pb.SchemaReply{Revision: revision, WorkspaceVersion: version, Fields: []*pb.SchemaField{{Name: "id", Type: "int8", Editable: false, Nullable: false}}}, nil
+}
+
 func (s *contractRPC) Publish(_ context.Context, request *pb.PublishRequest, _ ...grpc.CallOption) (*pb.PublishReply, error) {
 	s.publications = append(s.publications, proto.Clone(request).(*pb.PublishRequest))
 	if s.publishError != nil {
@@ -387,5 +400,37 @@ func ExampleWorkspace_PendingPublication() {
 				log.Print(retryErr)
 			}
 		}
+	}
+}
+
+func TestSchemaIntentsPreserveOmittedAndExplicitEmpty(t *testing.T) {
+	rpc := &contractRPC{}
+	w := draftWith(rpc)
+	ctx := context.Background()
+	changes := []SchemaEdit{{Dataset: "d", Add: []AddField{{Name: "note", Type: "string"}}}}
+	if _, err := w.SaveChanges(ctx, nil, &changes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.SaveBatch(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	clear := []SchemaEdit{}
+	if _, err := w.SaveChanges(ctx, nil, &clear); err != nil {
+		t.Fatal(err)
+	}
+	if len(rpc.saves) != 3 || rpc.saves[0].SchemaEdits == nil || rpc.saves[0].SchemaEdits.Edits[0].Add[0].Type != "string" || rpc.saves[1].SchemaEdits != nil || rpc.saves[2].SchemaEdits == nil || len(rpc.saves[2].SchemaEdits.Edits) != 0 {
+		t.Fatalf("schema intent presence lost: %v", rpc.saves)
+	}
+	if rpc.saves[0].ExpectedWorkspaceVersion != 4 || rpc.saves[2].ExpectedWorkspaceVersion != 6 {
+		t.Fatal("schema and features use different workspace versions")
+	}
+	schema, err := w.Schema(ctx, "d")
+	if err != nil || schema.WorkspaceVersion == nil || *schema.WorkspaceVersion != 4 || schema.Fields[0].Editable || schema.Fields[0].Type != "int8" {
+		t.Fatalf("schema contract lost: %+v %v", schema, err)
+	}
+	revision := int64(7)
+	result, err := w.client.Schema(ctx, "project", "d", SchemaQuery{Revision: &revision})
+	if err != nil || result.Revision != 7 || result.WorkspaceVersion != nil {
+		t.Fatalf("revision query lost: %+v %v", result, err)
 	}
 }

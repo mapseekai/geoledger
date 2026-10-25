@@ -88,6 +88,12 @@ func (w *Workspace) Delete(ctx context.Context, dataset, id string) (SaveResult,
 // Each edit must contain explicit JSON; null deletes a feature, absent JSON is
 // rejected. A retained publication intent prevents further edits.
 func (w *Workspace) SaveBatch(ctx context.Context, edits []Edit) (SaveResult, error) {
+	return w.SaveChanges(ctx, edits, nil)
+}
+
+// SaveChanges atomically saves feature edits and the complete schema intent.
+// A nil schemaEdits preserves existing intent; a pointer to an empty slice clears it.
+func (w *Workspace) SaveChanges(ctx context.Context, edits []Edit, schemaEdits *[]SchemaEdit) (SaveResult, error) {
 	converted, err := wireEdits(edits)
 	if err != nil {
 		return SaveResult{}, err
@@ -100,11 +106,30 @@ func (w *Workspace) SaveBatch(ctx context.Context, edits []Edit) (SaveResult, er
 	if err := w.editable(); err != nil {
 		return r, err
 	}
-	err = call(w.client, ctx, w.client.rpc.Save, &pb.SaveRequest{Project: w.project, Workspace: w.info.ID, ExpectedWorkspaceVersion: w.info.Version, Edits: converted}, &r)
+	var schema *pb.SchemaEdits
+	if schemaEdits != nil {
+		schema = &pb.SchemaEdits{}
+		for _, change := range *schemaEdits {
+			item := &pb.SchemaEdit{Dataset: change.Dataset, Drop: append([]string(nil), change.Drop...)}
+			for _, field := range change.Add {
+				item.Add = append(item.Add, &pb.AddField{Name: field.Name, Type: field.Type})
+			}
+			schema.Edits = append(schema.Edits, item)
+		}
+	}
+	err = call(w.client, ctx, w.client.rpc.Save, &pb.SaveRequest{Project: w.project, Workspace: w.info.ID, ExpectedWorkspaceVersion: w.info.Version, Edits: converted, SchemaEdits: schema}, &r)
 	if err == nil {
 		w.info.Version = r.Version
 	}
 	return r, err
+}
+func (w *Workspace) Schema(ctx context.Context, dataset string) (DatasetSchema, error) {
+	if err := w.mu.lock(ctx); err != nil {
+		return DatasetSchema{}, err
+	}
+	defer w.mu.Unlock()
+	id := w.info.ID
+	return w.client.Schema(ctx, w.project, dataset, SchemaQuery{Workspace: &id})
 }
 func (w *Workspace) Features(ctx context.Context, dataset string, q FeatureQuery) (FeaturePage, error) {
 	if err := w.mu.lock(ctx); err != nil {

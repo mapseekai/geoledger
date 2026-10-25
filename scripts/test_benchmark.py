@@ -23,9 +23,12 @@ class SupervisorTests(unittest.TestCase):
         def response(request, **kwargs):
             sent.append((request.full_url.rsplit("/", 1)[-1], json.loads(request.data)))
             return io.BytesIO(json.dumps(replies[len(sent) - 1]).encode())
+        def sql(command, **kwargs):
+            value = "gl_data_" + "0" * 32 if "SELECT storage_table" in command[-1] else "true"
+            return subprocess.CompletedProcess(command, 0, value + "\n", "")
         with tempfile.TemporaryDirectory() as folder, \
              patch("benchmark.urllib.request.urlopen", side_effect=response), \
-             patch("benchmark.subprocess.run", return_value=subprocess.CompletedProcess("psql", 0, "true\n", "")), \
+             patch("benchmark.subprocess.run", side_effect=sql), \
              patch("benchmark.time.monotonic", side_effect=[10, 12, 20, 21]), \
              patch("builtins.print"):
             register_table("http://127.0.0.1:1", "test-key", fixture, "disposable-container", Path(folder), "roads")
