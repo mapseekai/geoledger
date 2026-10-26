@@ -183,6 +183,9 @@ impl PublicationRepository for SqlTransaction {
         }
         let prepared = self.publish_schema_definitions(project, revision)?;
         self.sync_sources(project, &prepared)?;
+        if matches!(self.0.backend, Backend::Postgis(_)) {
+            return self.close_postgis_history(project, revision);
+        }
         let mut after = (String::new(), String::new());
         loop {
             let rows = self.query("SELECT dataset,feature_id,before_value FROM gl_merge_stage WHERE before_value IS NOT NULL AND (dataset,feature_id)>($1,$2) ORDER BY dataset,feature_id LIMIT 32", &[&after.0,&after.1])?;
@@ -296,21 +299,148 @@ impl SqlTransaction {
         head: i64,
         rows: &mut [Row],
     ) -> Result<()> {
-        for row in rows {
-            let dataset: String = row.get(0usize)?;
-            let key: String = row.get(1usize)?;
-            let original = super::query::version_cells(FeatureRepository::feature_at(
-                self, project, &dataset, &key, base,
-            )?);
-            let current = if base == head {
-                original.clone()
-            } else {
-                super::query::version_cells(FeatureRepository::feature_at(
-                    self, project, &dataset, &key, head,
-                )?)
-            };
-            row.0.extend(original);
-            row.0.extend(current);
+        let mut remaining = rows;
+        while let Some(first) = remaining.first() {
+            let dataset: String = first.get(0usize)?;
+            let mut count = 1;
+            while count < remaining.len() && remaining[count].get::<_, String>(0usize)? == dataset {
+                count += 1;
+            }
+            let (rows, rest) = remaining.split_at_mut(count);
+            remaining = rest;
+            if matches!(self.0.backend, Backend::Postgis(_))
+                && let Some(metadata) = self.dataset_exists(project, &dataset)?
+                && metadata.get::<_, Option<String>>(3usize)?.is_some()
+            {
+                self.fill_source_merge_versions(project, &dataset, &metadata, base, head, rows)?;
+                continue;
+            }
+            for row in rows {
+                let dataset: String = row.get(0usize)?;
+                let key: String = row.get(1usize)?;
+                let original = super::query::version_cells(FeatureRepository::feature_at(
+                    self, project, &dataset, &key, base,
+                )?);
+                let current = if base == head {
+                    original.clone()
+                } else {
+                    super::query::version_cells(FeatureRepository::feature_at(
+                        self, project, &dataset, &key, head,
+                    )?)
+                };
+                row.0.extend(original);
+                row.0.extend(current);
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_source_merge_versions(
+        &mut self,
+        project: &str,
+        dataset: &str,
+        metadata: &Row,
+        base: i64,
+        head: i64,
+        rows: &mut [Row],
+    ) -> Result<()> {
+        let source: super::tables::Source =
+            crate::codec::stored(&metadata.get::<_, String>(3usize)?)?;
+        self.ensure_source_clean(project, dataset, &source)?;
+        let table = super::tables::relation(&source.table);
+        let id = super::tables::quote(&source.table.id_column);
+        let geom = super::tables::quote(&source.table.geometry_column);
+        let start: i64 = metadata.get(6usize)?;
+        let keys = rows
+            .iter()
+            .map(|r| r.get::<_, String>(1usize))
+            .collect::<Result<Vec<_>>>()?;
+        let keys = serde_json::to_string(&keys).map_err(Error::stored_json)?;
+        let limit = i64::try_from(self.response_limit()).unwrap_or(i64::MAX);
+        let sql = format!(
+            "WITH versions AS MATERIALIZED (
+                SELECT k.ordinal,
+                    CASE WHEN h.feature_id IS NOT NULL THEN h.properties ELSE c.properties END AS properties,
+                    CASE WHEN h.feature_id IS NOT NULL THEN h.geometry_json ELSE c.geometry_json END AS geometry_json
+                FROM jsonb_array_elements_text($4::text::jsonb) WITH ORDINALITY k(key,ordinal)
+                LEFT JOIN LATERAL (SELECT feature_id,properties,geometry_json FROM gl_history
+                    WHERE project=$1 AND dataset=$2 AND feature_id=k.key AND valid_from<=$3 AND valid_to>$3
+                    ORDER BY valid_from DESC LIMIT 1) h ON true
+                LEFT JOIN LATERAL (SELECT (to_jsonb(t)-$5::text-$6::text)::text AS properties,ST_AsGeoJSON(t.{geom},17,0) AS geometry_json
+                    FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{id}::text COLLATE \"C\"
+                    WHERE h.feature_id IS NULL AND t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($5::text,k.key))).{id}
+                    AND coalesce(v.valid_from,$7::bigint)<=$3) c ON true
+                WHERE k.ordinal>$9
+            ), bounded AS (
+                SELECT *,sum(8::bigint+coalesce(octet_length(properties),0)+coalesce(octet_length(geometry_json),0)) OVER (ORDER BY ordinal) AS bytes,
+                    row_number() OVER (ORDER BY ordinal) AS position FROM versions
+            ) SELECT properties,geometry_json FROM bounded WHERE bytes<=$8::bigint OR position=1 ORDER BY ordinal"
+        );
+        for revision in [base, head] {
+            let mut after = 0;
+            while after < rows.len() {
+                // Two column length words plus payload match the existing PostgreSQL result budget.
+                let versions = self.query(
+                    &sql,
+                    &[
+                        &project,
+                        &dataset,
+                        &revision,
+                        &keys,
+                        &source.table.id_column,
+                        &source.table.geometry_column,
+                        &start,
+                        &limit,
+                        &(after as i64),
+                    ],
+                )?;
+                if versions.is_empty() {
+                    return Err(Error::new(500, "missing merge versions"));
+                }
+                let count = versions.len();
+                for (row, version) in rows[after..].iter_mut().zip(versions) {
+                    if base == head {
+                        row.0.extend(version.0.clone());
+                    }
+                    row.0.extend(version.0);
+                }
+                after += count;
+            }
+            if base == head {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn close_postgis_history(&mut self, project: &str, revision: i64) -> Result<()> {
+        let mut after = String::new();
+        loop {
+            let rows = self.query("SELECT DISTINCT dataset FROM gl_merge_stage WHERE before_value IS NOT NULL AND dataset>$1 ORDER BY dataset LIMIT 32", &[&after])?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in rows {
+                let dataset: String = row.get(0usize)?;
+                let metadata = self
+                    .dataset_exists(project, &dataset)?
+                    .ok_or_else(|| Error::new(500, "missing dataset"))?;
+                let join = if let Some(table) = metadata.get::<_, Option<String>>(5usize)? {
+                    super::dataset::check_table_name(&table)?;
+                    format!("JOIN {table} c ON c.feature_id=m.feature_id")
+                } else {
+                    "LEFT JOIN gl_source_versions c ON c.project=$1 AND c.dataset=$2 AND c.feature_id=m.feature_id".to_owned()
+                };
+                let start: i64 = metadata.get(6usize)?;
+                let complete: bool = self.query_one(&format!("WITH archived AS (INSERT INTO gl_history(project,dataset,feature_id,valid_from,valid_to,properties,geometry_json,geom)
+                    SELECT $1,$2,m.feature_id,coalesce(c.valid_from,$4::bigint),$3,gl_json_field(m.before_value,'properties'),gl_json_field(m.before_value,'geometry'),{geometry}
+                    FROM gl_merge_stage m {join} WHERE m.dataset=$2 AND m.before_value IS NOT NULL RETURNING 1)
+                    SELECT (SELECT count(*) FROM archived)=(SELECT count(*) FROM gl_merge_stage WHERE dataset=$2 AND before_value IS NOT NULL)", geometry=self.geometry_values("gl_json_field(m.before_value,'geometry')")), &[&project,&dataset,&revision,&start])?.get(0usize)?;
+                if !complete {
+                    return Err(Error::new(500, "missing current feature"));
+                }
+                after = dataset;
+            }
         }
         Ok(())
     }

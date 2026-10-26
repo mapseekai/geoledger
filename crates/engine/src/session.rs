@@ -79,6 +79,8 @@ pub(crate) struct Client {
     result_limit: usize,
     response_reservation: Option<crate::ResponseReservation>,
     dataset_write_allowed: Arc<AtomicBool>,
+    #[cfg(test)]
+    query_count: usize,
 }
 impl Client {
     pub fn open(storage: &Storage, pool: &Arc<postgres::Pool>, timeout: Duration) -> Result<Self> {
@@ -172,6 +174,8 @@ impl Client {
             result_limit: usize::MAX,
             response_reservation: None,
             dataset_write_allowed,
+            #[cfg(test)]
+            query_count: 0,
         })
     }
     fn check(&self) -> Result<()> {
@@ -186,6 +190,10 @@ impl Client {
     }
     pub fn query(&mut self, sql: &str, params: &[&dyn Parameter]) -> Result<Vec<Row>> {
         self.check()?;
+        #[cfg(test)]
+        {
+            self.query_count += 1;
+        }
         let values: Vec<_> = params.iter().map(|p| p.value()).collect();
         match &mut self.backend {
             Backend::Sqlite(c) => {
@@ -1416,6 +1424,138 @@ mod tests {
             assert_eq!(size, 1, "old cache generations accumulated");
             eprintln!(
                 "conflicts=128 cached_late_page=10 cached_empty_page=0 recomputations=0; changed_version_conflicts=127 cache_generations=1"
+            );
+            Ok(())
+        }
+
+        #[test]
+        #[ignore = "requires isolated geoledger_test PostGIS database"]
+        fn postgis_hot_spatial_queries_batch_merge_preserves_history_and_byte_budget() -> TestResult
+        {
+            let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+            let mut admin = ::postgres::Client::connect(&dsn, ::postgres::NoTls)?;
+            assert_eq!(
+                admin
+                    .query_one("SELECT current_database()", &[])?
+                    .get::<_, String>(0),
+                "geoledger_test"
+            );
+            let storage = Storage::Postgis(dsn);
+            let pool = Arc::new(postgres::Pool::default());
+            let timeout = Duration::from_secs(30);
+            Client::open(&storage, &pool, timeout)?.migrate()?;
+            let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+            let project = uuid::Uuid::new_v4().to_string();
+            let table = format!("batch_{}", uuid::Uuid::new_v4().simple());
+            t.batch_execute(&format!("CREATE TABLE public.{table}(id bigint PRIMARY KEY,payload text,big bigint,geom geometry(Point,4326));
+                INSERT INTO public.{table} SELECT n,repeat('x',1000),9007199254740993,CASE WHEN n=3 THEN NULL ELSE ST_SetSRID(ST_MakePoint(n,0),4326) END FROM generate_series(1,32)n WHERE n<>4;
+                INSERT INTO gl_projects(id,name,head) VALUES('{project}','batch',3);
+                INSERT INTO gl_project_members(project,subject,role) VALUES('{project}','alice','owner');
+                INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('{project}','d','source','point');
+                INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('{project}','w','alice',1);
+                INSERT INTO gl_commits(project,revision,workspace,subject,message) SELECT '{project}',n,'w','alice','fixture' FROM generate_series(1,4)n;"))?;
+            t.bind_postgis_table(
+                &project,
+                "d",
+                &crate::PostgisTable {
+                    schema: "public".into(),
+                    table,
+                    id_column: "id".into(),
+                    geometry_column: "geom".into(),
+                },
+                1,
+            )?;
+            let old = format!(
+                r#"{{ "big":9007199254740993, "payload":"{}" }}"#,
+                "y".repeat(1000)
+            );
+            for (key, end, properties) in [
+                ("1", 2_i64, Some(old.as_str())),
+                ("2", 3, Some(old.as_str())),
+                ("4", 2, Some("{}")),
+                ("5", 2, None),
+            ] {
+                t.execute("INSERT INTO gl_history(project,dataset,feature_id,valid_from,valid_to,properties) VALUES($1,'d',$2,1,$3,$4)", &[&project,&key,&end,&properties])?;
+            }
+            t.execute("INSERT INTO gl_source_versions(project,dataset,feature_id,valid_from) SELECT $1,'d',key,3 FROM unnest(ARRAY['1','2','5'])key", &[&project])?;
+            t.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties) SELECT $1,'w','d',n::text,'{}' FROM generate_series(1,32)n", &[&project])?;
+            t.feature_at(&project, "d", "3", 3)?
+                .ok_or("source fixture")?;
+            let queries = t.0.query_count;
+            assert_eq!(t.merge_page(&project, "w", 1, 3, "", "")?.len(), 32);
+            let queries = t.0.query_count - queries;
+            assert!(
+                queries <= 8,
+                "merge page reverted to per-key SQL: {queries}"
+            );
+            t.set_response_limit(1500);
+            for (base, head) in [(1, 3), (2, 3), (1, 1), (3, 3)] {
+                let rows = t.merge_page(&project, "w", base, head, "", "")?;
+                assert_eq!(rows.len(), 32);
+                for row in rows {
+                    let key: String = row.get(1usize)?;
+                    for (revision, offset) in [(base, 6_usize), (head, 8)] {
+                        let expected = t.feature_at(&project, "d", &key, revision)?;
+                        for column in 0..2 {
+                            let expected = expected
+                                .as_ref()
+                                .map(|r| r.get::<_, Option<String>>(column))
+                                .transpose()?
+                                .flatten();
+                            assert_eq!(
+                                row.get::<_, Option<String>>(offset + column)?,
+                                expected,
+                                "key={key} revision={revision} column={column}"
+                            );
+                        }
+                    }
+                }
+            }
+            t.set_response_limit(usize::MAX);
+            t.begin_merge()?;
+            let mut before = Vec::new();
+            for key in ["1", "3"] {
+                let current = t.feature_at(&project, "d", key, 3)?.ok_or("current")?;
+                let properties: String = current.get(0usize)?;
+                let geometry: Option<String> = current.get(1usize)?;
+                let value = format!(
+                    "{{\"properties\":{properties},\"geometry\":{}}}",
+                    geometry.as_deref().unwrap_or("null")
+                );
+                t.stage_merge("d", key, &Some(value), &None)?;
+                before.push((key, properties, geometry));
+            }
+            t.close_history(&project, 4)?;
+            for (key, properties, geometry) in before {
+                let archived = t.query_one("SELECT valid_from,properties,geometry_json FROM gl_history WHERE project=$1 AND dataset='d' AND feature_id=$2 AND valid_to=4", &[&project,&key])?;
+                assert_eq!(
+                    archived.get::<_, i64>(0usize)?,
+                    if key == "1" { 3 } else { 1 }
+                );
+                assert_eq!(archived.get::<_, String>(1usize)?, properties);
+                let archived_geometry = archived.get::<_, Option<String>>(2usize)?;
+                assert_eq!(
+                    archived_geometry
+                        .as_deref()
+                        .map(serde_json::from_str::<serde_json::Value>)
+                        .transpose()?,
+                    geometry
+                        .as_deref()
+                        .map(serde_json::from_str::<serde_json::Value>)
+                        .transpose()?
+                );
+            }
+            t.execute(
+                "DELETE FROM gl_workspace_changes WHERE project=$1 AND feature_id<>'2'",
+                &[&project],
+            )?;
+            t.set_response_limit(old.len() + 7);
+            assert_eq!(
+                t.merge_page(&project, "w", 1, 3, "", "")
+                    .err()
+                    .ok_or("oversized history must fail")?
+                    .status,
+                413
             );
             Ok(())
         }
