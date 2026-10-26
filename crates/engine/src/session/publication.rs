@@ -351,6 +351,7 @@ impl SqlTransaction {
         let id = super::tables::quote(&source.table.id_column);
         let geom = super::tables::quote(&source.table.geometry_column);
         let start: i64 = metadata.get(6usize)?;
+        let properties = super::tables::source_properties("$5", "$6");
         let keys = rows
             .iter()
             .map(|r| r.get::<_, String>(1usize))
@@ -366,7 +367,7 @@ impl SqlTransaction {
                 LEFT JOIN LATERAL (SELECT feature_id,properties,geometry_json FROM gl_history
                     WHERE project=$1 AND dataset=$2 AND feature_id=k.key AND valid_from<=$3 AND valid_to>$3
                     ORDER BY valid_from DESC LIMIT 1) h ON true
-                LEFT JOIN LATERAL (SELECT (to_jsonb(t)-$5::text-$6::text)::text AS properties,ST_AsGeoJSON(t.{geom},17,0) AS geometry_json
+                LEFT JOIN LATERAL (SELECT {properties}::text AS properties,ST_AsGeoJSON(t.{geom},17,0) AS geometry_json
                     FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{id}::text COLLATE \"C\"
                     WHERE h.feature_id IS NULL AND t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($5::text,k.key))).{id}
                     AND coalesce(v.valid_from,$7::bigint)<=$3) c ON true

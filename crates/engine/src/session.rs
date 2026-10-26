@@ -1447,24 +1447,20 @@ mod tests {
             let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
             let project = uuid::Uuid::new_v4().to_string();
             let table = format!("batch_{}", uuid::Uuid::new_v4().simple());
-            t.batch_execute(&format!("CREATE TABLE public.{table}(id bigint PRIMARY KEY,payload text,big bigint,geom geometry(Point,4326));
-                INSERT INTO public.{table} SELECT n,repeat(chr(233),600),9007199254740993,CASE WHEN n=3 THEN NULL ELSE ST_SetSRID(ST_MakePoint(n,0),4326) END FROM generate_series(1,32)n WHERE n<>4;
+            t.batch_execute(&format!("CREATE TABLE public.{table}(id bigint PRIMARY KEY,payload text,big bigint,t text,\"q'uote\" text,geom geometry(Point,4326));
+                INSERT INTO public.{table} SELECT n,repeat(chr(233),600),9007199254740993,'kept',NULL,CASE WHEN n=3 THEN NULL ELSE ST_SetSRID(ST_MakePoint(n,0),4326) END FROM generate_series(1,32)n WHERE n<>4;
                 INSERT INTO gl_projects(id,name,head) VALUES('{project}','batch',3);
                 INSERT INTO gl_project_members(project,subject,role) VALUES('{project}','alice','owner');
                 INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('{project}','d','source','point');
                 INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('{project}','w','alice',1);
                 INSERT INTO gl_commits(project,revision,workspace,subject,message) SELECT '{project}',n,'w','alice','fixture' FROM generate_series(1,4)n;"))?;
-            t.bind_postgis_table(
-                &project,
-                "d",
-                &crate::PostgisTable {
-                    schema: "public".into(),
-                    table,
-                    id_column: "id".into(),
-                    geometry_column: "geom".into(),
-                },
-                1,
-            )?;
+            let source = crate::PostgisTable {
+                schema: "public".into(),
+                table,
+                id_column: "id".into(),
+                geometry_column: "geom".into(),
+            };
+            t.bind_postgis_table(&project, "d", &source, 1)?;
             let old = format!(
                 r#"{{ "big":9007199254740993, "payload":"{}" }}"#,
                 "y".repeat(1000)
@@ -1479,8 +1475,35 @@ mod tests {
             }
             t.execute("INSERT INTO gl_source_versions(project,dataset,feature_id,valid_from) SELECT $1,'d',key,3 FROM unnest(ARRAY['1','2','5'])key", &[&project])?;
             t.execute("INSERT INTO gl_workspace_changes(project,workspace,dataset,feature_id,properties) SELECT $1,'w','d',n::text,'{}' FROM generate_series(1,32)n", &[&project])?;
-            t.feature_at(&project, "d", "3", 3)?
+            let current = t
+                .feature_at(&project, "d", "3", 3)?
                 .ok_or("source fixture")?;
+            let properties: serde_json::Value =
+                serde_json::from_str(&current.get::<_, String>(0usize)?)?;
+            assert_eq!(properties["t"], "kept");
+            assert_eq!(properties["q'uote"], serde_json::Value::Null);
+            assert_eq!(properties["big"].as_i64(), Some(9007199254740993));
+            assert_eq!(
+                properties["payload"].as_str().ok_or("payload")?,
+                "é".repeat(600)
+            );
+            assert_eq!(t.postgis_table_page(&source, "")?.len(), 31);
+            let page = t.feature_page(&crate::repository::FeatureQuery {
+                project: project.clone(),
+                dataset: "d".into(),
+                revision: 3,
+                workspace: None,
+                after: String::new(),
+                feature_id: None,
+                bbox: None,
+                limit: 32,
+            })?;
+            assert_eq!(page.len(), 31);
+            t.batch_execute("CREATE TEMP TABLE empty_properties(id bigint NOT NULL,geom geometry(Point,4326) NOT NULL); INSERT INTO empty_properties VALUES(1,ST_SetSRID(ST_MakePoint(0,0),4326))")?;
+            let properties = super::tables::source_properties("$1", "$2");
+            let empty = t.query_one(&format!("SELECT {properties}::text,id IS NOT NULL AND geom IS NOT NULL FROM empty_properties t"), &[&"id", &"geom"])?;
+            assert_eq!(empty.get::<_, String>(0usize)?, "{}");
+            assert!(empty.get::<_, bool>(1usize)?);
             let queries = t.0.query_count;
             assert_eq!(t.merge_page(&project, "w", 1, 3, "", "")?.len(), 32);
             let queries = t.0.query_count - queries;
