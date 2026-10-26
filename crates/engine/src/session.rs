@@ -1448,7 +1448,7 @@ mod tests {
             let project = uuid::Uuid::new_v4().to_string();
             let table = format!("batch_{}", uuid::Uuid::new_v4().simple());
             t.batch_execute(&format!("CREATE TABLE public.{table}(id bigint PRIMARY KEY,payload text,big bigint,geom geometry(Point,4326));
-                INSERT INTO public.{table} SELECT n,repeat('x',1000),9007199254740993,CASE WHEN n=3 THEN NULL ELSE ST_SetSRID(ST_MakePoint(n,0),4326) END FROM generate_series(1,32)n WHERE n<>4;
+                INSERT INTO public.{table} SELECT n,repeat(chr(233),600),9007199254740993,CASE WHEN n=3 THEN NULL ELSE ST_SetSRID(ST_MakePoint(n,0),4326) END FROM generate_series(1,32)n WHERE n<>4;
                 INSERT INTO gl_projects(id,name,head) VALUES('{project}','batch',3);
                 INSERT INTO gl_project_members(project,subject,role) VALUES('{project}','alice','owner');
                 INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('{project}','d','source','point');

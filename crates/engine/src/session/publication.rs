@@ -372,7 +372,7 @@ impl SqlTransaction {
                     AND coalesce(v.valid_from,$7::bigint)<=$3) c ON true
                 WHERE k.ordinal>$9
             ), bounded AS (
-                SELECT *,sum(8::bigint+coalesce(octet_length(properties),0)+coalesce(octet_length(geometry_json),0)) OVER (ORDER BY ordinal) AS bytes,
+                SELECT *,sum(8::bigint+coalesce(octet_length(convert_to(properties,'UTF8')),0)+coalesce(octet_length(convert_to(geometry_json,'UTF8')),0)) OVER (ORDER BY ordinal) AS bytes,
                     row_number() OVER (ORDER BY ordinal) AS position FROM versions
             ) SELECT properties,geometry_json FROM bounded WHERE bytes<=$8::bigint OR position=1 ORDER BY ordinal"
         );
