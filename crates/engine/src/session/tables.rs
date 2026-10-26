@@ -345,6 +345,24 @@ impl SqlTransaction {
                 "business identifiers must be nonempty, contain no control characters and be at most 256 bytes; geometries must match the column SRID",
             ));
         }
+        // Typmods allow empty single geometries and non-finite coordinates.
+        self.batch_execute(&format!(
+            "DECLARE gl_source_validation NO SCROLL CURSOR FOR SELECT ST_AsGeoJSON({},17,0) FROM {table}",
+            quote(&table_source.geometry_column)
+        ))?;
+        loop {
+            let rows = self.query("FETCH FORWARD 32 FROM gl_source_validation", &[])?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in rows {
+                if let Some(raw) = row.get::<_, Option<String>>(0usize)? {
+                    let geometry = serde_json::from_str(&raw).map_err(|_| crate::bad())?;
+                    crate::geometry::normalize(&geometry)?;
+                }
+            }
+        }
+        self.batch_execute("CLOSE gl_source_validation")?;
         let key = table_source.id_column.replace('\'', "''");
         if !source.order_index.is_empty() {
             self.batch_execute(&format!(

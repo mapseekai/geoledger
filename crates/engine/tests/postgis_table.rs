@@ -216,6 +216,175 @@ fn registration_pages_native_primary_keys_without_losing_rows() -> TestResult {
 
 #[test]
 #[ignore = "requires isolated geoledger_test PostGIS database"]
+fn registration_rejects_invalid_source_geometries_atomically() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    support::reset_database(&mut db)?;
+    let result = (|| -> TestResult {
+        db.batch_execute("CREATE SCHEMA business")?;
+        let app = Application::new(Storage::Postgis(dsn));
+        app.migrate()?;
+        let password = uuid::Uuid::new_v4().to_string();
+        app.bootstrap_admin("alice", &password)?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":password}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let project = app.execute(
+            alice,
+            "create_project",
+            json!({"name":"geometry validation"}),
+        )?["project"]
+            .as_str()
+            .ok_or("project")?
+            .to_owned();
+        for (index, (kind, invalid, valid)) in [
+            (
+                "Point",
+                "ST_GeomFromText('POINT(NaN 2)',4326)",
+                "POINT(1 2)",
+            ),
+            (
+                "Point",
+                "ST_SetSRID(ST_MakePoint('Infinity'::float8,2),4326)",
+                "POINT(1 2)",
+            ),
+            (
+                "PointZ",
+                "ST_GeomFromText('POINT Z(1 2 NaN)',4326)",
+                "POINT Z(1 2 3)",
+            ),
+            ("Point", "ST_GeomFromText('POINT EMPTY',4326)", "POINT(1 2)"),
+            (
+                "LineString",
+                "ST_GeomFromText('LINESTRING EMPTY',4326)",
+                "LINESTRING(1 2,3 4)",
+            ),
+            (
+                "Polygon",
+                "ST_GeomFromText('POLYGON EMPTY',4326)",
+                "POLYGON((0 0,1 1,1 0,0 0))",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let name = format!("geometry_case_{index}");
+            let table = format!("business.{name}");
+            db.batch_execute(&format!("CREATE TABLE {table}(id bigint PRIMARY KEY,label text,geom geometry({kind},4326)); INSERT INTO {table} SELECT i,'original',ST_GeomFromText('{valid}',4326) FROM generate_series(1,33) i; INSERT INTO {table} VALUES(34,'invalid',{invalid})"))?;
+            let before = registration_state(&mut db, &project, &table)?;
+            let register = || {
+                app.execute(alice,"create_dataset",json!({"project":project,"name":name,"postgis_table":{"schema":"business","table":name,"id_column":"id","geometry_column":"geom"}}))
+            };
+            assert_eq!(
+                register().err().map(|error| error.status),
+                Some(400),
+                "{invalid}"
+            );
+            assert_eq!(
+                registration_state(&mut db, &project, &table)?,
+                before,
+                "{invalid} changed enrollment state"
+            );
+            assert_eq!(
+                db.execute(&format!("DELETE FROM {table} WHERE id=34"), &[])?,
+                1
+            );
+            register()?;
+        }
+        db.batch_execute("CREATE TABLE business.nullable_multi(id bigint PRIMARY KEY,label text,geom geometry(MultiPoint,4326)); INSERT INTO business.nullable_multi VALUES(1,'null',NULL),(2,'empty',ST_GeomFromText('MULTIPOINT EMPTY',4326))")?;
+        let dataset=app.execute(alice,"create_dataset",json!({"project":project,"name":"nullable multi","postgis_table":{"schema":"business","table":"nullable_multi","id_column":"id","geometry_column":"geom"}}))?["dataset"].clone();
+        let page = app.execute(
+            alice,
+            "features",
+            json!({"project":project,"dataset":dataset}),
+        )?;
+        assert!(page["features"][0]["geometry"].is_null());
+        assert_eq!(
+            page["features"][1]["geometry"],
+            json!({"type":"MultiPoint","coordinates":[]})
+        );
+        assert_eq!(
+            db.query_one("SELECT count(*) FROM gl_history", &[])?
+                .get::<_, i64>(0),
+            0
+        );
+        Ok(())
+    })();
+    support::reset_database(&mut db)?;
+    result
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn incremental_fixture_seeding_keeps_source_readable_and_other_drift() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    support::reset_database(&mut db)?;
+    let result = (|| -> TestResult {
+        db.batch_execute("CREATE SCHEMA business; CREATE TABLE business.source(id text PRIMARY KEY,attributes jsonb,geom geometry(Point,4326)); CREATE TABLE business.other(LIKE business.source INCLUDING ALL)")?;
+        let app = Application::new(Storage::Postgis(dsn));
+        app.migrate()?;
+        let password = uuid::Uuid::new_v4().to_string();
+        app.bootstrap_admin("alice", &password)?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":password}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let project = app.execute(
+            alice,
+            "create_project",
+            json!({"name":"incremental fixture"}),
+        )?["project"]
+            .as_str()
+            .ok_or("project")?
+            .to_owned();
+        let mut dataset = String::new();
+        for table in ["source", "other"] {
+            let created=app.execute(alice,"create_dataset",json!({"project":project,"name":table,"postgis_table":{"schema":"business","table":table,"id_column":"id","geometry_column":"geom"}}))?;
+            if table == "source" {
+                dataset = created["dataset"].as_str().ok_or("dataset")?.to_owned();
+            }
+        }
+        db.batch_execute("BEGIN; SELECT set_config('geoledger.publication_table','business.other'::regclass::oid::text,true); INSERT INTO business.other VALUES('outside','{}',NULL); COMMIT")?;
+        let generated=std::process::Command::new("python3").current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).args(["-c","import sys; sys.path.insert(0,'scripts'); from benchmark_incremental import postgis_seed_sql; print(postgis_seed_sql(sys.argv[1],sys.argv[2],1,4326))",&project,&dataset]).output()?;
+        assert!(generated.status.success(), "SQL generator failed");
+        let feature = json!({"type":"Feature","id":"000000000001","properties":{"attributes":{"n":18446744073709551615_u64}},"geometry":{"type":"Point","coordinates":[1,2]}});
+        let payload = feature.to_string().replace('\'', "''");
+        // Supply one payload without requiring server-side access to the test host.
+        let sql = String::from_utf8(generated.stdout)?
+            .lines()
+            .map(|line| {
+                if line.starts_with("COPY fixture_payload") {
+                    format!("INSERT INTO fixture_payload VALUES('{payload}');")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        db.batch_execute(&sql)?;
+        assert_eq!(db.query_one("SELECT count(*) FROM gl_source_changes WHERE schema_name='business' AND table_name='source'",&[])?.get::<_,i64>(0),0);
+        assert_eq!(db.query_one("SELECT count(*) FROM gl_source_changes WHERE schema_name='business' AND table_name='other'",&[])?.get::<_,i64>(0),1);
+        let page = app.execute(
+            alice,
+            "features",
+            json!({"project":project,"dataset":dataset}),
+        )?;
+        assert_eq!(page["features"][0]["properties"], feature["properties"]);
+        assert_eq!(page["features"][0]["id"], feature["id"]);
+        Ok(())
+    })();
+    support::reset_database(&mut db)?;
+    result
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
 fn registration_rejects_invalid_feature_ids_atomically() -> TestResult {
     let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
     let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;

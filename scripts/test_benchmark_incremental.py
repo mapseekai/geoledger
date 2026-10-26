@@ -61,7 +61,8 @@ class CoordinateContractTests(unittest.TestCase):
             self.assertIn("PERFORM project,dataset,revision,definition FROM gl_schema_history LIMIT 0", sql)
             self.assertIn("PERFORM project,workspace,dataset,definition FROM gl_workspace_schemas LIMIT 0", sql)
             self.assertIn("fixture seeding rejects existing schema state", sql)
-            self.assertNotIn("gl_source_changes", sql)
+            self.assertIn("DELETE FROM gl_source_changes WHERE schema_name='business' AND table_name='source';", sql)
+            self.assertNotIn("DELETE FROM gl_source_changes;", sql)
             self.assertNotIn("DELETE FROM gl_schema_history", sql)
             self.assertNotIn("DELETE FROM gl_workspace_schemas", sql)
         for crs in ["EPSG:-1", "EPSG:3857);DROP TABLE x", "+proj=tmerc", "EPSG:9999999999"]:

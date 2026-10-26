@@ -29,6 +29,7 @@ if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
   GL_CONFORMANCE_BACKEND=postgis cargo test --locked -p geoledger-engine --test conformance -- --test-threads=1
   cargo test --locked -p geoledger-engine --test authentication -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test postgis_table -- --ignored --test-threads=1
+  cargo test --locked -p geoledger-engine --test schema -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test storage -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test portable -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test multi_instance -- --ignored --test-threads=1
