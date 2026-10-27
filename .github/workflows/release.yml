@@ -306,7 +306,9 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           PYPI_ENABLED: ${{ vars.PYPI_TRUSTED_PUBLISHING }}
-        run: test -n "$NPM_TOKEN" && test "$PYPI_ENABLED" = true
+        run: |
+          test -n "$NPM_TOKEN" || { echo "NPM_TOKEN is required in the release environment"; exit 1; }
+          test "$PYPI_ENABLED" = true || { echo "PYPI_TRUSTED_PUBLISHING=true is required"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
@@ -351,7 +353,7 @@ jobs:
           python3 ../control/scripts/smoke-release-image.py --inventory "$RUNNER_TEMP/original" --sha "$SOURCE_SHA" --version 0.3.0-alpha.7 --arch amd64 --sdk-consumer "$RUNNER_TEMP/pre-consumer" --output sdk-preflight-sdist.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: alpha7-sdk-packages
+          name: alpha7-sdk-packages-${{ github.run_attempt }}
           path: |
             source/sdk-packages/*
             source/sdk/python/dist/*
@@ -421,6 +423,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: alpha7-sdk-acceptance-${{ matrix.arch }}
+          overwrite: true
           path: source/sdk-acceptance-${{ matrix.arch }}.json
           if-no-files-found: error
 
@@ -456,5 +459,6 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: alpha7-sdk-acceptance
+          overwrite: true
           path: sdk-evidence/sdk-acceptance.json
           if-no-files-found: error
