@@ -28,14 +28,16 @@ def main():
     parser.add_argument('--version', required=True)
     parser.add_argument('--arch', choices=['amd64', 'arm64'], required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--sdk-consumer', type=Path, help='Clean directory with installed npm, Python and Go consumers')
     args = parser.parse_args()
     spec = importlib.util.spec_from_file_location('source_release', Path(__file__).with_name('source-release.py'))
     release = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(release)
     release.validate_identity(args.sha, 'v' + args.version)
     record = release.inventory(args.inventory, args.sha)
-    if platform.machine() != {'amd64': 'x86_64', 'arm64': 'aarch64'}[args.arch]:
+    if platform.machine() not in {'amd64': ('x86_64', 'AMD64'), 'arm64': ('aarch64', 'arm64')}[args.arch]:
         raise ValueError('native architecture runner required')
+    consumer = args.sdk_consumer.resolve() if args.sdk_consumer else None
     image = record['image']
     run('docker', 'pull', '--platform', 'linux/' + args.arch, image)
     inspected = json.loads(run('docker', 'image', 'inspect', image))[0]
@@ -82,11 +84,23 @@ def main():
                 env = {k: v for k, v in os.environ.items() if not k.startswith('GL_')}
                 env.update(GL_ENDPOINT='http://127.0.0.1:' + grpc, GL_API_KEY_FILE=str(root / 'api-key'),
                            GL_TEST_MEMBER_ID=member_id)
-                subprocess.run([sys.executable, 'sdk/python/tests/smoke.py'], env=env, check=True, timeout=180)
+                if consumer:
+                    for key in ('PYTHONPATH', 'PYTHONHOME', 'NODE_PATH', 'GOFLAGS'):
+                        env.pop(key, None)
+                    env['GOWORK'] = 'off'
+                    for command, directory in [(['node', 'smoke.cjs'], consumer),
+                                               ([str(consumer / 'python/bin/python'), 'smoke.py'], consumer),
+                                               (['go', 'run', '.'], consumer / 'go')]:
+                        subprocess.run(command, cwd=directory, env=env, check=True, timeout=180)
+                else:
+                    subprocess.run([sys.executable, 'sdk/python/tests/smoke.py'], env=env, check=True, timeout=180)
         finally:
             subprocess.run(['docker', 'rm', '-fv', name], check=True, stdout=subprocess.DEVNULL)
-    args.output.write_text(json.dumps({'source_sha': args.sha, 'image': image,
-                                     'platform': 'linux/' + args.arch, 'version': args.version, 'passed': True}, indent=2))
+    result = {'source_sha': args.sha, 'image': image, 'platform': 'linux/' + args.arch,
+              'version': args.version, 'passed': True}
+    if consumer:
+        result['sdks'] = json.loads((consumer / 'installed.json').read_text())
+    args.output.write_text(json.dumps(result, indent=2))
 
 
 if __name__ == '__main__':
