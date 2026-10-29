@@ -489,7 +489,11 @@ impl Drop for Client {
                     }
                 }
                 Backend::Postgis(c) => {
-                    c.invalidate();
+                    if std::thread::panicking() || Instant::now() >= self.deadline {
+                        c.invalidate();
+                    } else {
+                        c.rollback();
+                    }
                 }
             }
         }
@@ -850,6 +854,79 @@ mod tests {
             "DROP SCHEMA IF EXISTS business CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS postgis;",
         )?;
         result
+    }
+
+    #[test]
+    #[ignore = "requires isolated geoledger_test PostGIS database"]
+    fn postgis_rollback_failure_deadline_and_unwind_retire_connections()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+        let mut admin = ::postgres::Client::connect(&dsn, ::postgres::NoTls)?;
+        assert_eq!(
+            admin
+                .query_one("SELECT current_database()", &[])?
+                .get::<_, String>(0),
+            "geoledger_test"
+        );
+        let storage = Storage::Postgis(dsn);
+        let pool = Arc::new(postgres::Pool::new(crate::StorageOptions {
+            pool_size: 1,
+            ..Default::default()
+        }));
+        let timeout = Duration::from_secs(10);
+        Client::open(&storage, &pool, timeout)?.migrate()?;
+        for outcome in ["rollback_failure", "deadline", "unwind"] {
+            let project = uuid::Uuid::new_v4().to_string();
+            let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+            let pid: i32 = t.query_one("SELECT pg_backend_pid()", &[])?.get(0usize)?;
+            t.insert_project(&project, "must roll back")?;
+            match outcome {
+                "rollback_failure" => {
+                    assert!(
+                        admin
+                            .query_one("SELECT pg_terminate_backend($1,1000::bigint)", &[&pid])?
+                            .get::<_, bool>(0)
+                    );
+                    // No SQL call has marked the connection invalid before Drop attempts rollback.
+                    drop(t);
+                }
+                "deadline" => {
+                    t.0.deadline = Instant::now();
+                    drop(t);
+                }
+                _ => assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        let _transaction = t;
+                        panic!("transaction unwind fixture");
+                    }))
+                    .is_err()
+                ),
+            }
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while pool.stats().active != 0 {
+                assert!(Instant::now() < deadline, "{outcome}: cleanup unconfirmed");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                pool.stats().idle,
+                0,
+                "{outcome}: unsafe connection returned to pool"
+            );
+            let mut next = Client::open(&storage, &pool, timeout)?.transaction(false)?;
+            let replacement: i32 = next
+                .query_one("SELECT pg_backend_pid()", &[])?
+                .get(0usize)?;
+            assert_ne!(replacement, pid, "{outcome}: unsafe connection reused");
+            assert!(
+                next.project_head(&project, false)?.is_none(),
+                "{outcome}: partial commit"
+            );
+            next.commit()?;
+            eprintln!(
+                "{outcome}: retired_backend={pid} replacement_backend={replacement} partial_commits=0 cleanup_active=0 cleanup_retiring=0"
+            );
+        }
+        Ok(())
     }
 
     #[test]

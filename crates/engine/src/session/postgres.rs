@@ -410,6 +410,12 @@ impl Client {
     pub(super) fn invalidate(&mut self) {
         self.reusable = false;
     }
+    pub(super) fn rollback(&mut self) {
+        // Only fully completed commands may return to the pool after an acknowledged rollback.
+        if self.reusable && self.batch_execute("ROLLBACK").is_err() {
+            self.invalidate();
+        }
+    }
 }
 
 impl Connection {
