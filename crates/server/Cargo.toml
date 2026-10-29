@@ -38,7 +38,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 geoledger-engine = { path = "../engine", features = ["test-support"] }
 geoledger-client = { path = "../../sdk/rust" }
 tempfile.workspace = true
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 rcgen = "0.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
