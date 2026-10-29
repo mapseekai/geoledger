@@ -51,7 +51,8 @@ impl SqlTransaction {
         let id = super::tables::quote(&source.table.id_column);
         let geom = super::tables::quote(&source.table.geometry_column);
         let start: i64 = metadata.get(6usize)?;
-        self.query_opt(&format!("SELECT (to_jsonb(t)-$5::text-$6::text)::text,ST_AsGeoJSON(t.{geom},17,0) FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{id}::text COLLATE \"C\" WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($5::text,$3::text))).{id} AND coalesce(v.valid_from,$7::bigint)<=$4"), &[&project,&dataset,&key,&revision,&source.table.id_column,&source.table.geometry_column,&start])
+        let properties = super::tables::source_properties("$5", "$6");
+        self.query_opt(&format!("SELECT {properties}::text,ST_AsGeoJSON(t.{geom},17,0) FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{id}::text COLLATE \"C\" WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($5::text,$3::text))).{id} AND coalesce(v.valid_from,$7::bigint)<=$4"), &[&project,&dataset,&key,&revision,&source.table.id_column,&source.table.geometry_column,&start])
     }
 
     pub(super) fn current_start(&mut self, project: &str, dataset: &str, key: &str) -> Result<i64> {
@@ -136,11 +137,11 @@ impl SqlTransaction {
             let geom = super::tables::quote(&source.table.geometry_column);
             let key = format!("t.{id}::text COLLATE \"C\"");
             let source_payload = if include_payload {
-                format!(
-                    ",(to_jsonb(t)-'{}'-'{}')::text,ST_AsGeoJSON(t.{geom},17,0)",
-                    source.table.id_column.replace('\'', "''"),
-                    source.table.geometry_column.replace('\'', "''")
-                )
+                let properties = super::tables::source_properties(
+                    &format!("'{}'", source.table.id_column.replace('\'', "''")),
+                    &format!("'{}'", source.table.geometry_column.replace('\'', "''")),
+                );
+                format!(",{properties}::text,ST_AsGeoJSON(t.{geom},17,0)")
             } else {
                 String::new()
             };

@@ -3,6 +3,7 @@
     clippy::expect_used,
     reason = "test fixture setup and assertions fail immediately, including guarded environment admission"
 )]
+mod support;
 use geoledger_engine::{Application, Storage};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -11,28 +12,14 @@ use uuid::Uuid;
 #[ignore = "requires isolated geoledger_test PostGIS database"]
 fn postgis_schema_publication_is_atomic_historical_and_restorable() {
     let dsn = std::env::var("GL_TEST_DATABASE_URL").expect("dedicated test DSN required");
-    let config: postgres::Config = dsn.parse().expect("valid dedicated test DSN");
-    assert_eq!(
-        config.get_dbname(),
-        Some("geoledger_test"),
-        "requires the dedicated test database"
-    );
-    let mut db = config
-        .connect(postgres::NoTls)
-        .expect("dedicated test connection");
-    assert_eq!(
-        db.query_one("SELECT current_database()", &[])
-            .unwrap()
-            .get::<_, String>(0),
-        "geoledger_test"
-    );
+    let (dsn, mut db) = support::connect_isolated(&dsn, "schema-publication").unwrap();
+    support::reset_database(&mut db).unwrap();
     let schema_name = format!("schema_test_{}", Uuid::new_v4().simple());
     let table = format!("{schema_name}.schema_points");
     db.batch_execute(&format!("CREATE SCHEMA {schema_name}; CREATE TABLE {table}(fid bigint PRIMARY KEY,title text,remove text,amount bigint,protected text NOT NULL,indexed text,geom geometry(PointZ,3857)); CREATE INDEX schema_points_indexed ON {table}(indexed); INSERT INTO {table} VALUES(1,'first','original',9007199254740993,'keep','index',ST_SetSRID(ST_MakePoint(10.123456789,20.987654321,30.75),3857)),(2,'second',NULL,12,'keep','other',NULL);")).unwrap();
     let app = Application::new(Storage::Postgis(dsn));
     app.migrate().unwrap();
-    let password =
-        std::env::var("GL_SCHEMA_TEST_PASSWORD").expect("private fixture credential required");
+    let password = Uuid::new_v4().to_string();
     app.bootstrap_admin("schema-fixture", &password).unwrap();
     let login = app
         .auth_operation(
@@ -191,18 +178,11 @@ fn postgis_schema_saves_share_project_lock_and_preserve_workspace_cas() {
     use std::sync::{Arc, Barrier, mpsc};
     use std::time::{Duration, Instant};
     let dsn = std::env::var("GL_TEST_DATABASE_URL").unwrap();
-    let config: postgres::Config = dsn.parse().unwrap();
-    assert_eq!(config.get_dbname(), Some("geoledger_test"));
-    let mut db = config.connect(postgres::NoTls).unwrap();
-    assert_eq!(
-        db.query_one("SELECT current_database()", &[])
-            .unwrap()
-            .get::<_, String>(0),
-        "geoledger_test"
-    );
+    let (dsn, mut db) = support::connect_isolated(&dsn, "schema-concurrency").unwrap();
+    support::reset_database(&mut db).unwrap();
     let app = Application::new(Storage::Postgis(dsn));
     app.migrate().unwrap();
-    let password = std::env::var("GL_SCHEMA_TEST_PASSWORD").unwrap();
+    let password = Uuid::new_v4().to_string();
     app.bootstrap_admin("schema-fixture", &password).unwrap();
     let actor = app
         .auth_operation(
@@ -355,18 +335,12 @@ fn postgis_schema_saves_share_project_lock_and_preserve_workspace_cas() {
 #[ignore = "requires isolated geoledger_test PostGIS database"]
 fn postgis_schema_purge_preserves_cross_dataset_drafts_history_and_receipts() {
     let dsn = std::env::var("GL_TEST_DATABASE_URL").unwrap();
-    let config: postgres::Config = dsn.parse().unwrap();
-    assert_eq!(config.get_dbname(), Some("geoledger_test"));
-    let mut db = config.connect(postgres::NoTls).unwrap();
-    assert_eq!(
-        db.query_one("SELECT current_database()", &[])
-            .unwrap()
-            .get::<_, String>(0),
-        "geoledger_test"
-    );
+    let (dsn, mut db) = support::connect_isolated(&dsn, "schema-purge").unwrap();
+    support::reset_database(&mut db).unwrap();
     let app = Application::new(Storage::Postgis(dsn));
     app.migrate().unwrap();
-    let password = std::env::var("GL_SCHEMA_TEST_PASSWORD").unwrap();
+    let password = Uuid::new_v4().to_string();
+    app.bootstrap_admin("schema-fixture", &password).unwrap();
     let login = app
         .auth_operation(
             None,

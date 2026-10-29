@@ -11,6 +11,7 @@ python3 scripts/test_deployment_config.py
 python3 scripts/check-release-policy.py
 python3 -m unittest discover -s scripts -p test_supply_chain.py
 python3 -m unittest discover -s scripts -p test_source_release.py
+python3 -m unittest discover -s scripts -p test_sdk_supplement.py
 python3 -m unittest discover -s scripts -p 'test_benchmark*.py'
 bash -n scripts/backup-drill.sh
 cargo fmt --all -- --check
@@ -24,11 +25,13 @@ cargo test --locked --workspace
 ./scripts/backup-drill.sh
 if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
   cargo test --locked -p geoledger-engine --test review_postgis -- --ignored --test-threads=1
+  cargo test --locked -p geoledger-engine --lib postgis_rollback_failure -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --lib postgis_hot_spatial_queries -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --lib postgis_audit_cursor -- --ignored --test-threads=1
   GL_CONFORMANCE_BACKEND=postgis cargo test --locked -p geoledger-engine --test conformance -- --test-threads=1
   cargo test --locked -p geoledger-engine --test authentication -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test postgis_table -- --ignored --test-threads=1
+  cargo test --locked -p geoledger-engine --test schema -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test storage -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test portable -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --test multi_instance -- --ignored --test-threads=1

@@ -2136,6 +2136,208 @@ fn buffered_saves_preserve_values_and_rollback_flushed_batches() -> TestResult {
 }
 
 #[test]
+fn save_schema_cache_follows_dataset_intent_and_request_changes() -> TestResult {
+    let f = Fixture::new()?;
+    let second = f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"name":"second schema","geometry_type":"point"}),
+    )?["dataset"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let datasets = [&f.d, &second];
+    let edit = |dataset: &str, key: &str, properties: Value| {
+        let mut edit = f.edit(key, properties, point(1., 2.));
+        edit["dataset"] = json!(dataset);
+        edit
+    };
+    let mut seed_edits = Vec::new();
+    let mut edits = Vec::new();
+    for i in 0..3 {
+        for (index, dataset) in datasets.iter().enumerate() {
+            let key = format!("row-{i}");
+            seed_edits.push(edit(dataset, &key, json!({"keep":"before","retired":format!("hidden-{index}-{i}"),"exact":9007199254740993_i64})));
+            let shared = if index == 0 {
+                json!(i)
+            } else {
+                json!(format!("text-{i}"))
+            };
+            edits.push(edit(
+                dataset,
+                &key,
+                json!({"keep":"after","shared":shared,"exact":9007199254740993_i64}),
+            ));
+        }
+    }
+    let seed = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":seed,"expected_workspace_version":0,"edits":seed_edits}),
+    )?;
+    f.publish(&f.alice, &seed, 1)?;
+    let w = f.ws(&f.alice);
+    let schemas = datasets.iter().zip(["integer", "string"]).map(|(dataset,kind)| json!({"dataset":dataset,"drop":["retired"],"add":[{"name":"shared","type":kind}]})).collect::<Vec<_>>();
+    assert_eq!(
+        f.call(&f.alice, "save", json!({"workspace":w,"expected_workspace_version":0,"schema_edits":schemas,"edits":edits}))?["changes"],
+        8
+    );
+    for (index, dataset) in datasets.iter().enumerate() {
+        let features = f.call(
+            &f.alice,
+            "features",
+            json!({"workspace":w,"dataset":dataset}),
+        )?;
+        for (i, feature) in features["features"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(
+                feature["properties"]["shared"],
+                edits[i * 2 + index]["feature"]["properties"]["shared"]
+            );
+            assert!(feature["properties"].get("retired").is_none());
+            assert_eq!(feature["properties"]["exact"], json!(9007199254740993_i64));
+            assert_eq!(feature["geometry"], point(1., 2.));
+        }
+    }
+    // Clearing intent in a later request restores hidden originals and removes temporary fields.
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":1,"schema_edits":[]}),
+    )?;
+    for (index, dataset) in datasets.iter().enumerate() {
+        let features = f.call(
+            &f.alice,
+            "features",
+            json!({"workspace":w,"dataset":dataset}),
+        )?;
+        for (i, feature) in features["features"].as_array().unwrap().iter().enumerate() {
+            let mut expected = seed_edits[i * 2 + index]["feature"].clone();
+            expected["properties"]["keep"] = json!("after");
+            assert_eq!(*feature, expected);
+        }
+    }
+    // Reuse the same field name with a different type; the other dataset is dynamic again.
+    let changed = vec![
+        edit(
+            &f.d,
+            "row-0",
+            json!({"keep":"next","exact":9007199254740993_i64,"shared":true}),
+        ),
+        edit(
+            &second,
+            "row-0",
+            json!({"free":"allowed without a definition"}),
+        ),
+    ];
+    assert_eq!(
+        f.call(&f.alice, "save", json!({"workspace":w,"expected_workspace_version":2,"schema_edits":[{"dataset":f.d,"drop":["retired"],"add":[{"name":"shared","type":"boolean"}]}],"edits":changed}))?["changes"],
+        7
+    );
+    for edit in changed {
+        let feature = f.call(
+            &f.alice,
+            "features",
+            json!({"workspace":w,"dataset":edit["dataset"],"feature_id":"row-0"}),
+        )?;
+        assert_eq!(feature["properties"], edit["feature"]["properties"]);
+        assert_eq!(feature["geometry"], edit["feature"]["geometry"]);
+        assert_eq!(feature["workspace_version"], 3);
+    }
+    Ok(())
+}
+
+#[test]
+fn save_schema_cache_preserves_base_revision_and_late_failure_rollback() -> TestResult {
+    let f = Fixture::new()?;
+    let seed = f.ws(&f.alice);
+    f.save(
+        &f.alice,
+        &seed,
+        0,
+        json!({"keep":"baseline","retired":"hidden"}),
+        Value::Null,
+    )?;
+    f.publish(&f.alice, &seed, 1)?;
+    let old = f.ws(&f.alice);
+    let schema = f.ws(&f.alice);
+    f.call(&f.alice, "save", json!({"workspace":schema,"expected_workspace_version":0,"schema_edits":[{"dataset":f.d,"add":[{"name":"shared","type":"integer"}]}]}))?;
+    f.publish(&f.alice, &schema, 1)?;
+    let w = f.ws(&f.alice);
+    let schema_query = json!({"workspace":w,"dataset":f.d});
+    let before_schema = f.call(&f.alice, "schema", schema_query.clone())?;
+    let before_features = f.call(&f.alice, "features", schema_query.clone())?;
+    let before_audit = f.call(&f.alice, "audit", json!({}))?;
+    let edits = (0..40)
+        .map(|i| {
+            f.edit(
+                &format!("batch-{i:02}"),
+                json!({"keep":"edit","shared":i,"marker":true}),
+                Value::Null,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut request = json!({"workspace":w,"expected_workspace_version":0,"schema_edits":[{"dataset":f.d,"drop":["retired"],"add":[{"name":"marker","type":"boolean"}]}],"edits":edits});
+    request["edits"][39]["feature"]["properties"]["shared"] =
+        json!("wrong type after a flushed batch");
+    assert_eq!(
+        f.call(&f.alice, "save", request.clone())
+            .unwrap_err()
+            .status,
+        400
+    );
+    assert_eq!(
+        f.call(&f.alice, "get_workspace", json!({"workspace":w}))?["version"],
+        0
+    );
+    assert_eq!(
+        f.call(&f.alice, "schema", schema_query.clone())?,
+        before_schema
+    );
+    assert_eq!(
+        f.call(&f.alice, "features", schema_query.clone())?,
+        before_features
+    );
+    assert_eq!(f.call(&f.alice, "audit", json!({}))?, before_audit);
+    let diff = f.call(&f.alice, "diff", json!({"workspace":w}))?;
+    assert_eq!(diff["changes"], json!([]));
+    assert_eq!(diff["schema_changes"], json!([]));
+    request["edits"][39]["feature"]["properties"]["shared"] = json!(39);
+    assert_eq!(f.call(&f.alice, "save", request)?["changes"], 41);
+    let saved = f.call(
+        &f.alice,
+        "features",
+        json!({"workspace":w,"dataset":f.d,"feature_id":"batch-39"}),
+    )?;
+    assert_eq!(saved["properties"], edits[39]["feature"]["properties"]);
+    // Alternating requests must use each workspace's own base, even after HEAD changes.
+    f.save(&f.alice, &old, 0, json!({"outside":true}), Value::Null)?;
+    let current = f.ws(&f.alice);
+    assert_eq!(
+        f.save(&f.alice, &current, 0, json!({"outside":true}), Value::Null)
+            .unwrap_err()
+            .status,
+        400
+    );
+    f.save(
+        &f.alice,
+        &current,
+        0,
+        json!({"keep":"valid","retired":"still editable","shared":7}),
+        Value::Null,
+    )?;
+    assert_eq!(
+        f.get(&f.alice, Some(&current))["properties"]["retired"],
+        "still editable"
+    );
+    assert_eq!(
+        f.get(&f.alice, Some(&old))["properties"],
+        json!({"outside":true})
+    );
+    Ok(())
+}
+
+#[test]
 fn native_crs_roundtrips_and_spatial_filters_remain_dataset_scoped() -> TestResult {
     let mut f = Fixture::new()?;
     for crs in [

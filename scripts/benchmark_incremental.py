@@ -101,6 +101,7 @@ SELECT set_config('geoledger.publication_table','business.source'::regclass::oid
 CREATE TEMP TABLE fixture_payload(payload text);
 COPY fixture_payload FROM '/tmp/fixture.jsonl' WITH(FORMAT csv,DELIMITER E'\\x01',QUOTE E'\\x02');
 INSERT INTO business.source SELECT payload::jsonb->>'id',payload::jsonb->'properties'->'attributes',ST_SetSRID(ST_GeomFromGeoJSON(payload::jsonb->'geometry'),{source_srid}) FROM fixture_payload;
+DELETE FROM gl_source_changes WHERE schema_name='business' AND table_name='source';
 ANALYZE business.source; COMMIT;
 SELECT count(*) FROM business.source;
 """

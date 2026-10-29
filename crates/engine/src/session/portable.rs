@@ -341,7 +341,8 @@ fn current_page(t: &mut SqlTransaction, last: Option<&[Cell]>) -> Result<Vec<Row
             let key = super::tables::quote(&source.table.id_column);
             let geom = super::tables::quote(&source.table.geometry_column);
             let start: i64 = dataset.get(4usize)?;
-            t.query(&format!("SELECT CAST($1 AS text),CAST($2 AS text),t.{key}::text COLLATE \"C\",coalesce(v.valid_from,$4::bigint),(to_jsonb(t)-$5::text-$6::text)::text,ST_AsGeoJSON(t.{geom},17,0) FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{key}::text COLLATE \"C\" WHERE t.{key}::text COLLATE \"C\">$3 ORDER BY t.{key}::text COLLATE \"C\" LIMIT {PAGE}"), &[&project,&id,&after,&start,&source.table.id_column,&source.table.geometry_column])?
+            let properties = super::tables::source_properties("$5", "$6");
+            t.query(&format!("SELECT CAST($1 AS text),CAST($2 AS text),t.{key}::text COLLATE \"C\",coalesce(v.valid_from,$4::bigint),{properties}::text,ST_AsGeoJSON(t.{geom},17,0) FROM {table} t LEFT JOIN gl_source_versions v ON v.project=$1 AND v.dataset=$2 AND v.feature_id=t.{key}::text COLLATE \"C\" WHERE t.{key}::text COLLATE \"C\">$3 ORDER BY t.{key}::text COLLATE \"C\" LIMIT {PAGE}"), &[&project,&id,&after,&start,&source.table.id_column,&source.table.geometry_column])?
         } else {
             Vec::new()
         };
