@@ -10,13 +10,13 @@
 
 ## 候选版本与发布配置
 
-当前候选版本为 `0.3.0-alpha.7`，Python 包使用等价版本 `0.3.0a7`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.7`，将通过检查的提交作为候选 SHA。
+当前候选版本为 `0.3.0-alpha.8`，Python 包使用等价版本 `0.3.0a8`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.8`，将通过检查的提交作为候选 SHA。
 
 ### 仅源码与 Docker Hub 的预发布
 
 [Source prerelease and Docker Hub](../.github/workflows/source-docker-release.yml) 是独立的手动入口，仅发布 GitHub prerelease 和 `docker.io/zwishing/geoledger:<版本>`，覆盖 Linux AMD64 / ARM64；不分发 npm/PyPI 包、Go 模块标签或独立二进制。完整 SDK 发布继续使用下文的既有流程。
 
-先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（当前 main HEAD 的完整 40 位提交 SHA；重跑可使用已固定标签的原候选）及 `release_tag`（例如 `v0.3.0-alpha.7`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
+先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（当前 main HEAD 的完整 40 位提交 SHA；重跑可使用已固定标签的原候选）及 `release_tag`（例如 `v0.3.0-alpha.8`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
 
 预检以 `contents: write` 的内置 `GITHUB_TOKEN` 创建并核对候选 tag，之后才启动同 SHA 完整 CI、[性能验收脚本](../scripts/release-performance.sh)、受检构建阶段和双架构运行镜像、不可变 digest 推送和签名、两架构原生拉取与 SDK 验收，最后公开 prerelease。性能检查保留 20 并发、300 秒和原 p95 门限，使用显式 CRS 的 10,000 条合成要素及一次性数据库。镜像验收检查源码 revision、服务版本、统一容器健康状态、重启后的 API Key 及 SDK 业务流程。
 
@@ -34,7 +34,7 @@ Release 查询使用带认证、分页的 releases 列表匹配 `tag_name`，同
 
 恢复流程不重新构建、推送或签名镜像，不发布 SDK，也不使用 registry 凭据。修复流程的 main 提交与镜像源码 SHA 分开记录。不要为这次恢复重跑旧运行（它仍使用错误的预期身份），也不要启动正常构建流程试图覆盖已发布标签。原产物过期、校验不一致或已有公开 Release 时停止，重新评估恢复方案。
 
-格式 19 需要初始化新数据库；旧格式数据库及逻辑导出由当前版本明确拒绝，旧库、备份及匹配的旧版程序独立保留。新流程不执行业务部署或旧数据迁移。
+当前存储格式仍为 19，现有格式 19 数据库可继续使用。其他存储格式及逻辑导出由当前版本明确拒绝，旧库、备份及匹配的旧版程序独立保留。发布流程不执行业务部署或旧数据迁移。
 
 GitHub 的 `release` environment 配置 `NPM_TOKEN` secret，授予 `@geoledger/client` 的发布权限。PyPI 项目 `geoledger-client` 配置 Trusted Publisher：仓库 `mapseekai/geoledger`、工作流 `release.yml`、environment `release`；完成绑定后将该 environment 的 `PYPI_TRUSTED_PUBLISHING` variable 设置为 `true`。凭据由仓库与包管理员在平台设置中维护。预检验证配置存在，实际发布验证授权生效。
 

@@ -6,7 +6,7 @@ GeoLedger 是空间要素的版本管理与协作编辑服务。团队用项目�
 
 仓库包含 Rust 服务端 `geoledger-server`、远程命令行工具 `gl`、Web 控制台，以及 Rust、Go、TypeScript / Node.js 和 Python SDK。服务端管理 SQLite + SpatiaLite 或 PostGIS 中的数据，HTTP 与 gRPC 入口调用同一个业务引擎。
 
-当前源码版本为 `0.3.0-alpha.7`，存储格式为 19，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。
+当前源码版本为 `0.3.0-alpha.8`，存储格式为 19，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。
 
 自建数据集在创建时就拥有独立的物理表和空间索引；同一数据库中的道路、建筑、兴趣点等数据各自存储，版本与发布保持事务一致。
 

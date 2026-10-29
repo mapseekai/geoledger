@@ -4,6 +4,19 @@
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
+## [0.3.0-alpha.8] - 2026-10-30
+
+### Changed
+
+- 保存请求按数据集缓存有效字段定义，复用草稿与基础状态的读取，减少重复 SQL 查询；保留字段意图、乐观版本和原子回滚语义。
+- 更新 Argon2、rcgen、react-day-picker 及 RPC 构建依赖 pulldown-cmark。密码校验继续接受既有 Argon2id PHC，保留原参数、随机盐长度与输出长度；TLS 测试适配新的签发接口。
+- 协议仍为 `geoledger/v1`，存储格式仍为 19，公共 SDK API 不变；现有格式 19 数据库可继续使用。
+
+### Fixed
+
+- PostGIS 正常回滚得到确认后复用健康连接；回滚失败、超时或异常退出时继续淘汰不安全连接，避免常规业务错误持续消耗连接池。
+- 日历月份下拉框遵循显式 locale、dateLib 与时区，并保留调用方格式化覆盖。
+
 ## [0.3.0-alpha.7] - 2026-10-26
 
 ### Breaking

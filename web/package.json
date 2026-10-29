@@ -1,6 +1,6 @@
 {
   "name": "@geoledger/console",
-  "version": "0.3.0-alpha.7",
+  "version": "0.3.0-alpha.8",
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
