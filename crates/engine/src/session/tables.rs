@@ -23,6 +23,12 @@ pub(super) fn quote(value: &str) -> String {
 pub(super) fn relation(source: &PostgisTable) -> String {
     format!("{}.{}", quote(&source.schema), quote(&source.table))
 }
+pub(super) fn source_properties(id: &str, geometry: &str) -> String {
+    // Exclude geometry before JSON conversion to avoid serializing it only to discard it.
+    format!(
+        "(to_jsonb(jsonb_populate_record(t.*,jsonb_build_object({id}::text,NULL,{geometry}::text,NULL)))-{id}::text-{geometry}::text)"
+    )
+}
 fn drift() -> Error {
     Error::new(
         409,
@@ -236,7 +242,8 @@ impl SqlTransaction {
                 "t.{id}>(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,$1::text))).{id}"
             )
         };
-        self.query(&format!("SELECT t.{id}::text,(to_jsonb(t)-$2::text-$3::text)::text,ST_AsGeoJSON(t.{geom},17,0) FROM {table} t WHERE {scope} ORDER BY t.{id} LIMIT 1000", geom=quote(&source.geometry_column)), &[&after,&source.id_column,&source.geometry_column])
+        let properties = source_properties("$2", "$3");
+        self.query(&format!("SELECT t.{id}::text,{properties}::text,ST_AsGeoJSON(t.{geom},17,0) FROM {table} t WHERE {scope} ORDER BY t.{id} LIMIT 1000", geom=quote(&source.geometry_column)), &[&after,&source.id_column,&source.geometry_column])
     }
     // Catalog tuple changes invalidate the incremental proof after trigger DDL or restore.
     pub(super) fn source_stamp(&mut self, source: &PostgisTable) -> Result<(String, String)> {
@@ -456,7 +463,8 @@ impl SqlTransaction {
         } else {
             "s.before_value"
         };
-        let mismatch: bool = self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM ({keys}) k LEFT JOIN gl_merge_stage s ON s.dataset=$1 AND s.feature_id=k.feature_id LEFT JOIN LATERAL (SELECT t.{id}::text AS feature_id,(to_jsonb(t)-$2::text-$3::text) AS properties,t.{geom} AS geom FROM {table} t WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,k.feature_id))).{id} LIMIT 1) t ON true WHERE s.feature_id IS NULL OR t.properties IS DISTINCT FROM gl_json_field({value},'properties')::jsonb OR ST_SRID(t.geom)<>{srid} OR ST_AsEWKB(ST_SetSRID(t.geom,0)) IS DISTINCT FROM ST_AsEWKB(ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field({value},'geometry')),0)) OR (t.feature_id IS NOT NULL AND (btrim(t.feature_id)='' OR octet_length(t.feature_id)>256)))"), &[&dataset,&source.table.id_column,&source.table.geometry_column,&source.table.schema,&source.table.table])?.get(0usize)?;
+        let properties = source_properties("$2", "$3");
+        let mismatch: bool = self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM ({keys}) k LEFT JOIN gl_merge_stage s ON s.dataset=$1 AND s.feature_id=k.feature_id LEFT JOIN LATERAL (SELECT t.{id}::text AS feature_id,{properties} AS properties,t.{geom} AS geom FROM {table} t WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,k.feature_id))).{id} LIMIT 1) t ON true WHERE s.feature_id IS NULL OR t.properties IS DISTINCT FROM gl_json_field({value},'properties')::jsonb OR ST_SRID(t.geom)<>{srid} OR ST_AsEWKB(ST_SetSRID(t.geom,0)) IS DISTINCT FROM ST_AsEWKB(ST_SetSRID(ST_GeomFromGeoJSON(gl_json_field({value},'geometry')),0)) OR (t.feature_id IS NOT NULL AND (btrim(t.feature_id)='' OR octet_length(t.feature_id)>256)))"), &[&dataset,&source.table.id_column,&source.table.geometry_column,&source.table.schema,&source.table.table])?.get(0usize)?;
         if mismatch {
             return Err(drift());
         }
@@ -560,7 +568,8 @@ impl SqlTransaction {
                         if updated.is_none() {
                             self.execute(&format!("INSERT INTO {table} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM jsonb_populate_record(NULL::{table},$2::text::jsonb || jsonb_build_object($4::text,$1::text)) r",columns.join(","),values.join(",")), &[&key,&props,&stored.geometry,&source.table.id_column])?;
                         }
-                        let check = self.query_opt(&format!("SELECT (to_jsonb(t)-$2::text-$3::text)::text,ST_AsGeoJSON(t.{geom},17,0),t.{id}::text FROM {table} t WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,$1::text))).{id}"), &[&key,&source.table.id_column,&source.table.geometry_column])?.ok_or_else(drift)?;
+                        let properties_sql = source_properties("$2", "$3");
+                        let check = self.query_opt(&format!("SELECT {properties_sql}::text,ST_AsGeoJSON(t.{geom},17,0),t.{id}::text FROM {table} t WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,$1::text))).{id}"), &[&key,&source.table.id_column,&source.table.geometry_column])?.ok_or_else(drift)?;
                         if check.get::<_, String>(2usize)? != key {
                             return Err(Error::new(
                                 400,

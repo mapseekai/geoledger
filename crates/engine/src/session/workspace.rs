@@ -99,11 +99,15 @@ impl WorkspaceRepository for SqlTransaction {
         key: &str,
         base: i64,
     ) -> Result<Row> {
-        let resolved: bool = self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL)",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?.get(0usize)?;
         let value = super::query::version_cells(FeatureRepository::feature_at(
             self, project, dataset, key, base,
         )?);
-        let draft = self.query_opt(&format!("SELECT properties,geometry_json FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?;
+        let draft = self.query_opt(&format!("SELECT properties,geometry_json,resolved_head IS NOT NULL FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?;
+        let resolved = draft
+            .as_ref()
+            .map(|r| r.get::<_, bool>(2usize))
+            .transpose()?
+            .unwrap_or(false);
         Ok(Row::new(vec![
             Cell::Bool(resolved),
             value[0].clone(),
@@ -326,5 +330,141 @@ impl SqlTransaction {
             }
             Backend::Postgis(_) => "gl_workspace_changes",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Application, DatasetSchema, SchemaField};
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use serde_json::{Value, json};
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn save_schema_reads_scale_with_datasets_including_missing_definitions() -> Result<()> {
+        let dir =
+            tempfile::tempdir().map_err(|e| Error::new(500, "test directory").caused_by(e))?;
+        let storage = Storage::Sqlite(dir.path().join("save-schema-reads.db"));
+        let app = Application::new(storage.clone());
+        app.migrate()?;
+        let project =
+            app.execute("alice", "create_project", json!({"name":"schema reads"}))?["project"]
+                .clone();
+        let call = |operation: &str, mut input: Value| {
+            input["project"] = project.clone();
+            app.execute("alice", operation, input)
+        };
+        let mut datasets = Vec::new();
+        for name in ["first", "second"] {
+            datasets.push(
+                call(
+                    "create_dataset",
+                    json!({"name":name,"geometry_type":"point"}),
+                )?["dataset"]
+                    .as_str()
+                    .ok_or_else(crate::bad)?
+                    .to_owned(),
+            );
+        }
+        let project = project.as_str().ok_or_else(crate::bad)?;
+        let workspace = call("create_workspace", json!({}))?["workspace"]
+            .as_str()
+            .ok_or_else(crate::bad)?
+            .to_owned();
+        let definition = serde_json::to_string(&DatasetSchema {
+            supported: true,
+            fields: vec![SchemaField {
+                name: "label".into(),
+                kind: "text".into(),
+                nullable: true,
+                editable: true,
+            }],
+            ..Default::default()
+        })
+        .map_err(Error::stored_json)?;
+        let pool = Arc::new(postgres::Pool::default());
+        for source in ["missing", "history", "workspace"] {
+            for dataset_count in [1, 2] {
+                for edit_count in [100, dataset_count] {
+                    let mut t = Client::open(&storage, &pool, Duration::from_secs(30))?
+                        .transaction(false)?;
+                    for dataset in &datasets[..dataset_count] {
+                        match source {
+                            "history" => t.execute("INSERT INTO gl_schema_history(project,dataset,revision,definition) VALUES($1,$2,0,$3)", &[&project,&dataset,&definition])?,
+                            "workspace" => t.execute("INSERT INTO gl_workspace_schemas(project,workspace,dataset,definition) VALUES($1,$2,$3,$4)", &[&project,&workspace,&dataset,&definition])?,
+                            _ => {}
+                        }
+                    }
+                    let reads = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+                    let observed = reads.clone();
+                    let Backend::Sqlite(db) = &t.0.backend else {
+                        return Err(Error::new(500, "SQLite fixture required"));
+                    };
+                    {
+                        let db = db.read().map_err(sqlite_error)?;
+                        // Authorizer observes preparation; disable caching so every execution is counted.
+                        db.set_prepared_statement_cache_capacity(0);
+                        db.authorizer(Some(move |context: AuthContext<'_>| {
+                            if let AuthAction::Read {
+                                table_name,
+                                column_name: "definition",
+                            } = context.action
+                                && context.accessor.is_none()
+                            {
+                                let index = match table_name {
+                                    "gl_workspace_schemas" => Some(0),
+                                    "gl_schema_history" => Some(1),
+                                    _ => None,
+                                };
+                                if let Some(index) = index {
+                                    observed[index].fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                            Authorization::Allow
+                        }))
+                        .map_err(sqlite_error)?;
+                    }
+                    let edits = (0..edit_count).map(|i| json!({"dataset":datasets[i % dataset_count],"feature_id":format!("feature-{i:03}"),"feature":{"type":"Feature","id":format!("feature-{i:03}"),"properties":{"label":format!("value-{i}")},"geometry":null}})).collect::<Vec<_>>();
+                    let before = t.0.query_count;
+                    let result = crate::workspace::save(
+                        &mut t,
+                        "alice",
+                        crate::decode(
+                            json!({"project":project,"workspace":workspace,"expected_workspace_version":0,"edits":edits}),
+                        )?,
+                    )?;
+                    let actual = reads.each_ref().map(|count| count.load(Ordering::Relaxed));
+                    eprintln!(
+                        "schema reads: source={source}, datasets={dataset_count}, edits={edit_count}, workspace={}, history={}, all_queries={}",
+                        actual[0],
+                        actual[1],
+                        t.0.query_count - before
+                    );
+                    assert_eq!(
+                        actual,
+                        [
+                            1,
+                            if source == "workspace" {
+                                0
+                            } else {
+                                dataset_count
+                            }
+                        ]
+                    );
+                    assert_eq!(
+                        result["changes"],
+                        edit_count
+                            + if source == "workspace" {
+                                dataset_count
+                            } else {
+                                0
+                            }
+                    );
+                    // Dropping the transaction keeps every sample on the same fresh workspace.
+                }
+            }
+        }
+        Ok(())
     }
 }
