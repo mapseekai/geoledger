@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 parking_lot = "0.12"
-rusqlite = { version = "0.40", features = ["bundled", "load_extension"] }
+rusqlite = { version = "0.41", features = ["bundled", "load_extension"] }
 
 # This crate is the narrow native-extension loading boundary. Business crates
 # retain workspace unsafe_code=forbid; only this loader uses rusqlite's unsafe API.
