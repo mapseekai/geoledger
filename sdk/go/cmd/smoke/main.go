@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	gl "github.com/mapseekai/geoledger/sdk/go"
 	"os"
 	"strings"
 	"time"
+
+	gl "github.com/mapseekai/geoledger/sdk/go"
 )
 
 func main() {
@@ -103,7 +104,7 @@ func run() error {
 		return fmt.Errorf("feature roundtrip failed")
 	}
 	history, err := client.History(ctx, project.ID, 0, 100)
-	if err != nil || len(history) != 1 || history[0].SourceWorkspace != receipt.Workspace || history[0].SourceBaseRevision != 0 {
+	if err != nil || len(history.Commits) != 1 || history.Commits[0].SourceWorkspace != receipt.Workspace || history.Commits[0].SourceBaseRevision != 0 || history.NextAfter != nil {
 		return fmt.Errorf("history source workspace/base: %v %v", history, err)
 	}
 	changed := *draft.PendingPublication()
@@ -115,6 +116,40 @@ func run() error {
 	_, err = client.CreateDatasetWithCRS(ctx, project.ID, "places", "point", 3, "EPSG:3857")
 	if !errors.As(err, &own) || own.Code != "conflict" {
 		return fmt.Errorf("wrong duplicate error: %v", err)
+	}
+	edit, err := client.CreateWorkspace(ctx, project.ID)
+	if err != nil {
+		return err
+	}
+	updated := feature
+	updated.Properties = map[string]any{"exact": uint64(9007199254740993)}
+	if _, err = edit.Save(ctx, dataset.ID, updated); err != nil {
+		return err
+	}
+	if _, err = edit.Publish(ctx, "installed SDK update"); err != nil {
+		return err
+	}
+	rows, err = client.Features(ctx, project.ID, dataset.ID, gl.FeatureQuery{})
+	if err != nil || len(rows.Features) != 1 || !bytes.Contains(rows.Features[0], []byte("9007199254740993")) {
+		return fmt.Errorf("published update: %v %v", rows, err)
+	}
+	removal, err := client.CreateWorkspace(ctx, project.ID)
+	if err != nil {
+		return err
+	}
+	if _, err = removal.Delete(ctx, dataset.ID, "one"); err != nil {
+		return err
+	}
+	if _, err = removal.Publish(ctx, "installed SDK delete"); err != nil {
+		return err
+	}
+	rows, err = client.Features(ctx, project.ID, dataset.ID, gl.FeatureQuery{})
+	if err != nil || len(rows.Features) != 0 {
+		return fmt.Errorf("published deletion: %v %v", rows, err)
+	}
+	rows, err = client.Features(ctx, project.ID, dataset.ID, gl.FeatureQuery{Revision: &receipt.Revision})
+	if err != nil || len(rows.Features) != 1 || !bytes.Contains(rows.Features[0], []byte("18446744073709551615")) {
+		return fmt.Errorf("historical feature changed: %v %v", rows, err)
 	}
 	if err = client.SetMember(ctx, project.ID, os.Getenv("GL_TEST_MEMBER_ID"), "viewer"); err != nil {
 		return err

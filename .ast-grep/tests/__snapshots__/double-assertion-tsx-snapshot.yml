@@ -1,0 +1,26 @@
+id: double-assertion-tsx
+snapshots:
+  const x = (value as unknown) as T;:
+    labels:
+    - source: (value as unknown) as T
+      style: primary
+      start: 10
+      end: 33
+  "const x = <div>{value as unknown as string}</div>;":
+    labels:
+    - source: value as unknown as string
+      style: primary
+      start: 16
+      end: 42
+  "const x = value as unknown as Map<string, number>;":
+    labels:
+    - source: value as unknown as Map<string, number>
+      style: primary
+      start: 10
+      end: 49
+  const x = value as unknown as T;:
+    labels:
+    - source: value as unknown as T
+      style: primary
+      start: 10
+      end: 31

@@ -16,6 +16,46 @@ class ContractTests(unittest.TestCase):
         client._stub = stub
         return client
 
+    def test_schema_query_and_save_intent_presence(self):
+        sent = []
+        def save(request, **kwargs):
+            sent.append(request)
+            return wire.SaveReply(version=request.expected_workspace_version+1, changes=1)
+        def schema(request, **kwargs):
+            self.assertEqual(request.dataset, "d")
+            return wire.SchemaReply(revision=request.revision if request.HasField("revision") else 1,
+                                    **({"workspace_version": 4} if request.HasField("workspace") else {}),
+                                    fields=[wire.SchemaField(name="id", type="int8", nullable=False, editable=False)])
+        client = self.client(SimpleNamespace(Save=save, Schema=schema))
+        workspace = Workspace(client, "p", WorkspaceInfo("w", 1, 4, "open"))
+        workspace.save_changes([], [geoledger.SchemaEdit("d", [geoledger.AddField("note", "string")])])
+        workspace.save_batch([])
+        workspace.save_changes([], [])
+        self.assertEqual(sent[0].schema_edits.edits[0].add[0].type, "string")
+        self.assertFalse(sent[1].HasField("schema_edits"))
+        self.assertTrue(sent[2].HasField("schema_edits"))
+        self.assertEqual(list(sent[2].schema_edits.edits), [])
+        self.assertEqual([r.expected_workspace_version for r in sent], [4, 5, 6])
+        self.assertEqual(workspace.schema("d")["workspace_version"], 4)
+        result = client.schema("p", "d", revision=7)
+        self.assertEqual(result["revision"], 7)
+        self.assertIsNone(result["workspace_version"])
+        self.assertFalse(result["fields"][0]["editable"])
+
+    def test_register_table_preserves_create_dataset_wire_contract(self):
+        source = dict(schema="business", table="roads", id_column="road_id", geometry_column="shape")
+        sent = []
+        def create(request, **kwargs):
+            sent.append(request)
+            return wire.DatasetReply(dataset="dataset", name="roads", geometry_type="line",
+                                     coordinate_dimension=3, crs="EPSG:3857", postgis_table=request.postgis_table)
+        client = self.client(SimpleNamespace(CreateDataset=create))
+        dataset = client.register_table("project", "roads", **source)
+        self.assertEqual(sent, [wire.DatasetRequest(project="project", name="roads", postgis_table=wire.PostgisTable(**source))])
+        self.assertEqual((dataset.id, dataset.geometry_type, dataset.coordinate_dimension, dataset.crs),
+                         ("dataset", "line", 3, "EPSG:3857"))
+        self.assertEqual(dataset.postgis_table, source)
+
     def test_plaintext_to_remote_host_requires_opt_in(self):
         with self.assertRaises(geoledger.GeoLedgerError) as raised:
             geoledger.Client("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -44,6 +84,23 @@ class ContractTests(unittest.TestCase):
         stub = SimpleNamespace(Audit=lambda *a, **k: wire.AuditReply(events=[wire.AuditEvent(
             id=1, detail_json=json.dumps(value))]))
         self.assertEqual(self.client(stub).audit("project")["events"][0]["detail"], value)
+
+    def test_query_pages_preserve_continuations_and_terminal_none(self):
+        for cursor in [None, "dataset/key/with/slashes"]:
+            stub = SimpleNamespace(
+                Diff=lambda *a, **k: wire.DiffReply(**({"next_after": cursor} if cursor else {})),
+                Commit=lambda *a, **k: wire.CommitReply(**({"next_after": cursor} if cursor else {})))
+            client = self.client(stub)
+            workspace = Workspace(client, "project", WorkspaceInfo("draft", 0, 0, "open"))
+            self.assertEqual(workspace.diff()["next_after"], cursor)
+            self.assertEqual(client.commit("project", 1)["next_after"], cursor)
+        for cursor in [None, 9007199254740993]:
+            stub = SimpleNamespace(
+                History=lambda *a, **k: wire.HistoryReply(**({"next_after": cursor} if cursor else {})),
+                Audit=lambda *a, **k: wire.AuditReply(**({"next_after": cursor} if cursor else {})))
+            client = self.client(stub)
+            self.assertEqual(client.history("project"), {"commits": [], "next_after": cursor})
+            self.assertEqual(client.audit("project")["next_after"], cursor)
 
     def test_missing_feature_is_rejected_but_explicit_delete_is_sent(self):
         sent = []

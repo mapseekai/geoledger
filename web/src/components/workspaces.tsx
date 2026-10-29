@@ -120,9 +120,11 @@ export function Inspector({
 export function Workspaces({
   project,
   writable,
+  projectChanged,
 }: {
   project: Project;
   writable: boolean;
+  projectChanged: () => void;
 }) {
   const [refresh, setRefresh] = useState(0);
   const [view, setView] = useState<"graph" | "table">("graph");
@@ -385,6 +387,7 @@ export function Workspaces({
                   className="lookup"
                   onSubmit={(event) => {
                     event.preventDefault();
+                    // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
                     void task.run(async () => {
                       const workspace = await call<Workspace>({
                         action: "workspace",
@@ -565,7 +568,13 @@ export function Workspaces({
             "workspace" in inspect ? undefined : inspect.commit?.message
           }
           beforeLabel={"workspace" in inspect ? "基线" : "之前"}
-          afterLabel={"workspace" in inspect ? "工作区" : "之后"}
+          afterLabel={
+            "workspace" in inspect
+              ? inspect.workspace.status === "published"
+                ? "发布结果"
+                : "工作区"
+              : "之后"
+          }
           summary={
             <ChangeSummary
               project={project.id}
@@ -589,10 +598,7 @@ export function Workspaces({
               });
               return {
                 rows: result.changes,
-                next:
-                  result.changes.length === 50
-                    ? result.changes.at(-1)!.cursor
-                    : undefined,
+                next: result.nextAfter,
               };
             }
             const result = await call<Changes>({
@@ -604,10 +610,7 @@ export function Workspaces({
             });
             return {
               rows: result.changes,
-              next:
-                result.changes.length === 50
-                  ? result.changes.at(-1)!.cursor
-                  : undefined,
+              next: result.nextAfter,
             };
           }}
         />
@@ -627,6 +630,8 @@ export function Workspaces({
           }}
           complete={() => {
             setPending(undefined);
+            projectChanged();
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches refresh failures and reports them in component state.
             void update();
           }}
         />
@@ -668,6 +673,7 @@ export function Workspaces({
           close={() => setSyncing(undefined)}
           complete={() => {
             setSyncing(undefined);
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches refresh failures and reports them in component state.
             void update();
           }}
           resolve={() => {
@@ -684,10 +690,12 @@ export function Workspaces({
           readOnly={!writable || resolve.workspace.status !== "open"}
           close={() => {
             setResolve(undefined);
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches refresh failures and reports them in component state.
             void update();
           }}
           complete={() => {
             setResolve(undefined);
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches refresh failures and reports them in component state.
             void update();
           }}
         />

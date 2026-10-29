@@ -1,5 +1,6 @@
 //! Database identities, password verification and opaque credentials. No secret is serializable.
-use crate::{Application, Error, Result, Transaction, bad, missing, text};
+use crate::repository::CredentialRepository;
+use crate::{Application, Error, Result, bad, missing, text};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use serde::Serialize;
@@ -218,7 +219,7 @@ fn page(input: &Value) -> Result<(&str, i64)> {
     }
     Ok((after, limit))
 }
-fn active(t: &mut Transaction, id: &str) -> Result<UserRecord> {
+fn active(t: &mut (impl CredentialRepository + ?Sized), id: &str) -> Result<UserRecord> {
     t.auth_user(id)?
         .filter(|u| u.user.status == "active")
         .ok_or_else(unauthenticated)
@@ -227,7 +228,7 @@ fn valid_key(key: &ApiKey, time: &str) -> bool {
     key.revoked_at.is_none() && key.expires_at.as_deref().is_none_or(|e| e > time)
 }
 fn resolve(
-    t: &mut Transaction,
+    t: &mut (impl CredentialRepository + ?Sized),
     proof: &Proof,
 ) -> Result<(UserRecord, Option<SessionRecord>, Option<ApiKey>)> {
     let time = now();
@@ -266,7 +267,7 @@ fn resolve(
     }
 }
 pub(crate) fn business_identity(
-    t: &mut Transaction,
+    t: &mut (impl CredentialRepository + ?Sized),
     identity: &AuthenticatedIdentity,
     verified_password: Option<&UserRecord>,
 ) -> Result<User> {
@@ -282,7 +283,11 @@ pub(crate) fn business_identity(
     }
     Ok(actor.user)
 }
-fn new_session(t: &mut Transaction, user: &UserRecord, key: Option<String>) -> Result<Value> {
+fn new_session(
+    t: &mut (impl CredentialRepository + ?Sized),
+    user: &UserRecord,
+    key: Option<String>,
+) -> Result<Value> {
     let token = secret("gls_")?;
     let time = now();
     let session = SessionRecord {
@@ -318,7 +323,7 @@ impl Application {
             && matches!(operation, "set_member" | "remove_member")
         {
             let mut t = self.storage.begin(true, self.timeout)?;
-            let (actor, _, _) = resolve(&mut t, &identity.proof)?;
+            let (actor, _, _) = resolve(t.as_mut(), &identity.proof)?;
             t.commit()?;
             let supplied = input
                 .get("current_password")
@@ -397,7 +402,7 @@ impl Application {
     fn authenticate(&self, proof: Proof) -> Result<AuthenticatedIdentity> {
         let deadline = Deadline::new(self.timeout)?;
         let mut t = self.storage.begin(true, deadline.remaining()?)?;
-        let (user, session, key) = resolve(&mut t, &proof)?;
+        let (user, session, key) = resolve(t.as_mut(), &proof)?;
         deadline.remaining()?;
         t.commit()?;
         let session_touch = session.as_ref().filter(|s| s.last_seen_at < ago(1));
@@ -409,7 +414,7 @@ impl Application {
         if session_touch.is_some() || key_touch.is_some() {
             let mut t = self.storage.begin(false, deadline.remaining()?)?;
             // A concurrent revocation must not be undone by activity bookkeeping.
-            resolve(&mut t, &proof)?;
+            resolve(t.as_mut(), &proof)?;
             // Key deletion cascades to sessions, so every writer locks keys first.
             if let Some(k) = key_touch {
                 t.auth_touch_key(&k.id, &now(), &ago(5))?;
@@ -472,13 +477,13 @@ impl Application {
                 .ok_or_else(unauthenticated)?;
             let mut t = self.storage.begin(false, deadline.remaining()?)?;
             t.lock_credentials()?;
-            let current = active(&mut t, &record.user.id)?;
+            let current = active(t.as_mut(), &record.user.id)?;
             if current.password_hash != record.password_hash
                 || current.credential_version != record.credential_version
             {
                 return Err(unauthenticated());
             }
-            let result = new_session(&mut t, &current, None)?;
+            let result = new_session(t.as_mut(), &current, None)?;
             t.auth_audit(&current.user.id, "login_password", &current.user.id, &now())?;
             crate::codec::encode_limited(
                 &result,
@@ -496,8 +501,8 @@ impl Application {
             }
             let mut t = self.storage.begin(false, deadline.remaining()?)?;
             t.lock_credentials()?;
-            let (user, _, key) = resolve(&mut t, &Proof::ApiKey(digest(key)))?;
-            let result = new_session(&mut t, &user, key.map(|k| k.id))?;
+            let (user, _, key) = resolve(t.as_mut(), &Proof::ApiKey(digest(key)))?;
+            let result = new_session(t.as_mut(), &user, key.map(|k| k.id))?;
             t.auth_audit(&user.user.id, "login_api_key", &user.user.id, &now())?;
             crate::codec::encode_limited(
                 &result,
@@ -512,7 +517,7 @@ impl Application {
         let read_only = matches!(operation, "me" | "list_users" | "list_api_keys");
         let sensitive = !matches!(operation, "me" | "logout" | "list_users" | "list_api_keys");
         let mut initial = self.storage.begin(true, deadline.remaining()?)?;
-        let (actor, session, _) = resolve(&mut initial, &identity.proof)?;
+        let (actor, session, _) = resolve(initial.as_mut(), &identity.proof)?;
         let read = if read_only {
             Some(initial)
         } else {
@@ -560,7 +565,7 @@ impl Application {
         } else {
             let mut t = self.storage.begin(false, deadline.remaining()?)?;
             t.lock_credentials()?;
-            let (current, session, _) = resolve(&mut t, &identity.proof)?;
+            let (current, session, _) = resolve(t.as_mut(), &identity.proof)?;
             if current.credential_version != actor.credential_version
                 || current.password_hash != actor.password_hash
             {
@@ -687,7 +692,7 @@ impl Application {
                 t.auth_invalidate_user(target, &time, true)?;
                 resource = target.into();
                 if operation == "change_password" {
-                    new_session(&mut t, &user, None)?
+                    new_session(t.as_mut(), &user, None)?
                 } else {
                     json!({"ok":true})
                 }
@@ -701,7 +706,7 @@ impl Application {
                     let (after, limit) = page(&input)?;
                     json!(t.auth_keys(target, after, limit)?)
                 } else {
-                    let user = active(&mut t, target)?;
+                    let user = active(t.as_mut(), target)?;
                     if user.user.must_change_password {
                         return Err(Error::new(403, "password change required"));
                     }
@@ -772,7 +777,7 @@ impl Application {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Storage, StorageBackend};
+    use crate::{Storage, StorageBackend, Transaction};
     use std::sync::{Arc, Mutex};
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
     struct Clock;
@@ -795,6 +800,7 @@ mod tests {
         elapsed: Duration,
         admissions: Mutex<Vec<(bool, Duration)>>,
     }
+    impl crate::repository::StorageMaintenance for TimedStorage {}
     impl StorageBackend for TimedStorage {
         fn name(&self) -> &'static str {
             self.inner.name()

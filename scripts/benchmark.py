@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import signal
 import platform
+import re
 import socket
 import subprocess
 import time
@@ -52,8 +53,8 @@ def native_leaks(pid, output):
     return result
 
 
-def track_table(base, token, fixture, container, output, name):
-    """Create an existing business-table fixture, then enroll and publish through the API."""
+def register_table(base, token, fixture, container, output, name):
+    """Create an existing business-table fixture, then register and publish through the API."""
     def call(action, body):
         request = urllib.request.Request(base + "/api/v1/" + action, data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
         try:
@@ -67,11 +68,15 @@ def track_table(base, token, fixture, container, output, name):
     # Values below are produced by our disposable service, never interpolated user input.
     project = str(uuid.UUID(fixture["project"]))
     dataset = str(uuid.UUID(fixture["dataset"]))
-    sql = f"CREATE SCHEMA IF NOT EXISTS business; CREATE TABLE business.{table}(id text PRIMARY KEY,attributes jsonb,geom geometry({kind},4326)); INSERT INTO business.{table} SELECT feature_id,properties::jsonb,ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(geometry_json),4326)) FROM gl_history WHERE project='{project}' AND dataset='{dataset}' AND valid_to IS NULL;"
+    lookup = f"SELECT storage_table FROM gl_datasets WHERE project='{project}' AND id='{dataset}'"
+    managed = subprocess.run(["docker", "exec", container, "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "geoledger_test", "-c", lookup], check=True, capture_output=True, text=True).stdout.strip()
+    if not re.fullmatch(r"gl_data_[0-9a-f]{32}", managed):
+        raise ValueError("benchmark requires a managed source dataset")
+    sql = f"CREATE SCHEMA IF NOT EXISTS business; CREATE TABLE business.{table}(id text PRIMARY KEY,attributes jsonb,geom geometry({kind},4326)); INSERT INTO business.{table} SELECT feature_id,properties::jsonb,ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(geometry_json),4326)) FROM {managed};"
     subprocess.run(["docker", "exec", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "geoledger_test", "-c", sql], check=True, capture_output=True)
     started = time.monotonic()
     bound = call("create_dataset", {"project": project, "name": table, "postgis_table": {"schema": "business", "table": table, "id_column": "id", "geometry_column": "geom"}})
-    result = {"features": fixture["features"], "track_seconds": time.monotonic() - started}
+    result = {"features": fixture["features"], "registration_seconds": time.monotonic() - started}
     feature = call("features", {"project": project, "dataset": bound["dataset"], "feature_id": "000000000001"})
     feature = {key: feature[key] for key in ["type", "id", "properties", "geometry"]}
     feature["properties"]["attributes"]["benchmark"] = True
@@ -217,7 +222,7 @@ def main():
                     break
             for fixture in binding_reports:
                 bind_env = dict(env, GL_BASE_URL=base, GL_BENCH_REPORT=str(fixture), GL_BENCH_CONTAINER=container)
-                command = ["python3", "-c", "import json,os; from pathlib import Path; from scripts.benchmark import track_table; p=Path(os.environ['GL_BENCH_REPORT']); token=Path(os.environ['GL_API_KEY_FILE']).read_text().strip(); track_table(os.environ['GL_BASE_URL'],token,json.loads(p.read_text()),os.environ['GL_BENCH_CONTAINER'],p.parent,p.stem)"]
+                command = ["python3", "-c", "import json,os; from pathlib import Path; from scripts.benchmark import register_table; p=Path(os.environ['GL_BENCH_REPORT']); token=Path(os.environ['GL_API_KEY_FILE']).read_text().strip(); register_table(os.environ['GL_BASE_URL'],token,json.loads(p.read_text()),os.environ['GL_BENCH_CONTAINER'],p.parent,p.stem)"]
                 results.append({"test": fixture.stem + "-binding", **monitor(command, bind_env, server, output, fixture.stem + "-binding", a.timeout, a.rss_limit_mib)})
             token = Path(env["GL_API_KEY_FILE"]).read_text().strip()
             request = urllib.request.Request(base + "/metrics", headers={"Authorization": "Bearer " + token})

@@ -223,6 +223,7 @@ with sync_playwright() as p:
     page.get_by_label('版本说明',exact=True).fill('采用我的车道数')
     page.get_by_role('button',name='确认发布',exact=True).click()
     expect(page.get_by_text('版本 r3 已发布',exact=True)).to_be_visible()
+    expect(page.locator('.context-card .context-stats dd').first).to_have_text('r3')
     page.get_by_role('link',name='查看版本').click()
     page.wait_for_url(re.compile(r'/history\?.*revision=3'))
     expect(page.get_by_role('dialog')).to_contain_text('采用我的车道数')

@@ -35,15 +35,34 @@ curl --fail http://127.0.0.1:7881/ready
 docker compose logs geoledger
 ```
 
-在容器内使用首次启动生成的私有管理员凭证验证业务连接（验证后把该文件交给运维人员并从卷中删除）：
+首次启动后，使用初始化管理员的用户名和密码登录控制台：随机密码保存在 `/data/initial-admin-<id>.json`；显式配置 `GL_ADMIN_PASSWORD` 时使用该值。完成强制改密，再在“API Key”页面创建个人密钥。初始密码不能作为 CLI 的 API Key。把密钥保存到运行命令的主机上的私有文件 `./api-key`，然后验证容器内的 CLI：
 
 ```sh
-docker compose exec geoledger gl --api-key-file /run/secrets/geoledger-api-key info
+chmod 600 ./api-key
+docker compose exec -T geoledger sh -ec '
+  umask 077
+  key=$(mktemp)
+  trap "rm -f \"$key\"" EXIT
+  cat > "$key"
+  gl --api-key-file "$key" info
+' < ./api-key
 ```
 
-统一 `geoledger` 镜像基于固定 digest 的 Alpine 3.24，包含服务端、Web 控制台、`gl`、Node 22、CA 证书、OpenSSL 和 SpatiaLite，以 UID 10001 运行。控制台通过容器内回环地址访问 gRPC。启动器同时管理两个服务：任一服务意外退出时终止另一个并返回失败；SIGTERM 转发到两个服务，保留后端的优雅关闭过程。健康检查同时验证后端 `/ready` 和控制台 `/api/health`。构建环境与运行环境分别扫描，验证边界见 [发布验收](release.md)。
+上面的密钥通过标准输入传入，临时文件由容器运行账号创建并在命令退出时删除。长期使用时可只读挂载密钥文件，确保 UID 10001 可读、文件权限为 0600；默认 Compose 不创建 `/run/secrets/geoledger-api-key`。完成改密后删除初始化明文凭证文件，主机上的 API Key 按秘密管理。
+
+统一 `geoledger` 镜像基于固定 digest 的 Alpine 3.24，包含服务端、Web 控制台、`gl`、Node 22、CA 证书、OpenSSL 和 SpatiaLite，以 UID 10001 运行。控制台通过容器内回环地址访问私有 Session HTTP 传输。启动器同时管理两个服务：任一服务意外退出时终止另一个并返回失败；SIGTERM 转发到两个服务，保留后端的优雅关闭过程。健康检查同时验证后端 `/ready` 和控制台 `/api/health`。构建环境与运行环境分别扫描，验证边界见 [发布验收](release.md)。
 
 固定保存 `GL_WEB_SESSION_SECRET`，并将 `GL_WEB_ORIGIN` 设置为用户访问的完整地址。`docker compose down` 停止容器，命名卷按数据保留策略管理。
+
+正式部署使用 Release 的 `geoledger-images.json` 中的完整镜像 digest，避免重新构建产生不同产物。配置下一节的域名、证书和密码后执行：
+
+```sh
+export GL_IMAGE='docker.io/zwishing/geoledger@sha256:<发布清单中的摘要>'
+docker compose -f deploy/compose.production.yaml pull geoledger
+docker compose -f deploy/compose.production.yaml up -d --no-build
+```
+
+生产参考中的 CLI 命令同样加上 `-f deploy/compose.production.yaml`。保留本次镜像 digest、源提交、配置和上一次备份；回退程序前确认存储格式与 SDK/控制台调用契约兼容。
 
 ### Compose 生产参考
 
@@ -51,7 +70,7 @@ docker compose exec geoledger gl --api-key-file /run/secrets/geoledger-api-key i
 
 - **PostGIS**：使用官方 `postgis/postgis` 镜像（固定 digest），开启 TLS（最低 TLS 1.2），[pg_hba.conf](../deploy/postgis/pg_hba.conf) 只接受 `hostssl` 加 scram-sha-256，明文连接被拒绝。
 - **GeoLedger**：以 `sslmode=verify-full` 和私有 CA 连接 PostGIS。根文件系统只读，只有 `/data` 卷可写。启用按身份和按 IP 的限流，并信任网关传入的 `X-Forwarded-For`。
-- **控制台**：与业务服务运行在同一容器，通过回环地址访问 gRPC。
+- **控制台**：与业务服务运行在同一容器，通过回环地址访问私有 Session HTTP 传输。
 - **网关**：负责 TLS、HSTS、HTTP→HTTPS 跳转、请求 ID 透传和边缘限流。
 - **资源与健康检查**：每个服务都设置了 CPU/内存上限和健康检查，并按 `service_healthy` 顺序启动。
 
@@ -75,6 +94,23 @@ docker compose -f deploy/compose.production.yaml up -d --build
 - **备份**：PostGIS 按下文 [备份与恢复](#备份与恢复) 使用 `pg_dump` 或 WAL 归档。逻辑导出命令为 `docker compose -f deploy/compose.production.yaml exec geoledger geoledger-server export --output /data/export.jsonl`。
 
 TLS 网关与 PostGIS 的既有独立部署演练已在 Docker Engine 29 上验证：`gl` 经网关以 TLS 访问 gRPC；HTTPS API 返回 HSTS 和请求 ID；HTTP 跳转到 HTTPS；PostGIS 拒绝明文连接；只读容器内的导出与校验成功。
+
+### 约 20 人、单实例的上线放行清单
+
+隔离测试与目标机器的验收分开记录；目标机器准备完成前，不将以下项目标为已通过。使用最终镜像及受限 PostGIS 角色，在对外开放前完成：
+
+| 项目 | 操作与放行依据 |
+|---|---|
+| 产物 | 记录 Release、镜像 digest、源提交与存储格式；容器版本和 revision 标签必须对应发布清单。 |
+| 域名与 TLS | 配置三个正式域名、网关证书、PostGIS CA 和固定会话密钥；验证 HTTPS/gRPC 成功、错误 CA/主机名失败、PostGIS 明文连接被拒绝。 |
+| 身份 | 管理员首次改密；创建普通编辑者和只读成员；验证越权被拒绝、Key 撤销和退出登录生效；移除初始化明文文件。 |
+| 业务 | 两个用户修改同一要素产生可审阅冲突；原请求重试只形成一次发布；分页无重复遗漏；重启后读取历史、HEAD 和审计一致。 |
+| 真实数据 | 先用隔离环境执行 `benchmark_incremental.py` 的真实夹具测量，按 [性能说明](performance.md) 记录 20 并发下的首次发布、重放、内存、磁盘/WAL 和持续运行情况。不得向生产数据库写入测试夹具。 |
+| 备份恢复 | 定时 `pg_dump -Fc` 或数据库备份系统，将备份加密保存到异机/对象存储；在另一台隔离机器恢复数据、源表、角色和凭证状态。记录约定 RPO/RTO 与实际备份时间、恢复耗时，核对 HEAD、审计与发布收据。 |
+| 告警 | 部署 [指标抓取](../deploy/monitoring/prometheus-scrape.example.yaml) 和 [告警规则](../deploy/monitoring/prometheus-rules.yaml)，配置接收人并实际触发服务不可达告警；主机监控另覆盖磁盘/WAL、备份失败和备份过期。记录收到通知的时间。 |
+| 负责人 | 记录值班联系人、备份恢复负责人、证书到期提醒、回退步骤及本次验收签署人，再开放正式用户访问。 |
+
+最终验收记录应包含机器资源、真实数据规模和几何类型、并发量、运行时长、错误与延迟、备份位置和恢复结果。CI 中的 5 分钟点要素负载不替代该记录。
 
 ## 配置
 
@@ -105,7 +141,7 @@ TLS 网关与 PostGIS 的既有独立部署演练已在 Docker Engine 29 上验�
 | GL_DATA_TIMEOUT_SECS | backup、export、import、verify 命令的期限，默认 3600 |
 | RUST_LOG | geoledger_server=info,geoledger_engine=info，结构化 JSON 日志 |
 
-启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 16；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
+启动时校验显式配置，确保使用指定存储和身份文件。新库直接初始化为格式 19；已有库通过当前格式校验后开始服务。新版本部署使用匹配格式的数据目录，操作步骤见 [存储格式](#存储格式)。
 
 根目录 [.env.example](../.env.example) 提供当前服务配置模板，列出服务端和 `gl` 的全部 `GL_*` 参数及默认值，[check-env.py](../scripts/check-env.py) 在 `check.sh` 中校验它与代码一致。本机二进制从进程环境读取变量，部署时通过 shell、systemd EnvironmentFile 或秘密管理系统注入；Compose 从 `.env` 读取控制台 origin 和会话密钥。原生 Web 使用自己的 `web/.env.local`。
 
@@ -162,7 +198,7 @@ PostGIS 使用专用非超级用户，只授权独立数据库；管理员安装
 
 ### 存储格式
 
-当前存储格式为 16，包含独立的用户、密码、API Key 和 Session 表，保留项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
+当前存储格式为 19，包含每数据集独立的正式数据表及独立的用户、密码、API Key 和 Session 表，保留项目状态、成员移除标记和成员索引。部署服务前备份数据，并核对服务端与数据库格式。
 
 - 同格式部署沿用原数据目录，启动后检查 `/ready`、项目列表与历史查询。
 - 存储格式变化时，使用独立的新数据库，通过当前 CLI 或 SDK 导入源业务要素。
@@ -210,11 +246,11 @@ RTO 主要是文件复制时间加一次启动，通常为分钟级。容器部�
 
 | 表 | 增长来源 |
 |---|---|
-| `gl_history` | 每次发布为每个变更要素追加一个版本，删除保留为墓碑 |
-| `gl_commits`、`gl_commit_changes` | 每次发布一条提交及其变更清单 |
+| `gl_history` | 仅在修改或删除时保存被替换的旧要素正文及有效期；纳管时不复制源表数据 |
+| `gl_commits`、`gl_commit_changes` | 每次发布一条提交及仅含 ID、增删标记的变更清单 |
 | `gl_audit_events` | 发布、成员、项目生命周期等审计事件 |
 | `gl_idempotency` | 每次发布一条幂等收据，支撑原请求重试 |
-| `gl_workspace_changes` | 未发布的草稿 |
+| `gl_workspace_changes` | 工作区草稿及关闭后供差异查看的草稿正文 |
 
 **监控。** PostgreSQL 按表观察体积，结合 `pg_stat_user_tables.n_live_tup` 记录行数趋势：
 
@@ -242,13 +278,13 @@ SQLite 观察数据库文件与 WAL 文件大小。两种后端都为数据卷�
 
 ### 业务表纳管部署
 
-将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，通过数据库管理员用户授权表纳管操作。使用格式 16 的独立初始化环境；部署前保存业务数据库备份。服务账号需要业务表增删改权限，以及表所有权或等效的所有者角色权限：纳管与解绑会创建、启用和删除触发器，仅授予 `TRIGGER` 权限不足。业务应用撤销对纳管表的直接写权限，不将保护触发器视为数据库授权边界。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。
+将 GeoLedger 版本表部署到现有 PostGIS 业务数据库，通过数据库管理员用户授权表纳管操作。使用格式 19 的独立初始化环境；部署前保存业务数据库备份。服务账号需要业务表增删改权限，以及表所有权或等效的所有者角色权限：纳管与解绑会创建、启用和删除触发器，仅授予 `TRIGGER` 权限不足。业务应用撤销对纳管表的直接写权限，不将保护触发器视为数据库授权边界。完整恢复采用 PostgreSQL 原生全库备份，恢复后核对业务表与版本数据。可移植逻辑导入得到独立内部数据集；详细语义见 [已有业务表](storage.md#已有业务表)。
 
 ### 格式 13 的凭据部署
 
 两个开发分支曾分别以格式 12 引入不同表结构，合并版本统一为格式 13。任一格式 12 数据库都不能直接打开，也不提供自动升级；保留旧目录和备份，另建新库。
 
-当前存储格式为 16。使用新数据库初始化，保留旧格式数据库及备份；服务清楚拒绝旧格式。完整备份恢复后，在对外服务前核对用户、API Key 和 Session 的撤销状态。
+当前存储格式为 19。使用新数据库初始化，保留旧格式数据库及备份；服务清楚拒绝旧格式。完整备份恢复后，在对外服务前核对用户、API Key 和 Session 的撤销状态。
 
 ### 格式 13 的运行边界
 
@@ -256,4 +292,4 @@ SQLite 观察数据库文件与 WAL 文件大小。两种后端都为数据卷�
 
 请求期限包含接收和执行排队时间。数据库每次执行根据剩余期限设置 statement_timeout/lock_timeout；本地超时后发出取消并等待回滚确认。客户端放弃等待不会提前释放实际操作的执行计数或省略操作完成记录；业务审计依然与数据同事务提交。响应读取缓慢时，编码缓冲区继续计入响应预算。
 
-空间查询事务使用参数敏感的 custom plan，避免热连接将全图与稀疏范围混用通用计划；同一读取快照内的当前 HEAD 查询使用 history_live，历史修订仍使用有效期过滤。根据真实几何、并发量和数据分布验收容量；历史基准不是格式 13 的生产容量承诺。
+空间查询事务使用参数敏感的 custom plan，避免热连接将全图与稀疏范围混用通用计划；同一读取快照内的当前 HEAD 查询使用正式数据表或纳管原表；历史修订合并当前行的起始版本与旧版有效期。根据真实几何、并发量和数据分布验收容量；历史基准不是格式 13 的生产容量承诺。

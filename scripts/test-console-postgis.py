@@ -3,11 +3,12 @@
 import argparse,json,uuid,re
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
+from browser_test_support import add_browser_arguments,launch_browser
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--url',required=True);p.add_argument('--api-key-file',required=True);p.add_argument('--chromium',required=True);p.add_argument('--screenshots',default='/tmp/geoledger-postgis-shots');a=p.parse_args()
+p.add_argument('--url',required=True);p.add_argument('--api-key-file',required=True);add_browser_arguments(p);p.add_argument('--screenshots',default='/tmp/geoledger-postgis-shots');a=p.parse_args()
 token=Path(a.api_key_file).read_text().strip()
 with sync_playwright() as pw:
-    browser=pw.chromium.launch(headless=True,executable_path=a.chromium)
+    browser=launch_browser(pw,a)
     context=browser.new_context(viewport={'width':1440,'height':960});page=context.new_page();errors=[]
     page.on('pageerror',lambda error:errors.append(str(error)))
     page.goto(a.url+'/login');page.get_by_role('tab', name='API Key 登录', exact=True).click()
@@ -38,6 +39,7 @@ with sync_playwright() as pw:
     page.get_by_label('版本说明',exact=True).fill('Web table binding')
     page.get_by_role('button',name='确认发布',exact=True).click()
     expect(page.get_by_role('heading',name='版本 r2 已发布',exact=True)).to_be_visible(timeout=30000)
+    expect(page.locator('.context-card .context-stats dd').first).to_have_text('r2')
     page.get_by_role('button',name='完成',exact=True).click()
     expect(page.locator('.map-progress')).to_have_count(0,timeout=30000)
     expect(page.get_by_role('alert').filter(has_text=re.compile(r'\S'))).to_have_count(0)
@@ -46,4 +48,4 @@ with sync_playwright() as pw:
     Path(a.screenshots).mkdir(parents=True,exist_ok=True);page.screenshot(path=str(Path(a.screenshots)/'postgis-bound-table.png'),full_page=True)
     assert not errors,errors
     browser.close()
-print('PostGIS browser: existing table tracking, inferred schema, initial snapshot, edit and publication passed')
+print('PostGIS browser: existing table registration, inferred schema, source-backed initial view, edit and publication passed')

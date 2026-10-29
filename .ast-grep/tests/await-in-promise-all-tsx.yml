@@ -1,0 +1,14 @@
+{
+  "id": "await-in-promise-all-tsx",
+  "valid": [
+    "async function f() { await Promise.all([a(), b()]); }",
+    "async function f() { await Promise.all([(async () => { await a(); })(), b()]); }",
+    "async function f() { const a = await first(); await Promise.all([next(a), b()]); }",
+    "async function f() { await Promise.all([items.map(async x => await work(x))]); }",
+    "const x = <div>{value as T}</div>;"
+  ],
+  "invalid": [
+    "async function f() { await Promise.all([await a(), b()]); }",
+    "async function f() { await Promise.all([a(), await b()]); }"
+  ]
+}

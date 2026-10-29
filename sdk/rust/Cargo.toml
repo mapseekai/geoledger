@@ -8,6 +8,7 @@ license.workspace = true
 prost = "0.14"
 geoledger-rpc = { path = "../../crates/rpc" }
 tonic = { version = "0.14", features = ["tls-native-roots"] }
+thiserror.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 uuid.workspace = true

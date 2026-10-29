@@ -33,7 +33,8 @@ with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), api_key) as 
     assert client.commit_summary(project.id,published["revision"])["total"]["added"] == 1
     assert client.features(project.id, dataset.id, revision=published["revision"])["features"][0] == feature
     history = client.history(project.id)
-    assert len(history) == 1 and history[0]["source_workspace"] == published["workspace"] and history[0]["source_base_revision"] == 0
+    assert len(history["commits"]) == 1 and history["commits"][0]["source_workspace"] == published["workspace"] and history["commits"][0]["source_base_revision"] == 0
+    assert history["next_after"] is None
     assert len(client.commit(project.id, published["revision"])["changes"]) == 1
     assert client.audit(project.id)["events"]
     assert client.project(project.id).head == 1

@@ -12,26 +12,35 @@ export class ApiError extends Error {
     super(message);
   }
 }
-export async function call<T>(payload: Record<string, unknown>): Promise<T> {
+/** Caller cancellation preserves its reason; it does not imply a write was rolled back. */
+export async function call<T>(
+  payload: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<T> {
   if (payload.action === "features")
-    return send<T>(featureItemsUrl(payload), "GET", undefined, true);
-  return send<T>("/api/console", "POST", payload);
+    return send<T>(featureItemsUrl(payload), "GET", undefined, true, signal);
+  return send<T>("/api/console", "POST", payload, false, signal);
 }
 export async function send<T>(
   path: string,
   method: string,
   payload?: unknown,
   featureResponse = false,
+  signal?: AbortSignal,
 ): Promise<T> {
+  const timeout = AbortSignal.timeout(45_000);
+  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
+    requestSignal.throwIfAborted();
     const response = await fetch(path, {
       method,
       headers: { "content-type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
-      body: payload === undefined ? undefined : JSON.stringify(payload),
-      signal: AbortSignal.timeout(45_000),
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+      signal: requestSignal,
     });
+    requestSignal.throwIfAborted();
     if (!response.ok) {
       if (
         response.status === 401 &&
@@ -57,6 +66,7 @@ export async function send<T>(
       );
     }
     const raw = await response.text();
+    requestSignal.throwIfAborted();
     const data = featureResponse
       ? (parseLosslessJson(raw) as Record<string, unknown>)
       : JSON.parse(raw);
@@ -73,6 +83,8 @@ export async function send<T>(
     }
     return data as T;
   } catch (error) {
+    if (signal?.aborted && requestSignal.reason === signal.reason)
+      throw signal.reason;
     if (error instanceof ApiError) throw error;
     throw new ApiError("连接中断或响应超时，请检查服务状态。", 0, true);
   }
@@ -131,6 +143,10 @@ export type Commit = {
   sourceWorkspace: string;
   sourceBaseRevision: string;
 };
+export type HistoryPage = {
+  commits: Commit[];
+  nextAfter?: string;
+};
 export type Audit = {
   id: string;
   subject: string;
@@ -139,6 +155,7 @@ export type Audit = {
   createdAt: string;
 };
 export type Changes = {
+  nextAfter?: string;
   changes: { cursor: string; json: string }[];
   version?: string;
   revision?: string;

@@ -3,6 +3,7 @@ import {
   call,
   type Changes,
   type Commit,
+  type HistoryPage,
   type Project,
   type Workspace,
 } from "@/lib/browser-api";
@@ -58,14 +59,14 @@ export function HistoryPanel({
   useEffect(() => {
     if (!linked || !/^[0-9]+$/.test(linked)) return;
     let active = true;
-    call<Commit[]>({
+    call<HistoryPage>({
       action: "history",
       project: project.id,
       after: String(BigInt(linked) - 1n),
       limit: 1,
     })
-      .then((rows) => {
-        if (active && rows[0]?.revision === linked) setInspect(rows[0]);
+      .then(({ commits }) => {
+        if (active && commits[0]?.revision === linked) setInspect(commits[0]);
       })
       .catch(() => undefined);
     return () => {
@@ -81,15 +82,15 @@ export function HistoryPanel({
     }
   };
   const page = usePage<Commit>(async (after) => {
-    const rows = await call<Commit[]>({
+    const result = await call<HistoryPage>({
       action: "history",
       project: project.id,
       after: after || "0",
       limit: 20,
     });
     return {
-      rows,
-      next: rows.length === 20 ? rows.at(-1)!.revision : undefined,
+      rows: result.commits,
+      next: result.nextAfter,
     };
   }, 0);
   return (
@@ -220,8 +221,7 @@ export function HistoryPanel({
             });
             return {
               rows: r.changes,
-              next:
-                r.changes.length === 50 ? r.changes.at(-1)!.cursor : undefined,
+              next: r.nextAfter,
             };
           }}
         />

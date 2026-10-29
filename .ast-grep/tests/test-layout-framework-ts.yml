@@ -1,0 +1,14 @@
+{
+  "id": "test-layout-framework-ts",
+  "valid": [
+    "const text = \"node:test\";",
+    "// import test from \"node:test\";",
+    "import { test } from \"./health\";",
+    "const result = testConnection();"
+  ],
+  "invalid": [
+    "import test from \"node:test\";",
+    "import { describe as suite } from \"vitest\";",
+    "const test = require(\"node:test\");"
+  ]
+}

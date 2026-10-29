@@ -60,11 +60,12 @@ export function CreateDatasetDialog({
           e.preventDefault();
           const form = new FormData(e.currentTarget);
           const name = String(form.get("name")).trim();
+          // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
           void task.run(async () => {
             const current = state.current;
             if (mode === "postgis") {
               const dataset = await call<Dataset>({
-                action: "trackTable",
+                action: "registerTable",
                 project,
                 name,
                 source: {

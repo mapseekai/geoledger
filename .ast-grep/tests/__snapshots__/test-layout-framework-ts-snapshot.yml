@@ -1,0 +1,36 @@
+id: test-layout-framework-ts
+snapshots:
+  "const test = require(\"node:test\");":
+    labels:
+    - source: require("node:test")
+      style: primary
+      start: 13
+      end: 33
+    - source: "\"node:test\""
+      style: secondary
+      start: 21
+      end: 32
+    - source: ("node:test")
+      style: secondary
+      start: 20
+      end: 33
+  "import test from \"node:test\";":
+    labels:
+    - source: import test from "node:test";
+      style: primary
+      start: 0
+      end: 29
+    - source: "\"node:test\""
+      style: secondary
+      start: 17
+      end: 28
+  "import { describe as suite } from \"vitest\";":
+    labels:
+    - source: import { describe as suite } from "vitest";
+      style: primary
+      start: 0
+      end: 43
+    - source: "\"vitest\""
+      style: secondary
+      start: 34
+      end: 42

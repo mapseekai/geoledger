@@ -85,6 +85,10 @@ npm --prefix web run format:check
 npm --prefix web run build
 ```
 
+`lint` 保留现有 Oxlint/shadcn 检查，再使用固定版本的 `oxlint-tsgolint` 执行类型感知的 `no-floating-promises` 和 `no-misused-promises`。未处理的 `void` Promise 同样报错；仅 Node 测试运行器接管的 `test()` 注册调用，以及逐处注明内部错误处理的辅助函数保留例外。
+
+`typecheck` 检查完整 Web 项目（`strict`、`noImplicitOverride`），再通过 `tsconfig.boundaries.json` 为密码、数据集名称加载、全屏和控制台响应边界及其依赖开启 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`。其余历史 UI 尚未迁移这两个选项；不要用断言掩盖迁移错误。TS SDK 独立开启三个额外严格选项，并通过 `npm --prefix sdk/ts run lint` 检查手写业务代码；生成协议绑定不参加样式整改。
+
 生产构建输出至 `web/.next`；浏览器与真实服务联调入口见 [开发指南](../docs/development.md#控制台浏览器验证)。
 
 GeoJSON 文件上传专项浏览器验证：`python3 scripts/test-console-upload.py --url http://localhost:3000 --api-key-file target/auth-refactor-integration/api-key --screenshots /tmp/geoledger-upload-shots`。使用隔离测试服务，验证创建数据集时的文件上传、大于 1 MiB 的文件、多批次导入、中断重试、提交成功后响应丢失的恢复、并发修改保护、精确数字和手机上传入口。 添加 `--feature-bytes 12582912` 可验证单个 12 MiB 要素经 Web/BFF/HTTP 流式上传、查询及发布；这是验证用例大小，不是产品上限。
@@ -169,3 +173,7 @@ Inter 与 Newsreader 字体本地打包，中文衬线采用系统字体。[GeoL
 创建、修改、撤销和删除 API Key 以及用户管理写操作要求填写操作人的当前密码。密钥仅创建成功后显示一次；关闭窗口后无法找回。撤销与删除均需确认，同一用户可持有多个密钥以完成轮换。
 
 完整认证浏览器验证：`python3 scripts/test-console-auth.py --url http://127.0.0.1:13000 --admin-file target/auth-refactor-integration/browser-admin.json --chromium /path/to/chromium`。仅使用一次性服务；管理员 JSON 文件权限必须为 0600。验证用户名密码与 API Key 登录、首次改密、个人资料、用户与密钥管理、CSRF、会话撤销和手机页面；截图与无凭证报告写入 `target/auth-refactor-browser`。
+
+单元测试与源码同目录同名（`.test.ts` / `.test.tsx`），每份源码仅一个单测文件；跨模块集成放在 `test/` 并在根 `test-layout.json` 记录理由。`npm test` 递归发现两类文件，`npm run lint` 先执行全仓库测试布局检查。开发机需要 Python 3 和 ast-grep 0.51.0（`npm install --global @ast-grep/cli@0.51.0`）；依赖缺失会明确失败。集成分类和实际覆盖范围需要人工审查。
+
+差异、提交、历史与审计分页验证：`python3 scripts/test-console-pagination.py --url http://localhost:13001 --api-key-file <临时凭据文件> --browser-channel chrome --screenshots /tmp/geoledger-pagination-shots`。仅在一次性测试服务运行，覆盖空历史、20 条历史和 50 条变更的整页终页、审计真实续页与最终 20 条终页、桌面与手机结束控件；使用公共浏览器沙箱配置。

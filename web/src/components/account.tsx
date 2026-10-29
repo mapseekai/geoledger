@@ -76,6 +76,7 @@ function ProfilePanel({ user, password }: { user: User; password: boolean }) {
     if (!validatePasswordForm(event.currentTarget)) return;
     const form = event.currentTarget;
     const data = new FormData(form);
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
     void action.run(async () => {
       if (password) {
         if (data.get("new_password") !== data.get("confirm_password"))
@@ -231,6 +232,7 @@ function UsersPanel() {
     if (!validatePasswordForm(event.currentTarget)) return;
     const data = new FormData(event.currentTarget);
     if (!edit) return;
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
     void write.run(async () => {
       const input: Record<string, unknown> = {
         current_password: data.get("current_password"),
@@ -503,6 +505,7 @@ function KeysPanel({ user }: { user: User }) {
     if (!validatePasswordForm(event.currentTarget)) return;
     const data = new FormData(event.currentTarget);
     if (!edit) return;
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
     void write.run(async () => {
       const input: Record<string, unknown> = {
         current_password: data.get("current_password"),

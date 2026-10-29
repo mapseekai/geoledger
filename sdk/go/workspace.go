@@ -5,21 +5,35 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	pb "github.com/mapseekai/geoledger/sdk/go/internal/geoledgerv1"
 	"sync"
+
+	pb "github.com/mapseekai/geoledger/sdk/go/internal/geoledgerv1"
 )
 
 // Workspace owns the optimistic version of a personal draft. Do not copy it.
+// Operations are serialized; their contexts also cancel waiting for another
+// operation. Cancellation before acquiring the workspace does not send an RPC.
+// Obtain a handle from Client.CreateWorkspace, Client.Workspace or Client.Restore;
+// the zero value cannot perform service operations. The Client owns its connection.
+// Context-free accessors wait for an active operation and return local snapshots.
 type Workspace struct {
-	mu      sync.Mutex
+	mu      workspaceMutex
 	client  *Client
 	project string
 	info    WorkspaceInfo
 	pending *Publication
 }
 
-func (w *Workspace) ID() string          { w.mu.Lock(); defer w.mu.Unlock(); return w.info.ID }
+// ID returns the immutable workspace identifier.
+func (w *Workspace) ID() string { w.mu.Lock(); defer w.mu.Unlock(); return w.info.ID }
+
+// Info returns the last locally observed version and status, without a server call.
 func (w *Workspace) Info() WorkspaceInfo { w.mu.Lock(); defer w.mu.Unlock(); return w.info }
+
+// PendingPublication returns an independent copy of the retained publication
+// intent, or nil before publishing or after a definitive rejection clears it.
+// An intent is retained after success as well as uncertain failure to allow an
+// identical retry. Persist the copy unchanged for recovery via Client.Publish.
 func (w *Workspace) PendingPublication() *Publication {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -38,8 +52,13 @@ func (w *Workspace) editable() error {
 	}
 	return nil
 }
+
+// Refresh reloads version and status without clearing a retained publication.
+// It does not resolve conflicts or establish a new publication request identity.
 func (w *Workspace) Refresh(ctx context.Context) (WorkspaceInfo, error) {
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return WorkspaceInfo{}, err
+	}
 	defer w.mu.Unlock()
 	var info WorkspaceInfo
 	if err := call(w.client, ctx, w.client.rpc.GetWorkspace, &pb.WorkspaceRequest{Project: w.project, Workspace: w.info.ID}, &info); err != nil {
@@ -64,25 +83,58 @@ func (w *Workspace) Save(ctx context.Context, dataset string, feature any) (Save
 func (w *Workspace) Delete(ctx context.Context, dataset, id string) (SaveResult, error) {
 	return w.SaveBatch(ctx, []Edit{{Dataset: dataset, FeatureID: id, Feature: json.RawMessage("null")}})
 }
+
+// SaveBatch applies edits atomically against the handle's current version.
+// Each edit must contain explicit JSON; null deletes a feature, absent JSON is
+// rejected. A retained publication intent prevents further edits.
 func (w *Workspace) SaveBatch(ctx context.Context, edits []Edit) (SaveResult, error) {
+	return w.SaveChanges(ctx, edits, nil)
+}
+
+// SaveChanges atomically saves feature edits and the complete schema intent.
+// A nil schemaEdits preserves existing intent; a pointer to an empty slice clears it.
+func (w *Workspace) SaveChanges(ctx context.Context, edits []Edit, schemaEdits *[]SchemaEdit) (SaveResult, error) {
 	converted, err := wireEdits(edits)
 	if err != nil {
 		return SaveResult{}, err
 	}
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return SaveResult{}, err
+	}
 	defer w.mu.Unlock()
 	var r SaveResult
 	if err := w.editable(); err != nil {
 		return r, err
 	}
-	err = call(w.client, ctx, w.client.rpc.Save, &pb.SaveRequest{Project: w.project, Workspace: w.info.ID, ExpectedWorkspaceVersion: w.info.Version, Edits: converted}, &r)
+	var schema *pb.SchemaEdits
+	if schemaEdits != nil {
+		schema = &pb.SchemaEdits{}
+		for _, change := range *schemaEdits {
+			item := &pb.SchemaEdit{Dataset: change.Dataset, Drop: append([]string(nil), change.Drop...)}
+			for _, field := range change.Add {
+				item.Add = append(item.Add, &pb.AddField{Name: field.Name, Type: field.Type})
+			}
+			schema.Edits = append(schema.Edits, item)
+		}
+	}
+	err = call(w.client, ctx, w.client.rpc.Save, &pb.SaveRequest{Project: w.project, Workspace: w.info.ID, ExpectedWorkspaceVersion: w.info.Version, Edits: converted, SchemaEdits: schema}, &r)
 	if err == nil {
 		w.info.Version = r.Version
 	}
 	return r, err
 }
+func (w *Workspace) Schema(ctx context.Context, dataset string) (DatasetSchema, error) {
+	if err := w.mu.lock(ctx); err != nil {
+		return DatasetSchema{}, err
+	}
+	defer w.mu.Unlock()
+	id := w.info.ID
+	return w.client.Schema(ctx, w.project, dataset, SchemaQuery{Workspace: &id})
+}
 func (w *Workspace) Features(ctx context.Context, dataset string, q FeatureQuery) (FeaturePage, error) {
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return FeaturePage{}, err
+	}
 	defer w.mu.Unlock()
 	if q.Revision != nil || q.Workspace != nil {
 		return FeaturePage{}, invalid("draft queries cannot override workspace or revision")
@@ -91,22 +143,39 @@ func (w *Workspace) Features(ctx context.Context, dataset string, q FeatureQuery
 	q.Workspace = &id
 	return w.client.Features(ctx, w.project, dataset, q)
 }
+
+// Diff returns one page of draft changes; continue with NextAfter as Page.After
+// and verify Version is unchanged between pages. A nil NextAfter ends iteration.
 func (w *Workspace) Diff(ctx context.Context, page Page) (Diff, error) {
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return Diff{}, err
+	}
 	defer w.mu.Unlock()
 	var r Diff
 	err := call(w.client, ctx, w.client.rpc.Diff, &pb.DiffRequest{Project: w.project, Workspace: w.info.ID, After: page.After, Limit: limit(page.Limit)}, &r)
 	return r, err
 }
+
+// Conflicts returns one page; pass Conflicts.NextAfter unchanged as Page.After.
+// Check Head and Version across pages because the draft or published head may change.
 func (w *Workspace) Conflicts(ctx context.Context, page Page) (Conflicts, error) {
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return Conflicts{}, err
+	}
 	defer w.mu.Unlock()
 	var r Conflicts
 	err := call(w.client, ctx, w.client.rpc.Conflicts, &pb.DiffRequest{Project: w.project, Workspace: w.info.ID, After: page.After, Limit: limit(page.Limit)}, &r)
 	return r, err
 }
+
+// Publish creates an intent on the first attempt and reuses it on later calls.
+// Retry with the original message after an uncertain failure, including across
+// access failures during recovery. Success retains the same intent; a definitive
+// rejection may clear it. Waiting cancellation neither creates nor clears it.
 func (w *Workspace) Publish(ctx context.Context, message string) (PublicationResult, error) {
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return PublicationResult{}, err
+	}
 	defer w.mu.Unlock()
 	var r PublicationResult
 	wasPending := w.pending != nil
@@ -138,7 +207,9 @@ func (w *Workspace) Resolve(ctx context.Context, head int64, edits []Edit) (Reso
 	if err != nil {
 		return ResolutionResult{}, err
 	}
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return ResolutionResult{}, err
+	}
 	defer w.mu.Unlock()
 	var r ResolutionResult
 	if err := w.editable(); err != nil {
@@ -155,7 +226,9 @@ func (w *Workspace) Rebase(ctx context.Context, head int64, edits []Edit) (Rebas
 	if err != nil {
 		return RebaseResult{}, err
 	}
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return RebaseResult{}, err
+	}
 	defer w.mu.Unlock()
 	var r RebaseResult
 	if err := w.editable(); err != nil {
@@ -169,7 +242,9 @@ func (w *Workspace) Rebase(ctx context.Context, head int64, edits []Edit) (Rebas
 	return r, err
 }
 func (w *Workspace) Discard(ctx context.Context) (DiscardResult, error) {
-	w.mu.Lock()
+	if err := w.mu.lock(ctx); err != nil {
+		return DiscardResult{}, err
+	}
 	defer w.mu.Unlock()
 	var r DiscardResult
 	if err := w.editable(); err != nil {
@@ -181,4 +256,45 @@ func (w *Workspace) Discard(ctx context.Context) (DiscardResult, error) {
 		w.info.Status = r.Status
 	}
 	return r, err
+}
+
+// workspaceMutex serializes version changes and publication retries across RPCs.
+// Its zero value is ready for use, including handles constructed by tests.
+type workspaceMutex struct {
+	once  sync.Once
+	token chan struct{}
+}
+
+func (m *workspaceMutex) Lock()   { _ = m.lock(context.Background()) }
+func (m *workspaceMutex) Unlock() { <-m.token }
+
+func (m *workspaceMutex) lock(ctx context.Context) error {
+	if ctx == nil {
+		return invalid("context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return waitingError(err)
+	}
+	m.once.Do(func() { m.token = make(chan struct{}, 1) })
+	select {
+	case m.token <- struct{}{}:
+		// Cancellation and acquisition may become ready together. Do not start a
+		// request or change pending intent when cancellation already won.
+		if err := ctx.Err(); err != nil {
+			m.Unlock()
+			return waitingError(err)
+		}
+		return nil
+	case <-ctx.Done():
+		return waitingError(ctx.Err())
+	}
+}
+
+func waitingError(err error) error {
+	code := "cancelled"
+	if err == context.DeadlineExceeded {
+		code = "timeout"
+	}
+	// No RPC has been sent, so this operation's outcome is certain.
+	return &Error{Code: code, Message: err.Error()}
 }

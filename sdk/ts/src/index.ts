@@ -23,6 +23,12 @@ export type {
   SaveResult,
   DiscardResult,
   FeaturePage,
+  SchemaField,
+  DatasetSchema,
+  SchemaQuery,
+  AddField,
+  SchemaEdit,
+  SchemaChange,
   Change,
   ChangeCounts,
   ChangeSummary,
@@ -30,6 +36,7 @@ export type {
   Conflict,
   Conflicts,
   Commit,
+  HistoryPage,
   CommitChanges,
   AuditEvent,
   AuditPage,
@@ -149,7 +156,13 @@ const page = (p: model.Page = {}) => ({
   limit: p.limit === undefined ? undefined : String(p.limit),
 });
 
-/** Node.js client. All methods return promises and ordinary business data. */
+/**
+ * Owns one Node.js gRPC channel; use API Keys, never browser Sessions.
+ * RPCs reject with GeoLedgerError. The constructor deadline applies to each RPC;
+ * individual calls do not accept AbortSignal. Closing cancels outstanding RPCs,
+ * but cancellation or timeout does not prove a write was rolled back.
+ * Always close this client when its owner finishes using it.
+ */
 export class Client {
   #rpc: wire.GeoLedgerClient;
   #closed = false;
@@ -219,6 +232,7 @@ export class Client {
       },
     );
   }
+  /** Release the channel and cancel outstanding calls. Repeated close is safe; new calls reject. */
   close(): void {
     this.#closed = true;
     this.#rpc.close();
@@ -348,20 +362,33 @@ export class Client {
     crs = "EPSG:4326",
   ): Promise<model.Dataset> {
     return this.#call(
-      (cb) => this.#rpc.createDataset({ project, name, geometryType, coordinateDimension, crs }, cb),
+      (cb) =>
+        this.#rpc.createDataset(
+          { project, name, geometryType, coordinateDimension, crs },
+          cb,
+        ),
       convert.decodeDataset,
     );
   }
-  /** Track an existing PostGIS table, creating its initial published revision. */
-  trackTable(
+  /** Register an existing PostGIS table, creating its initial published revision. */
+  registerTable(
     project: string,
     name: string,
     postgisTable: model.PostgisTable,
   ): Promise<model.Dataset> {
     return this.#call(
-      (cb) => this.#rpc.createDataset({
-        project, name, geometryType: "", coordinateDimension: 0, postgisTable, crs: "",
-      }, cb),
+      (cb) =>
+        this.#rpc.createDataset(
+          {
+            project,
+            name,
+            geometryType: "",
+            coordinateDimension: 0,
+            postgisTable,
+            crs: "",
+          },
+          cb,
+        ),
       convert.decodeDataset,
     );
   }
@@ -400,6 +427,11 @@ export class Client {
       (r) => r.workspaces.map(convert.decodeWorkspaceInfo),
     );
   }
+  /**
+   * Read one page. Pass nextAfter back unchanged; absence means the final page.
+   * Pin revision for a multi-page published snapshot. Feature properties preserve
+   * integer precision (bigint where necessary); stringifyJson serializes them safely.
+   */
   features(
     project: string,
     dataset: string,
@@ -456,6 +488,26 @@ export class Client {
     }, convert.decodeFeaturePage);
   }
 
+  schema(
+    project: string,
+    dataset: string,
+    q: model.SchemaQuery = {},
+  ): Promise<model.DatasetSchema> {
+    if (q.workspace !== undefined && q.revision !== undefined)
+      return Promise.reject(
+        invalid("schema query cannot combine workspace and revision"),
+      );
+    return this.#call(
+      (cb) => this.#rpc.schema({
+        project,
+        dataset,
+        workspace: q.workspace,
+        revision: q.revision === undefined ? undefined : revision(q.revision),
+      }, cb),
+      convert.decodeDatasetSchema,
+    );
+  }
+
   workspaceSummary(
     project: string,
     workspace: string,
@@ -475,14 +527,14 @@ export class Client {
       convert.decodeChangeSummary,
     );
   }
-  history(project: string, after = 0n, limit = 100): Promise<model.Commit[]> {
-    return this.#call<wire.HistoryReply, model.Commit[]>(
+  history(project: string, after = 0n, limit = 100): Promise<model.HistoryPage> {
+    return this.#call(
       (cb) =>
         this.#rpc.history(
           { project, after: revision(after), limit: String(limit) },
           cb,
         ),
-      (r) => r.commits.map(convert.decodeCommit),
+      convert.decodeHistoryPage,
     );
   }
   commit(
@@ -509,6 +561,11 @@ export class Client {
       convert.decodeAuditPage,
     );
   }
+  /**
+   * Publish exactly this intent. After an uncertain failure retry the same requestId,
+   * version and message; creating a new intent can duplicate a completed operation.
+   * Prefer Workspace.publish when the SDK should retain that retry state for you.
+   */
   publish(intent: model.Publication): Promise<model.PublicationResult> {
     return this.#call(
       (cb) =>
@@ -534,6 +591,7 @@ export class Client {
     workspace: string,
     version: bigint,
     items: readonly model.Edit[],
+    schemaEdits?: readonly model.SchemaEdit[],
   ): Promise<model.SaveResult> {
     return this.#call<wire.SaveReply, model.SaveResult>((cb) => {
       const request = {
@@ -541,6 +599,13 @@ export class Client {
         workspace,
         expectedWorkspaceVersion: revision(version),
         edits: edits(items),
+        schemaEdits: schemaEdits === undefined ? undefined : {
+          edits: schemaEdits.map((change) => ({
+            dataset: change.dataset,
+            add: [...(change.add ?? [])],
+            drop: [...(change.drop ?? [])],
+          })),
+        },
       };
       const bytes = wire.SaveRequest.encode(request).finish();
       if (bytes.length <= 64 * 1024) {
@@ -654,6 +719,7 @@ export function isLoopbackHost(host: string): boolean {
   if (isIP(h) === 4) return h.startsWith("127.");
   return false;
 }
+/** Create a channel-owning Client. The caller must close it, preferably in finally. */
 export function connect(
   endpoint: string,
   apiKey: string,
@@ -663,9 +729,14 @@ export function connect(
   return new Client(endpoint, apiKey, timeoutMs, options);
 }
 
+/**
+ * Versioned draft bound to its Client. Mutations reject overlapping operations
+ * rather than queueing them. The handle does not own or close the shared client.
+ * An uncertain publication retains an immutable original request and blocks edits.
+ */
 export class Workspace {
   #info: model.WorkspaceInfo;
-  #pending?: model.Publication;
+  #pending: model.Publication | undefined;
   #busy = false;
   constructor(
     private readonly client: Client,
@@ -680,6 +751,11 @@ export class Workspace {
   get info(): Readonly<model.WorkspaceInfo> {
     return this.#info;
   }
+  /**
+   * Original immutable publication intent, retained after uncertain outcomes and
+   * successful publication so retries remain identical. Undefined before publishing
+   * or after a definitive business rejection releases the intent.
+   */
   get pendingPublication(): model.Publication | undefined {
     return this.#pending;
   }
@@ -713,6 +789,7 @@ export class Workspace {
       this.#busy = false;
     }
   }
+  /** Reload draft metadata without clearing an unresolved publication intent. */
   async refresh(): Promise<Readonly<model.WorkspaceInfo>> {
     return this.#exclusive(async () => {
       this.#info = Object.freeze(
@@ -744,10 +821,17 @@ export class Workspace {
     return this.saveBatch([{ dataset, featureId, feature: null }]);
   }
   saveBatch(items: readonly model.Edit[]): Promise<model.SaveResult> {
+    return this.saveChanges(items);
+  }
+  /** Undefined preserves schema intent; an empty array clears it relative to base. */
+  saveChanges(
+    items: readonly model.Edit[],
+    schemaEdits?: readonly model.SchemaEdit[],
+  ): Promise<model.SaveResult> {
     return this.#exclusive(async () => {
       this.#editable();
       return this.#update(
-        await this.client.save(this.project, this.id, this.info.version, items),
+        await this.client.save(this.project, this.id, this.info.version, items, schemaEdits),
       );
     });
   }
@@ -764,12 +848,20 @@ export class Workspace {
       workspace: this.id,
     });
   }
+  schema(dataset: string): Promise<model.DatasetSchema> {
+    return this.client.schema(this.project, dataset, { workspace: this.id });
+  }
   diff(p: model.Page = {}): Promise<model.Diff> {
     return this.client.diff(this.project, this.id, p);
   }
   conflicts(p: model.Page = {}): Promise<model.Conflicts> {
     return this.client.conflicts(this.project, this.id, p);
   }
+  /**
+   * Publish or retry the retained request. Retrying requires the original message;
+   * uncertainty and later authentication failures keep the intent and block edits.
+   * Await this operation before starting another mutation on this handle.
+   */
   publish(message: string): Promise<model.PublicationResult> {
     return this.#exclusive(async () => {
       const wasPending = this.#pending !== undefined;
@@ -836,6 +928,7 @@ export class Workspace {
       );
     });
   }
+  /** Discard an editable draft. An unresolved publication must be settled first. */
   discard(): Promise<model.DiscardResult> {
     return this.#exclusive(async () => {
       this.#editable();

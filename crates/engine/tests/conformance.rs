@@ -1,4 +1,7 @@
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "test fixtures and assertions should fail immediately"
+)]
 use geoledger_engine::{Application, Storage};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -131,6 +134,246 @@ fn thousand_large_features_publish_and_page_conflicts_without_full_materializati
     assert_eq!(conflict.status, 409);
     assert_eq!(conflict.body["total"], 999);
     assert_eq!(f.call(&f.alice, "get_project", json!({}))?["head"], 2);
+    Ok(())
+}
+
+#[test]
+fn features_pagination_returns_a_cursor_only_when_the_snapshot_has_more_results() -> TestResult {
+    let f = Fixture::new()?;
+    let empty = f.ws(&f.alice);
+    assert_feature_pages(&f, json!({}), &[], 0, None)?;
+    assert_feature_pages(&f, json!({"workspace":empty}), &[], 0, Some(0))?;
+
+    let ids: Vec<_> = (0..70).map(|i| format!("{i:03}")).collect();
+    let edits: Vec<_> = ids
+        .iter()
+        .map(|id| f.edit(id, json!({}), Value::Null))
+        .collect();
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":empty,"expected_workspace_version":0,"edits":edits}),
+    )?;
+    assert_feature_pages(&f, json!({"workspace":empty}), &ids, 0, Some(1))?;
+    f.publish(&f.alice, &empty, 1)?;
+    assert_feature_pages(&f, json!({"workspace":empty}), &ids, 1, Some(2))?;
+    assert_feature_pages(&f, json!({}), &ids, 1, None)?;
+    assert_feature_pages(&f, json!({"revision":1}), &ids, 1, None)?;
+    Ok(())
+}
+
+#[test]
+fn features_pagination_uses_bbox_matches_after_workspace_moves_and_deletes() -> TestResult {
+    let f = Fixture::new()?;
+    let seed = f.ws(&f.alice);
+    let edits: Vec<_> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        .into_iter()
+        .map(|id| {
+            let x = if matches!(id, "d" | "f") { 20. } else { 0. };
+            f.edit(id, json!({}), point(x, x))
+        })
+        .collect();
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":seed,"expected_workspace_version":0,"edits":edits}),
+    )?;
+    f.publish(&f.alice, &seed, 1)?;
+    let draft = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":draft,"expected_workspace_version":0,"edits":[
+            f.edit("b",json!({}),point(20.,20.)),
+            f.edit("bb",json!({}),point(0.,0.)),
+            {"dataset":f.d,"feature_id":"c","feature":null},
+            f.edit("d",json!({}),point(0.,0.)),
+            {"dataset":f.d,"feature_id":"g","feature":null},
+            f.edit("h",json!({}),point(20.,20.)),
+            f.edit("z",json!({}),point(20.,20.))
+        ]}),
+    )?;
+    let bounds = json!([-1., -1., 1., 1.]);
+    let visible: Vec<_> = ["a", "bb", "d", "e"].map(String::from).into();
+    assert_feature_pages(
+        &f,
+        json!({"workspace":draft,"bbox":bounds}),
+        &visible,
+        1,
+        Some(1),
+    )?;
+    let all: Vec<_> = ["a", "b", "bb", "d", "e", "f", "h", "z"]
+        .map(String::from)
+        .into();
+    assert_feature_pages(&f, json!({"workspace":draft}), &all, 1, Some(1))?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":draft,"bbox":[40.,40.,41.,41.]}),
+        &[],
+        1,
+        Some(1),
+    )?;
+    let pinned = f.ws(&f.alice);
+    f.publish(&f.alice, &draft, 1)?;
+    let original: Vec<_> = ["a", "b", "c", "e", "g", "h"].map(String::from).into();
+    assert_feature_pages(&f, json!({"revision":1,"bbox":bounds}), &original, 1, None)?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":pinned,"bbox":bounds}),
+        &original,
+        1,
+        Some(0),
+    )?;
+    assert_feature_pages(&f, json!({"revision":2,"bbox":bounds}), &visible, 2, None)?;
+    assert_feature_pages(&f, json!({"bbox":bounds}), &visible, 2, None)?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":draft,"bbox":bounds}),
+        &visible,
+        2,
+        Some(2),
+    )?;
+    assert_feature_pages(&f, json!({"workspace":draft}), &all, 2, Some(2))?;
+
+    let later = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":later,"expected_workspace_version":0,"edits":[
+            {"dataset":f.d,"feature_id":"bb","feature":null},
+            f.edit("d",json!({"later":true}),point(20.,20.)),
+            f.edit("aa",json!({}),point(0.,0.))
+        ]}),
+    )?;
+    f.publish(&f.alice, &later, 1)?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":draft,"bbox":bounds}),
+        &visible,
+        2,
+        Some(2),
+    )?;
+    assert_feature_pages(&f, json!({"workspace":draft}), &all, 2, Some(2))?;
+    let published = f.call(
+        &f.alice,
+        "features",
+        json!({"dataset":f.d,"workspace":draft,"feature_id":"d"}),
+    )?;
+    assert_eq!(published["geometry"], point(0., 0.));
+    assert_eq!(published["revision"], 2);
+    assert_eq!(published["workspace_version"], 2);
+    assert_eq!(
+        f.call(&f.bob, "features", json!({"dataset":f.d,"workspace":draft}),)
+            .unwrap_err()
+            .status,
+        404
+    );
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "features",
+            json!({"dataset":f.d,"workspace":draft,"feature_id":"c"}),
+        )
+        .unwrap_err()
+        .status,
+        404
+    );
+    assert_eq!(
+        f.call(&f.alice, "get_workspace", json!({"workspace":draft}))?["base_revision"],
+        1
+    );
+    assert_eq!(
+        f.call(&f.alice, "diff", json!({"workspace":draft}))?["base_revision"],
+        1
+    );
+    f.call(
+        &f.alice,
+        "discard",
+        json!({"workspace":pinned,"expected_workspace_version":0}),
+    )?;
+    assert_feature_pages(
+        &f,
+        json!({"workspace":pinned,"bbox":bounds}),
+        &original,
+        1,
+        Some(1),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn features_pagination_keeps_workspace_versions_available_for_cross_page_checks() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":0,"edits":[
+            f.edit("a",json!({}),Value::Null),f.edit("b",json!({}),Value::Null)
+        ]}),
+    )?;
+    let first = f.call(
+        &f.alice,
+        "features",
+        json!({"dataset":f.d,"workspace":w,"limit":1}),
+    )?;
+    assert_eq!(first["workspace_version"], 1);
+    assert_eq!(first["next_after"], "a");
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":1,"edits":[f.edit("c",json!({}),Value::Null)]}),
+    )?;
+    let second = f.call(
+        &f.alice,
+        "features",
+        json!({"dataset":f.d,"workspace":w,"after":first["next_after"],"limit":2}),
+    )?;
+    assert_eq!(second["revision"], first["revision"]);
+    assert_eq!(second["workspace_version"], 2);
+    assert_ne!(second["workspace_version"], first["workspace_version"]);
+    assert_eq!(second["features"][0]["id"], "b");
+    assert_eq!(second["features"][1]["id"], "c");
+    assert_eq!(second["next_after"], Value::Null);
+    Ok(())
+}
+
+#[test]
+fn features_pagination_lookahead_does_not_charge_the_response_budget() -> TestResult {
+    let mut f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":0,"edits":[
+            f.edit("a",json!({}),Value::Null),
+            f.edit("b",json!({"payload":"x".repeat(128*1024)}),Value::Null)
+        ]}),
+    )?;
+    f.publish(&f.alice, &w, 1)?;
+    f.app = f.app.clone().with_response_limit(512);
+    let page = f.call(&f.alice, "features", json!({"dataset":f.d,"limit":1}))?;
+    assert_eq!(page["features"].as_array().unwrap().len(), 1);
+    assert_eq!(page["features"][0]["id"], "a");
+    assert_eq!(page["next_after"], "a");
+    assert_eq!(
+        f.call(
+            &f.alice,
+            "features",
+            json!({"dataset":f.d,"limit":1,"after":page["next_after"]})
+        )
+        .unwrap_err()
+        .status,
+        413
+    );
+    let feature = f.call(
+        &f.alice,
+        "features",
+        json!({"dataset":f.d,"feature_id":"a","limit":1}),
+    )?;
+    assert_eq!(feature["type"], "Feature");
+    assert_eq!(feature["id"], "a");
+    assert!(feature.get("next_after").is_none());
     Ok(())
 }
 
@@ -315,6 +558,50 @@ fn point(x: f64, y: f64) -> Value {
     ]})
 }
 
+fn assert_feature_pages(
+    f: &Fixture,
+    mut request: Value,
+    expected: &[String],
+    revision: i64,
+    workspace_version: Option<i64>,
+) -> TestResult {
+    request["dataset"] = json!(f.d);
+    let mut limits = vec![expected.len().max(1), expected.len() + 1];
+    if expected.len() > 32 {
+        limits.extend([17, 32, 35]);
+    } else {
+        limits.extend([1, 2]);
+    }
+    limits.sort_unstable();
+    limits.dedup();
+    for limit in limits {
+        request["after"] = json!("");
+        request["limit"] = json!(limit);
+        for start in (0..expected.len().max(1)).step_by(limit) {
+            let end = (start + limit).min(expected.len());
+            let page = f.call(&f.alice, "features", request.clone())?;
+            let ids: Vec<_> = page["features"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|feature| feature["id"].as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(ids, expected[start..end], "request: {request}");
+            assert_eq!(page["revision"], revision);
+            assert_eq!(page["workspace_version"], json!(workspace_version));
+            let next = (end < expected.len()).then(|| expected[end - 1].clone());
+            assert_eq!(page["next_after"], json!(next), "request: {request}");
+            request["after"] = page["next_after"].clone();
+        }
+    }
+    // A caller can still explicitly seek beyond the final visible feature.
+    request["after"] = json!(expected.last().map_or("", String::as_str));
+    let empty = f.call(&f.alice, "features", request)?;
+    assert_eq!(empty["features"], json!([]));
+    assert_eq!(empty["next_after"], Value::Null);
+    Ok(())
+}
+
 #[test]
 fn merge_pinned_isolation_conflict_rebase_and_restore() -> TestResult {
     let f = Fixture::new()?;
@@ -334,8 +621,16 @@ fn merge_pinned_isolation_conflict_rebase_and_restore() -> TestResult {
     assert_eq!(f.get(&f.bob, Some(&unedited))["properties"]["a"], 1);
     assert_eq!(f.get(&f.bob, Some(&unedited))["workspace_version"], 0);
     assert_eq!(f.get(&f.bob, Some(&b))["properties"], json!({"a":1,"b":2}));
+    assert_eq!(
+        f.call(&f.bob, "diff", json!({"workspace":b}))?["changes"][0]["draft"]["properties"],
+        json!({"a":1,"b":2})
+    );
     f.publish(&f.bob, &b, 1)?;
     assert_eq!(f.get(&f.alice, None)["properties"], json!({"a":2,"b":2}));
+    assert_eq!(
+        f.call(&f.bob, "diff", json!({"workspace":b}))?["changes"][0]["draft"]["properties"],
+        json!({"a":2,"b":2})
+    );
     let historical = f.call(
         &f.alice,
         "features",
@@ -819,6 +1114,182 @@ fn stale_deletion_resolution_after_unrelated_save_is_reconfirmed() -> TestResult
 }
 
 #[test]
+fn change_pages_signal_exact_end_and_preserve_tuple_order() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    let empty = f.call(&f.alice, "diff", json!({"workspace":w,"limit":2}))?;
+    assert_eq!(empty.get("next_after"), Some(&Value::Null));
+    assert_eq!(empty["changes"], json!([]));
+    let keys: Vec<_> = (0..34).map(|i| format!("key/{i:02}")).collect();
+    let edits: Vec<_> = keys
+        .iter()
+        .map(|k| f.edit(k, json!({"exact":9007199254740993_u64}), Value::Null))
+        .collect();
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":0,"edits":edits}),
+    )?;
+    let expected: Vec<_> = keys.iter().map(|k| json!(format!("{}/{k}", f.d))).collect();
+    assert_query_pages(
+        &f,
+        "diff",
+        json!({"workspace":w}),
+        ("changes", "cursor"),
+        json!(""),
+        &expected,
+        &[1, 2, 17, 34, 35],
+    )?;
+    f.publish(&f.alice, &w, 1)?;
+    assert_query_pages(
+        &f,
+        "commit",
+        json!({"revision":1}),
+        ("changes", "cursor"),
+        json!(""),
+        &expected,
+        &[1, 2, 17, 34, 35],
+    )?;
+    Ok(())
+}
+
+#[test]
+fn change_page_probe_does_not_consume_response_budget() -> TestResult {
+    let mut f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    let edits = [
+        f.edit("a", json!({"small":true}), Value::Null),
+        f.edit("b", json!({"payload":"x".repeat(48 * 1024)}), Value::Null),
+    ];
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":0,"edits":edits}),
+    )?;
+    f.app = f.app.clone().with_response_limit(2048);
+    let page = f.call(&f.alice, "diff", json!({"workspace":w,"limit":1}))?;
+    assert_eq!(page["changes"][0]["feature_id"], "a");
+    assert!(page["next_after"].is_string());
+    assert_eq!(
+        f.call(&f.alice, "diff", json!({"workspace":w,"limit":2}))
+            .unwrap_err()
+            .status,
+        413
+    );
+    // Publication reads the actual large edit; the small read budget applies
+    // only to the paged query, not fixture publication.
+    f.app = f.app.clone().with_response_limit(64 * 1024 * 1024);
+    f.publish(&f.alice, &w, 1)?;
+    f.app = f.app.clone().with_response_limit(2048);
+    let page = f.call(&f.alice, "commit", json!({"revision":1,"limit":1}))?;
+    assert_eq!(page["changes"][0]["feature_id"], "a");
+    assert!(page["next_after"].is_string());
+    assert_eq!(
+        f.call(&f.alice, "commit", json!({"revision":1,"limit":2}))
+            .unwrap_err()
+            .status,
+        413
+    );
+    Ok(())
+}
+
+#[test]
+fn history_and_audit_pages_signal_current_snapshot_end() -> TestResult {
+    let f = Fixture::new()?;
+    let empty = f.call(&f.alice, "history", json!({"limit":2}))?;
+    assert_eq!(empty, json!({"commits":[],"next_after":null}));
+    for revision in 1..=2 {
+        let w = f.ws(&f.alice);
+        f.save(&f.alice, &w, 0, json!({"revision":revision}), Value::Null)?;
+        f.publish(&f.alice, &w, 1)?;
+    }
+    assert_query_pages(
+        &f,
+        "history",
+        json!({}),
+        ("commits", "revision"),
+        json!(0),
+        &[json!(1), json!(2)],
+        &[1, 2, 3],
+    )?;
+    let audit = f.call(&f.alice, "audit", json!({"limit":1000}))?;
+    let ids: Vec<_> = audit["events"]
+        .as_array()
+        .ok_or("events")?
+        .iter()
+        .map(|e| e["id"].clone())
+        .collect();
+    assert!(ids.len() > 2);
+    assert_query_pages(
+        &f,
+        "audit",
+        json!({}),
+        ("events", "id"),
+        json!(0),
+        &ids,
+        &[1, 2, ids.len(), ids.len() + 1],
+    )?;
+    // A terminal page describes one request's snapshot. Later appends are visible
+    // when polling after the last observed revision/event ID, even after a null cursor.
+    let last_id = ids.last().ok_or("audit id")?;
+    let w = f.ws(&f.alice);
+    f.save(&f.alice, &w, 0, json!({"revision":3}), Value::Null)?;
+    f.publish(&f.alice, &w, 1)?;
+    let later = f.call(&f.alice, "history", json!({"after":2,"limit":2}))?;
+    assert_eq!(later["commits"][0]["revision"], 3);
+    assert_eq!(later["commits"].as_array().ok_or("commits")?.len(), 1);
+    assert_eq!(later["next_after"], Value::Null);
+    let later = f.call(&f.alice, "audit", json!({"after":last_id,"limit":1000}))?;
+    let events = later["events"].as_array().ok_or("events")?;
+    assert!(!events.is_empty());
+    assert!(events.iter().all(|e| e["id"].as_i64() > last_id.as_i64()));
+    assert_eq!(later["next_after"], Value::Null);
+    Ok(())
+}
+
+fn assert_query_pages(
+    f: &Fixture,
+    operation: &str,
+    input: Value,
+    fields: (&str, &str),
+    start: Value,
+    expected: &[Value],
+    limits: &[usize],
+) -> TestResult {
+    let (collection, cursor) = fields;
+    for &limit in limits {
+        let mut after = start.clone();
+        let mut seen = Vec::new();
+        loop {
+            let mut request = input.clone();
+            request["after"] = after.clone();
+            request["limit"] = json!(limit);
+            let page = f.call(&f.alice, operation, request)?;
+            let rows = page[collection].as_array().ok_or("page collection")?;
+            assert!(rows.len() <= limit);
+            seen.extend(rows.iter().map(|row| row[cursor].clone()));
+            assert_eq!(seen, expected[..seen.len()], "{operation} limit={limit}");
+            let next = page.get("next_after").ok_or("page next_after")?;
+            if seen.len() == expected.len() {
+                assert_eq!(next, &Value::Null, "{operation} terminal limit={limit}");
+                // Reading beyond the last returned item also yields an empty terminal page.
+                let mut request = input.clone();
+                request["after"] = rows.last().ok_or("last row")?[cursor].clone();
+                request["limit"] = json!(limit);
+                let empty = f.call(&f.alice, operation, request)?;
+                assert_eq!(empty[collection], json!([]));
+                assert_eq!(empty.get("next_after"), Some(&Value::Null));
+                break;
+            }
+            assert_eq!(next, &rows.last().ok_or("last row")?[cursor]);
+            assert_ne!(next, &after);
+            after = next.clone();
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn audit_pagination_is_owner_only_and_project_scoped() -> TestResult {
     let f = Fixture::new()?;
     let page = f.call(&f.alice, "audit", json!({"limit":2}))?;
@@ -1130,7 +1601,7 @@ fn dataset_family_and_lifecycle_preserve_shared_history() -> TestResult {
         json!({"dataset":f.d,"confirm_name":"renamed points"}),
     )?;
     let history = f.call(&f.alice, "history", json!({}))?;
-    assert_eq!(history.as_array().unwrap().len(), 1);
+    assert_eq!(history["commits"].as_array().unwrap().len(), 1);
     let changes = f.call(&f.alice, "commit", json!({"revision":1}))?;
     assert_eq!(changes["changes"].as_array().unwrap().len(), 1);
     assert_eq!(changes["changes"][0]["dataset"], other);
@@ -1251,6 +1722,111 @@ fn topology_warnings_preserve_original_polygon_through_publication() -> TestResu
 }
 
 #[test]
+fn published_workspace_summary_keeps_its_base_after_concurrent_insert_or_delete() -> TestResult {
+    for concurrent_insert in [true, false] {
+        let f = Fixture::new()?;
+        let seed = f.ws(&f.alice);
+        f.call(
+            &f.alice,
+            "save",
+            json!({"workspace":seed,"expected_workspace_version":0,"edits":[
+                f.edit("changed",json!({"n":1}),Value::Null),
+                f.edit("removed",json!({}),Value::Null)
+            ]}),
+        )?;
+        f.publish(&f.alice, &seed, 1)?;
+        let draft = f.ws(&f.alice);
+        let competing = f.ws(&f.bob);
+        f.call(
+            &f.alice,
+            "save",
+            json!({"workspace":draft,"expected_workspace_version":0,"edits":[
+                f.edit("added",json!({"n":2}),Value::Null),
+                f.edit("changed",json!({"n":2}),Value::Null),
+                {"dataset":f.d,"feature_id":"removed","feature":null}
+            ]}),
+        )?;
+        let concurrent_edit = if concurrent_insert {
+            f.edit("added", json!({"n":1}), Value::Null)
+        } else {
+            json!({"dataset":f.d,"feature_id":"changed","feature":null})
+        };
+        f.call(
+            &f.bob,
+            "save",
+            json!({"workspace":competing,"expected_workspace_version":0,"edits":[concurrent_edit]}),
+        )?;
+        f.publish(&f.bob, &competing, 1)?;
+        let conflict_key = if concurrent_insert {
+            "added"
+        } else {
+            "changed"
+        };
+        f.call(
+            &f.alice,
+            "resolve",
+            json!({"workspace":draft,"expected_workspace_version":1,"expected_head":2,
+                "resolutions":[f.edit(conflict_key,json!({"n":3}),Value::Null)]}),
+        )?;
+        let before = f.call(&f.alice, "diff", json!({"workspace":draft}))?;
+        assert_eq!(before["base_revision"], 1);
+        let expected = json!({"added":1,"deleted":1,"modified":1});
+        assert_eq!(
+            f.call(&f.alice, "workspace_summary", json!({"workspace":draft}))?["total"],
+            expected
+        );
+        f.publish(&f.alice, &draft, 2)?;
+        let after = f.call(&f.alice, "diff", json!({"workspace":draft}))?;
+        assert_eq!(after["base_revision"], before["base_revision"]);
+        assert_eq!(after["changes"], before["changes"]);
+        let summary = f.call(&f.alice, "workspace_summary", json!({"workspace":draft}))?;
+        assert_eq!(summary["version"], 3);
+        assert_eq!(summary["total"], expected);
+        assert_eq!(
+            f.call(&f.bob, "workspace_summary", json!({"workspace":draft}))
+                .unwrap_err()
+                .status,
+            404
+        );
+        let commit = f.call(&f.alice, "commit", json!({"revision":3}))?;
+        assert_eq!(commit["changes"][0]["before"].is_null(), !concurrent_insert);
+        assert_eq!(commit["changes"][1]["before"].is_null(), !concurrent_insert);
+        let commit_summary = f.call(&f.alice, "commit_summary", json!({"revision":3}))?;
+        assert_eq!(
+            commit_summary["total"],
+            if concurrent_insert {
+                json!({"added":0,"deleted":1,"modified":2})
+            } else {
+                json!({"added":2,"deleted":1,"modified":0})
+            }
+        );
+
+        // Later current rows must not change either historical classification.
+        let later = f.ws(&f.alice);
+        f.call(
+            &f.alice,
+            "save",
+            json!({"workspace":later,"expected_workspace_version":0,"edits":[
+                {"dataset":f.d,"feature_id":"added","feature":null},
+                f.edit("changed",json!({"n":4}),Value::Null),
+                f.edit("removed",json!({"restored":true}),Value::Null)
+            ]}),
+        )?;
+        f.publish(&f.alice, &later, 1)?;
+        assert_eq!(
+            f.call(&f.alice, "workspace_summary", json!({"workspace":draft}))?,
+            summary
+        );
+        assert_eq!(f.call(&f.alice, "diff", json!({"workspace":draft}))?, after);
+        assert_eq!(
+            f.call(&f.alice, "commit_summary", json!({"revision":3}))?,
+            commit_summary
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn summaries_count_mixed_datasets_and_follow_rename_delete_and_authorization() -> TestResult {
     let f = Fixture::new()?;
     let seed = f.ws(&f.alice);
@@ -1282,6 +1858,13 @@ fn summaries_count_mixed_datasets_and_follow_rename_delete_and_authorization() -
             .is_err()
     );
     f.publish(&f.alice, &w, 1)?;
+    let published = f.app.clone().with_response_limit(2048).execute(
+        &f.alice,
+        "workspace_summary",
+        json!({"project":f.p,"workspace":w}),
+    )?;
+    assert_eq!(published["total"], draft["total"]);
+    assert_eq!(published["datasets"], draft["datasets"]);
     let commit = f.call(&f.viewer, "commit_summary", json!({"revision":2}))?;
     assert_eq!(commit["total"], draft["total"]);
     assert_eq!(commit["datasets"], draft["datasets"]);
@@ -1317,6 +1900,9 @@ fn summaries_count_mixed_datasets_and_follow_rename_delete_and_authorization() -
         json!({"added":0,"deleted":1,"modified":1})
     );
     assert_eq!(remaining["datasets"].as_array().unwrap().len(), 1);
+    let remaining_workspace = f.call(&f.alice, "workspace_summary", json!({"workspace":w}))?;
+    assert_eq!(remaining_workspace["total"], remaining["total"]);
+    assert_eq!(remaining_workspace["datasets"], remaining["datasets"]);
     Ok(())
 }
 
@@ -1546,6 +2132,208 @@ fn buffered_saves_preserve_values_and_rollback_flushed_batches() -> TestResult {
             0
         );
     }
+    Ok(())
+}
+
+#[test]
+fn save_schema_cache_follows_dataset_intent_and_request_changes() -> TestResult {
+    let f = Fixture::new()?;
+    let second = f.call(
+        &f.alice,
+        "create_dataset",
+        json!({"name":"second schema","geometry_type":"point"}),
+    )?["dataset"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let datasets = [&f.d, &second];
+    let edit = |dataset: &str, key: &str, properties: Value| {
+        let mut edit = f.edit(key, properties, point(1., 2.));
+        edit["dataset"] = json!(dataset);
+        edit
+    };
+    let mut seed_edits = Vec::new();
+    let mut edits = Vec::new();
+    for i in 0..3 {
+        for (index, dataset) in datasets.iter().enumerate() {
+            let key = format!("row-{i}");
+            seed_edits.push(edit(dataset, &key, json!({"keep":"before","retired":format!("hidden-{index}-{i}"),"exact":9007199254740993_i64})));
+            let shared = if index == 0 {
+                json!(i)
+            } else {
+                json!(format!("text-{i}"))
+            };
+            edits.push(edit(
+                dataset,
+                &key,
+                json!({"keep":"after","shared":shared,"exact":9007199254740993_i64}),
+            ));
+        }
+    }
+    let seed = f.ws(&f.alice);
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":seed,"expected_workspace_version":0,"edits":seed_edits}),
+    )?;
+    f.publish(&f.alice, &seed, 1)?;
+    let w = f.ws(&f.alice);
+    let schemas = datasets.iter().zip(["integer", "string"]).map(|(dataset,kind)| json!({"dataset":dataset,"drop":["retired"],"add":[{"name":"shared","type":kind}]})).collect::<Vec<_>>();
+    assert_eq!(
+        f.call(&f.alice, "save", json!({"workspace":w,"expected_workspace_version":0,"schema_edits":schemas,"edits":edits}))?["changes"],
+        8
+    );
+    for (index, dataset) in datasets.iter().enumerate() {
+        let features = f.call(
+            &f.alice,
+            "features",
+            json!({"workspace":w,"dataset":dataset}),
+        )?;
+        for (i, feature) in features["features"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(
+                feature["properties"]["shared"],
+                edits[i * 2 + index]["feature"]["properties"]["shared"]
+            );
+            assert!(feature["properties"].get("retired").is_none());
+            assert_eq!(feature["properties"]["exact"], json!(9007199254740993_i64));
+            assert_eq!(feature["geometry"], point(1., 2.));
+        }
+    }
+    // Clearing intent in a later request restores hidden originals and removes temporary fields.
+    f.call(
+        &f.alice,
+        "save",
+        json!({"workspace":w,"expected_workspace_version":1,"schema_edits":[]}),
+    )?;
+    for (index, dataset) in datasets.iter().enumerate() {
+        let features = f.call(
+            &f.alice,
+            "features",
+            json!({"workspace":w,"dataset":dataset}),
+        )?;
+        for (i, feature) in features["features"].as_array().unwrap().iter().enumerate() {
+            let mut expected = seed_edits[i * 2 + index]["feature"].clone();
+            expected["properties"]["keep"] = json!("after");
+            assert_eq!(*feature, expected);
+        }
+    }
+    // Reuse the same field name with a different type; the other dataset is dynamic again.
+    let changed = vec![
+        edit(
+            &f.d,
+            "row-0",
+            json!({"keep":"next","exact":9007199254740993_i64,"shared":true}),
+        ),
+        edit(
+            &second,
+            "row-0",
+            json!({"free":"allowed without a definition"}),
+        ),
+    ];
+    assert_eq!(
+        f.call(&f.alice, "save", json!({"workspace":w,"expected_workspace_version":2,"schema_edits":[{"dataset":f.d,"drop":["retired"],"add":[{"name":"shared","type":"boolean"}]}],"edits":changed}))?["changes"],
+        7
+    );
+    for edit in changed {
+        let feature = f.call(
+            &f.alice,
+            "features",
+            json!({"workspace":w,"dataset":edit["dataset"],"feature_id":"row-0"}),
+        )?;
+        assert_eq!(feature["properties"], edit["feature"]["properties"]);
+        assert_eq!(feature["geometry"], edit["feature"]["geometry"]);
+        assert_eq!(feature["workspace_version"], 3);
+    }
+    Ok(())
+}
+
+#[test]
+fn save_schema_cache_preserves_base_revision_and_late_failure_rollback() -> TestResult {
+    let f = Fixture::new()?;
+    let seed = f.ws(&f.alice);
+    f.save(
+        &f.alice,
+        &seed,
+        0,
+        json!({"keep":"baseline","retired":"hidden"}),
+        Value::Null,
+    )?;
+    f.publish(&f.alice, &seed, 1)?;
+    let old = f.ws(&f.alice);
+    let schema = f.ws(&f.alice);
+    f.call(&f.alice, "save", json!({"workspace":schema,"expected_workspace_version":0,"schema_edits":[{"dataset":f.d,"add":[{"name":"shared","type":"integer"}]}]}))?;
+    f.publish(&f.alice, &schema, 1)?;
+    let w = f.ws(&f.alice);
+    let schema_query = json!({"workspace":w,"dataset":f.d});
+    let before_schema = f.call(&f.alice, "schema", schema_query.clone())?;
+    let before_features = f.call(&f.alice, "features", schema_query.clone())?;
+    let before_audit = f.call(&f.alice, "audit", json!({}))?;
+    let edits = (0..40)
+        .map(|i| {
+            f.edit(
+                &format!("batch-{i:02}"),
+                json!({"keep":"edit","shared":i,"marker":true}),
+                Value::Null,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut request = json!({"workspace":w,"expected_workspace_version":0,"schema_edits":[{"dataset":f.d,"drop":["retired"],"add":[{"name":"marker","type":"boolean"}]}],"edits":edits});
+    request["edits"][39]["feature"]["properties"]["shared"] =
+        json!("wrong type after a flushed batch");
+    assert_eq!(
+        f.call(&f.alice, "save", request.clone())
+            .unwrap_err()
+            .status,
+        400
+    );
+    assert_eq!(
+        f.call(&f.alice, "get_workspace", json!({"workspace":w}))?["version"],
+        0
+    );
+    assert_eq!(
+        f.call(&f.alice, "schema", schema_query.clone())?,
+        before_schema
+    );
+    assert_eq!(
+        f.call(&f.alice, "features", schema_query.clone())?,
+        before_features
+    );
+    assert_eq!(f.call(&f.alice, "audit", json!({}))?, before_audit);
+    let diff = f.call(&f.alice, "diff", json!({"workspace":w}))?;
+    assert_eq!(diff["changes"], json!([]));
+    assert_eq!(diff["schema_changes"], json!([]));
+    request["edits"][39]["feature"]["properties"]["shared"] = json!(39);
+    assert_eq!(f.call(&f.alice, "save", request)?["changes"], 41);
+    let saved = f.call(
+        &f.alice,
+        "features",
+        json!({"workspace":w,"dataset":f.d,"feature_id":"batch-39"}),
+    )?;
+    assert_eq!(saved["properties"], edits[39]["feature"]["properties"]);
+    // Alternating requests must use each workspace's own base, even after HEAD changes.
+    f.save(&f.alice, &old, 0, json!({"outside":true}), Value::Null)?;
+    let current = f.ws(&f.alice);
+    assert_eq!(
+        f.save(&f.alice, &current, 0, json!({"outside":true}), Value::Null)
+            .unwrap_err()
+            .status,
+        400
+    );
+    f.save(
+        &f.alice,
+        &current,
+        0,
+        json!({"keep":"valid","retired":"still editable","shared":7}),
+        Value::Null,
+    )?;
+    assert_eq!(
+        f.get(&f.alice, Some(&current))["properties"]["retired"],
+        "still editable"
+    );
+    assert_eq!(
+        f.get(&f.alice, Some(&old))["properties"],
+        json!({"outside":true})
+    );
     Ok(())
 }
 

@@ -45,6 +45,14 @@ fn inner(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
     let req = json!({"workspace":w,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"seed"});
     let published = call("alice", "publish", req.clone())?;
     assert_eq!(published, call("alice", "publish", req)?);
+    assert_eq!(
+        call("alice", "workspace_summary", json!({"workspace":w}))?["total"]["added"],
+        1
+    );
+    assert_eq!(
+        call("alice", "diff", json!({"workspace":w}))?["changes"][0]["draft"],
+        feature
+    );
     let rows = call("bob", "features", json!({"dataset":d,"bbox":[0,0,3,3]}))?;
     assert_eq!(rows["features"][0], feature);
     assert!(call("eve", "features", json!({"dataset":d})).is_err());
@@ -57,8 +65,11 @@ fn inner(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
         feature
     );
     let first_history = call("alice", "history", json!({}))?;
-    assert_eq!(first_history.as_array().ok_or("history")?.len(), 1);
-    assert_eq!(first_history[0]["source_workspace"], w);
+    assert_eq!(
+        first_history["commits"].as_array().ok_or("commits")?.len(),
+        1
+    );
+    assert_eq!(first_history["commits"][0]["source_workspace"], w);
     let mut second_feature = feature.clone();
     second_feature["id"] = json!("two");
     call(
@@ -78,12 +89,71 @@ fn inner(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
         json!({"workspace":w2,"expected_workspace_version":2,"request_id":uuid::Uuid::new_v4(),"message":"rebased workspace"}),
     )?;
     let history = call("alice", "history", json!({}))?;
-    let history = history.as_array().ok_or("history")?;
+    let history = history["commits"].as_array().ok_or("commits")?;
     assert_eq!(history.len(), 2);
     assert_eq!(history[0]["source_workspace"], w);
     assert_eq!(history[0]["source_base_revision"], 0);
     assert_eq!(history[1]["source_workspace"], w2);
     assert_eq!(history[1]["source_base_revision"], 1);
+    let published_features = call("alice", "features", json!({"dataset":d,"workspace":w}))?;
+    assert_eq!(published_features["revision"], 1);
+    assert_eq!(published_features["workspace_version"], 2);
+    assert_eq!(published_features["features"], json!([feature]));
+    let rebased_features = call("alice", "features", json!({"dataset":d,"workspace":w2}))?;
+    assert_eq!(rebased_features["revision"], 2);
+    assert_eq!(rebased_features["workspace_version"], 3);
+    assert_eq!(
+        call("alice", "workspace_summary", json!({"workspace":w2}))?["total"],
+        json!({"added":1,"deleted":0,"modified":0})
+    );
+    assert_eq!(
+        rebased_features["features"],
+        json!([feature, second_feature])
+    );
+    let empty = call("alice", "create_workspace", json!({}))?["workspace"].clone();
+    let empty_publication = call(
+        "alice",
+        "publish",
+        json!({"workspace":empty,"expected_workspace_version":0,"request_id":uuid::Uuid::new_v4(),"message":"empty"}),
+    )?;
+    assert_eq!(empty_publication["changes"], 0);
+    let empty_features = call("alice", "features", json!({"dataset":d,"workspace":empty}))?;
+    assert_eq!(empty_features["revision"], 3);
+    assert_eq!(empty_features["workspace_version"], 1);
+    assert_eq!(empty_features["features"], rebased_features["features"]);
+    assert_eq!(
+        call("alice", "workspace_summary", json!({"workspace":empty}))?["total"],
+        json!({"added":0,"deleted":0,"modified":0})
+    );
+    let discarded = call("alice", "create_workspace", json!({}))?["workspace"].clone();
+    let mut discarded_feature = feature.clone();
+    discarded_feature["id"] = json!("discarded");
+    call(
+        "alice",
+        "save",
+        json!({"workspace":discarded,"expected_workspace_version":0,"edits":[{"dataset":d,"feature_id":"discarded","feature":discarded_feature}]}),
+    )?;
+    call(
+        "alice",
+        "discard",
+        json!({"workspace":discarded,"expected_workspace_version":1}),
+    )?;
+    assert_eq!(
+        call("alice", "workspace_summary", json!({"workspace":discarded}))?["total"]["added"],
+        0
+    );
+    assert_eq!(
+        call("alice", "diff", json!({"workspace":discarded}))?["changes"],
+        json!([])
+    );
+    let discarded_features = call(
+        "alice",
+        "features",
+        json!({"dataset":d,"workspace":discarded}),
+    )?;
+    assert_eq!(discarded_features["revision"], 3);
+    assert_eq!(discarded_features["workspace_version"], 2);
+    assert_eq!(discarded_features["features"], rebased_features["features"]);
     assert!(
         !call("alice", "audit", json!({}))?["events"]
             .as_array()
@@ -98,12 +168,18 @@ fn sqlite_contract() -> Result<(), Box<dyn std::error::Error>> {
     let path = dir.path().join("test.db");
     scenario(&Application::new(Storage::Sqlite(path.clone())))?;
     let c = rusqlite::Connection::open(path)?;
-    let extension =
-        std::env::var_os("GL_SPATIALITE_EXTENSION").unwrap_or_else(|| "mod_spatialite".into());
-    let native = geoledger_spatialite::load(c, std::path::Path::new(&extension))?;
+    let native = geoledger_spatialite::load_configured(c)?;
     let c = native.read()?;
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM gl_workspace_changes", [], |r| r
+            .get::<_, i64>(0))?,
+        0
+    );
+    let table: String = c.query_row("SELECT storage_table FROM gl_datasets LIMIT 1", [], |r| {
+        r.get(0)
+    })?;
     let (count, z, srid): (i64, f64, i32) = c.query_row(
-        "SELECT count(*), ST_Z(geom_z), ST_SRID(geom_z) FROM gl_history WHERE typeof(geom_z)='blob' AND geom IS NULL", [],
+        &format!("SELECT count(*),max(ST_Z(geom_z)),max(ST_SRID(geom_z)) FROM {table} WHERE typeof(geom_z)='blob' AND geom IS NULL"), [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
     assert_eq!((count, z, srid), (2, 3.0, 0));
@@ -126,7 +202,13 @@ fn postgis_contract() -> Result<(), Box<dyn std::error::Error>> {
     let mut c = postgres::Client::connect(&dsn, postgres::NoTls)?;
     let name: String = c.query_one("SELECT current_database()", &[])?.get(0);
     assert_eq!(name, "geoledger_test");
-    scenario(&Application::new(Storage::Postgis(dsn)))
+    scenario(&Application::new(Storage::Postgis(dsn)))?;
+    assert_eq!(
+        c.query_one("SELECT count(*) FROM gl_workspace_changes", &[])?
+            .get::<_, i64>(0),
+        0
+    );
+    Ok(())
 }
 
 #[test]
@@ -150,6 +232,11 @@ fn deletion_rolls_back_with_audit_and_purges_storage_atomically()
     app.execute("alice","save",json!({"project":p,"workspace":w,"expected_workspace_version":0,"edits":[{"dataset":d,"feature_id":"p","feature":{"type":"Feature","id":"p","properties":{},"geometry":null}}]}))?;
     app.execute("alice","publish",json!({"project":p,"workspace":w,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"seed"}))?;
     let connection = rusqlite::Connection::open(&db)?;
+    let data_table: String = connection.query_row(
+        "SELECT storage_table FROM gl_datasets WHERE project=?1",
+        [&p],
+        |r| r.get(0),
+    )?;
     connection.execute_batch("CREATE TRIGGER fail_delete_audit BEFORE INSERT ON gl_audit_events WHEN NEW.action='delete_dataset' BEGIN SELECT RAISE(ABORT,'test rollback'); END;")?;
     assert!(
         app.execute(
@@ -164,7 +251,6 @@ fn deletion_rolls_back_with_audit_and_purges_storage_atomically()
         "gl_workspaces",
         "gl_commits",
         "gl_commit_changes",
-        "gl_history",
         "gl_idempotency",
     ] {
         assert_eq!(
@@ -175,10 +261,20 @@ fn deletion_rolls_back_with_audit_and_purges_storage_atomically()
         );
     }
     assert_eq!(
+        connection.query_row("SELECT count(*) FROM gl_history", [], |r| r
+            .get::<_, i64>(0))?,
+        0
+    );
+    assert_eq!(
         connection.query_row("SELECT count(*) FROM gl_purge", [], |r| r.get::<_, i64>(0))?,
         0
     );
     assert!(connection.execute("DELETE FROM gl_commits", []).is_err());
+    assert_eq!(
+        connection.query_row(&format!("SELECT count(*) FROM {data_table}"), [], |r| r
+            .get::<_, i64>(0))?,
+        1
+    );
     connection.execute_batch("DROP TRIGGER fail_delete_audit")?;
     app.execute(
         "alice",

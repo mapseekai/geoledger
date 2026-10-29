@@ -1,15 +1,46 @@
 """Supervisor checks using short-lived dummy processes, not the user's services."""
 import os
+import io
+import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from benchmark import monitor, native_leaks, ports, stop
+from benchmark import monitor, native_leaks, ports, register_table, stop
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_table_registration_report_and_requests_use_current_contract(self):
+        fixture = {"project": "00000000-0000-0000-0000-000000000001",
+                   "dataset": "00000000-0000-0000-0000-000000000002",
+                   "geometry_type": "point", "dimension": 2, "features": 1}
+        sent = []
+        replies = [dict(dataset="registered"),
+                   dict(type="Feature", id="000000000001", properties={"attributes": {}}, geometry=None),
+                   dict(workspace="w"), dict(version=1), dict(changes=1)]
+        def response(request, **kwargs):
+            sent.append((request.full_url.rsplit("/", 1)[-1], json.loads(request.data)))
+            return io.BytesIO(json.dumps(replies[len(sent) - 1]).encode())
+        def sql(command, **kwargs):
+            value = "gl_data_" + "0" * 32 if "SELECT storage_table" in command[-1] else "true"
+            return subprocess.CompletedProcess(command, 0, value + "\n", "")
+        with tempfile.TemporaryDirectory() as folder, \
+             patch("benchmark.urllib.request.urlopen", side_effect=response), \
+             patch("benchmark.subprocess.run", side_effect=sql), \
+             patch("benchmark.time.monotonic", side_effect=[10, 12, 20, 21]), \
+             patch("builtins.print"):
+            register_table("http://127.0.0.1:1", "test-key", fixture, "disposable-container", Path(folder), "roads")
+            report = json.loads((Path(folder) / "roads-binding.json").read_text())
+        self.assertEqual(report, dict(features=1, registration_seconds=2,
+                                      single_row_publish_seconds=1, changes=1, original_table_updated=True))
+        self.assertEqual([action for action, _ in sent], ["create_dataset", "features", "create_workspace", "save", "publish"])
+        source = sent[0][1]["postgis_table"]
+        self.assertEqual(source["schema"], "business")
+        self.assertEqual((source["id_column"], source["geometry_column"]), ("id", "geom"))
+        self.assertEqual(sent[3][1]["edits"][0]["dataset"], "registered")
+
     def test_memory_signal_keeps_evidence_when_graph_capture_fails(self):
         def inspect(command, **kwargs):
             if "-outputGraph" in command:

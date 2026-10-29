@@ -138,6 +138,7 @@ export function NameDialog({
           e.preventDefault();
           const entered = String(new FormData(e.currentTarget).get("name"));
           const name = confirmName === undefined ? entered.trim() : entered;
+          // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
           void task.run(async () => {
             if (confirmName !== undefined && name !== confirmName)
               throw new Error("请输入完全一致的名称以确认删除。");

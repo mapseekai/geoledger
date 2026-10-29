@@ -1,0 +1,32 @@
+id: test-layout-rust-inline
+snapshots:
+  "#[cfg(test)] #[path = \"other.rs\"] mod checks;":
+    labels:
+    - source: mod checks;
+      style: primary
+      start: 34
+      end: 45
+    - source: "#[cfg(test)]"
+      style: secondary
+      start: 0
+      end: 12
+  "#[cfg(test)] mod tests;":
+    labels:
+    - source: mod tests;
+      style: primary
+      start: 13
+      end: 23
+    - source: tests
+      style: secondary
+      start: 17
+      end: 22
+  mod extra_tests;:
+    labels:
+    - source: mod extra_tests;
+      style: primary
+      start: 0
+      end: 16
+    - source: extra_tests
+      style: secondary
+      start: 4
+      end: 15

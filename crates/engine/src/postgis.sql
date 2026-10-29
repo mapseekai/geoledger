@@ -1,8 +1,8 @@
 CREATE TABLE gl_purge (project text PRIMARY KEY);
 CREATE FUNCTION gl_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP='DELETE' AND TG_TABLE_NAME<>'gl_audit_events' AND EXISTS(SELECT 1 FROM gl_purge WHERE project=OLD.project) THEN RETURN OLD; END IF; RAISE EXCEPTION 'immutable version record'; END $$;
 CREATE FUNCTION gl_json_field(value text, key text) RETURNS text LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT value::jsonb ->> key $$;
-CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=16));
-INSERT INTO gl_format VALUES(true,16);
+CREATE TABLE gl_format (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL CHECK(version=19), database_oid oid NOT NULL, format_oid oid NOT NULL);
+INSERT INTO gl_format SELECT true,19,oid,'public.gl_format'::regclass::oid FROM pg_database WHERE datname=current_database();
 CREATE TABLE gl_projects (
  id text PRIMARY KEY, name text NOT NULL, head bigint NOT NULL DEFAULT 0 CHECK(head>=0),
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','archived','deleted')));
@@ -16,7 +16,7 @@ CREATE TABLE gl_datasets (
  geometry_type text NOT NULL CHECK(geometry_type IN ('point','line','polygon')),
  crs text NOT NULL DEFAULT 'EPSG:4326' CHECK(length(crs)>0 AND length(crs)<=16384),
  coordinate_dimension bigint NOT NULL DEFAULT 2 CHECK(coordinate_dimension IN (2,3)),
- postgis_source text,
+ postgis_source text, storage_table text UNIQUE, source_revision bigint NOT NULL DEFAULT 0 CHECK(source_revision>=0),
  PRIMARY KEY(project,id), UNIQUE(project,name));
 CREATE TABLE gl_workspaces (
  project text NOT NULL, id text NOT NULL, owner text NOT NULL, base_revision bigint NOT NULL CHECK(base_revision>=0),
@@ -35,6 +35,7 @@ CREATE TABLE gl_commits (
  project text NOT NULL REFERENCES gl_projects(id), revision bigint NOT NULL CHECK(revision>0),
  workspace text NOT NULL, subject text NOT NULL, message text NOT NULL, created_at text NOT NULL DEFAULT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
  PRIMARY KEY(project,revision), FOREIGN KEY(project,subject) REFERENCES gl_project_members(project,subject), FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id));
+CREATE INDEX gl_commits_workspace ON gl_commits(project,workspace);
 CREATE TABLE gl_history (
  project text NOT NULL, dataset text NOT NULL, feature_id text COLLATE "C" NOT NULL, valid_from bigint NOT NULL, valid_to bigint,
  properties text, geometry_json text, geom geometry CHECK(geom IS NULL OR ST_SRID(geom)=0),
@@ -44,11 +45,10 @@ CREATE TABLE gl_history (
  FOREIGN KEY(project,valid_to) REFERENCES gl_commits(project,revision),
  CHECK(valid_to IS NULL OR valid_to>valid_from),
  CHECK(properties IS NULL OR jsonb_typeof(properties::jsonb)='object'), CHECK(properties IS NOT NULL OR geometry_json IS NULL));
-CREATE UNIQUE INDEX history_live ON gl_history(project,dataset,feature_id) WHERE valid_to IS NULL;
 CREATE INDEX history_geom ON gl_history USING gist(geom);
 CREATE TABLE gl_commit_changes (
  project text NOT NULL, revision bigint NOT NULL, dataset text NOT NULL, feature_id text COLLATE "C" NOT NULL,
- before_value text, after_value text, PRIMARY KEY(project,revision,dataset,feature_id),
+ had_before boolean NOT NULL, has_after boolean NOT NULL, PRIMARY KEY(project,revision,dataset,feature_id),
  FOREIGN KEY(project,revision) REFERENCES gl_commits(project,revision),
  FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id));
 CREATE TABLE gl_idempotency (
@@ -87,6 +87,11 @@ CREATE TABLE gl_source_changes (
  schema_name text NOT NULL, table_name text NOT NULL, feature_id text COLLATE "C" NOT NULL,
  PRIMARY KEY(schema_name,table_name,feature_id),
  FOREIGN KEY(schema_name,table_name) REFERENCES gl_source_state ON DELETE CASCADE);
+CREATE TABLE gl_source_versions (
+ project text NOT NULL, dataset text NOT NULL, feature_id text COLLATE "C" NOT NULL,
+ valid_from bigint NOT NULL, PRIMARY KEY(project,dataset,feature_id),
+ FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id),
+ FOREIGN KEY(project,valid_from) REFERENCES gl_commits(project,revision));
 CREATE FUNCTION gl_source_track() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
  IF TG_OP='TRUNCATE' THEN
   UPDATE public.gl_source_state SET dirty_all=true WHERE schema_name=TG_TABLE_SCHEMA AND table_name=TG_TABLE_NAME;
@@ -155,3 +160,13 @@ CREATE TRIGGER gl_workspace_size_insert AFTER INSERT ON gl_workspace_changes FOR
 CREATE TRIGGER gl_workspace_size_delete AFTER DELETE ON gl_workspace_changes FOR EACH ROW EXECUTE FUNCTION gl_workspace_size();
 
 CREATE INDEX gl_users_status_id ON gl_users(status,id);
+
+CREATE TABLE gl_schema_history (
+ project text NOT NULL, dataset text NOT NULL, revision bigint NOT NULL CHECK(revision>=0), definition text NOT NULL,
+ PRIMARY KEY(project,dataset,revision), FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id) ON DELETE CASCADE);
+CREATE TABLE gl_workspace_schemas (
+ project text NOT NULL, workspace text NOT NULL, dataset text NOT NULL, definition text NOT NULL,
+ PRIMARY KEY(project,workspace,dataset), FOREIGN KEY(project,workspace) REFERENCES gl_workspaces(project,id) ON DELETE CASCADE,
+ FOREIGN KEY(project,dataset) REFERENCES gl_datasets(project,id) ON DELETE CASCADE);
+
+CREATE TRIGGER gl_schema_history_immutable BEFORE UPDATE OR DELETE ON gl_schema_history FOR EACH ROW EXECUTE FUNCTION gl_immutable();

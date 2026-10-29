@@ -1,4 +1,8 @@
 use super::*;
+use crate::repository::{
+    AuditRepository, DatasetRepository, FeatureRepository, HistoryRepository, ProjectRepository,
+    PublicationRepository, ResponseBudget, WorkspaceRepository,
+};
 
 struct MergedRow {
     d: Delta,
@@ -88,7 +92,7 @@ pub(super) enum MergeMode {
     CacheKeys,
 }
 pub(super) fn merge_plan(
-    t: &mut Transaction,
+    t: &mut (impl DatasetRepository + PublicationRepository + ResponseBudget + ?Sized),
     p: &str,
     w: &str,
     base: i64,
@@ -110,6 +114,21 @@ pub(super) fn merge_plan(
     };
     let mut after = String::new();
     let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
+    let mut schemas = t
+        .workspace_schemas(p, w)?
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    let pending_schemas = schemas.keys().cloned().collect::<BTreeSet<_>>();
+    for (dataset, definition) in &mut schemas {
+        let original = t.schema_projection(p, dataset, base)?;
+        // Only this intent's newly dropped fields may remain hidden in raw
+        // drafts. A previously retired/unknown property must still be rejected.
+        definition
+            .dropped
+            .retain(|name| !original.dropped.contains(name));
+    }
+    // Cache only per-dataset definitions: every candidate must be checked, but
+    // ordinary merge pages must never infer or fetch a schema per feature.
     // Restrict the workspace prefix before expanding joined historical JSON.
     loop {
         let (after_dataset, after_key) = cursor_parts(&after)?;
@@ -130,8 +149,25 @@ pub(super) fn merge_plan(
             match merged {
                 Ok(value) => {
                     if let Some(v) = &value {
-                        validate_candidate(v)?;
                         validate_dataset_geometry(t, p, &d.dataset, v)?;
+                        let schema = match schemas.entry(d.dataset.clone()) {
+                            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                            std::collections::btree_map::Entry::Vacant(entry) => {
+                                entry.insert(t.schema_projection(p, &d.dataset, current)?)
+                            }
+                        };
+                        if pending_schemas.contains(&d.dataset) {
+                            // A deliberate pending drop retains raw hidden values
+                            // until commit. Check its projected view without changing
+                            // the saved candidate or silently dropping other values.
+                            let mut projected = v.clone();
+                            project_properties(&mut projected.properties, schema);
+                            validate_candidate(&projected)?;
+                            validate_properties(&projected.properties, schema)?;
+                        } else {
+                            validate_candidate(v)?;
+                            validate_properties(&v.properties, schema)?;
+                        }
                     }
                     if value != o {
                         plan.change_count += 1;
@@ -192,7 +228,18 @@ pub(super) fn conflicts(head: i64, version: i64, plan: MergePlan) -> Error {
     error.body["conflicts"] = Value::Array(plan.conflicts);
     error
 }
-pub(super) fn list_conflicts(t: &mut Transaction, s: &str, r: Diff) -> Result<Value> {
+pub(super) fn list_conflicts(
+    t: &mut (
+             impl DatasetRepository
+             + ProjectRepository
+             + PublicationRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Diff,
+) -> Result<Value> {
     Page {
         after: r.after.clone(),
         limit: r.limit,
@@ -275,7 +322,19 @@ fn replay_receipt(row: Row, request: &Publish) -> Result<Value> {
     }
     codec::stored(&row.get::<_, String>(1usize)?)
 }
-pub(super) fn publish(t: &mut Transaction, s: &str, r: Publish) -> Result<Value> {
+pub(super) fn publish(
+    t: &mut (
+             impl AuditRepository
+             + DatasetRepository
+             + ProjectRepository
+             + PublicationRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Publish,
+) -> Result<Value> {
     text(&r.message, 2048)?;
     id(&r.project)?;
     let request_id = r.request_id.to_string();
@@ -298,7 +357,8 @@ pub(super) fn publish(t: &mut Transaction, s: &str, r: Publish) -> Result<Value>
         &r.workspace,
         Some(r.expected_workspace_version),
     )?;
-    let plan = merge_plan(
+    check_schema_head(t, &r.project, &r.workspace, base, current)?;
+    let mut plan = merge_plan(
         t,
         &r.project,
         &r.workspace,
@@ -310,6 +370,7 @@ pub(super) fn publish(t: &mut Transaction, s: &str, r: Publish) -> Result<Value>
     if !plan.conflict_keys.is_empty() {
         return Err(conflicts(current, version, plan));
     }
+    plan.change_count += t.stage_schema_merge(&r.project, &r.workspace, current)?;
     let revision = current.checked_add(1).ok_or_else(bad)?;
     t.append_commit(&r.project, revision, &r.workspace, s, &r.message)?;
     // Set-based writes use the already validated, three-way merged candidates.
@@ -318,6 +379,8 @@ pub(super) fn publish(t: &mut Transaction, s: &str, r: Publish) -> Result<Value>
     t.append_history(&r.project, revision)?;
     t.advance_head(&r.project, revision)?;
     let v = bump(t, &r.project, &r.workspace, "published")?;
+    t.clear_deltas(&r.project, &r.workspace)?;
+    t.clear_workspace_schemas(&r.project, &r.workspace)?;
     let result = json!({"revision":revision,"workspace":r.workspace,"version":v,"status":"published","changes":plan.change_count});
     t.save_receipt(
         &r.project,
@@ -338,7 +401,19 @@ pub(super) struct Rebase {
     expected_head: i64,
     resolutions: Vec<Edit>,
 }
-pub(super) fn resolve(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> {
+pub(super) fn resolve(
+    t: &mut (
+             impl AuditRepository
+             + DatasetRepository
+             + ProjectRepository
+             + PublicationRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Rebase,
+) -> Result<Value> {
     let current = head(t, &r.project, true)?;
     let (base, _, _) = workspace(
         t,
@@ -352,6 +427,12 @@ pub(super) fn resolve(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> 
     }
     if r.resolutions.is_empty() || r.resolutions.len() > 100 {
         return Err(bad());
+    }
+    if base != current && !t.workspace_schemas(&r.project, &r.workspace)?.is_empty() {
+        return Err(Error::new(
+            409,
+            "retain or explicitly clear the schema intent before resolving conflicts",
+        ));
     }
     let plan = merge_plan(
         t,
@@ -373,6 +454,9 @@ pub(super) fn resolve(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> 
         let value = e.feature.map(|f| normalize(f, &e.feature_id)).transpose()?;
         if let Some(v) = &value {
             validate_dataset_geometry(t, &r.project, &e.dataset, v)?;
+            let schema =
+                effective_projection(t, &r.project, &e.dataset, current, Some(&r.workspace))?;
+            validate_properties(&v.properties, &schema)?;
         }
         put_delta(
             t,
@@ -395,7 +479,20 @@ pub(super) fn resolve(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> 
     Ok(json!({"head":current,"version":version,"remaining_conflicts":remaining.len()}))
 }
 
-pub(super) fn rebase(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> {
+pub(super) fn rebase(
+    t: &mut (
+             impl AuditRepository
+             + DatasetRepository
+             + FeatureRepository
+             + ProjectRepository
+             + PublicationRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Rebase,
+) -> Result<Value> {
     let current = head(t, &r.project, true)?;
     let (base, version, _) = workspace(
         t,
@@ -406,6 +503,12 @@ pub(super) fn rebase(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> {
     )?;
     if current != r.expected_head {
         return Err(stale());
+    }
+    if base != current && !t.workspace_schemas(&r.project, &r.workspace)?.is_empty() {
+        return Err(Error::new(
+            409,
+            "retain or explicitly clear the schema intent before rebasing",
+        ));
     }
     let mut plan = merge_plan(
         t,
@@ -424,6 +527,9 @@ pub(super) fn rebase(t: &mut Transaction, s: &str, r: Rebase) -> Result<Value> {
         let value = e.feature.map(|f| normalize(f, &e.feature_id)).transpose()?;
         if let Some(v) = &value {
             validate_dataset_geometry(t, &r.project, &e.dataset, v)?;
+            let schema =
+                effective_projection(t, &r.project, &e.dataset, current, Some(&r.workspace))?;
+            validate_properties(&v.properties, &schema)?;
         }
         if value != at_revision(t, &r.project, &e.dataset, &e.feature_id, current)? {
             t.stage_resolution(
@@ -456,7 +562,18 @@ pub(super) struct Restore {
     project: String,
     revision: i64,
 }
-pub(super) fn restore(t: &mut Transaction, s: &str, r: Restore) -> Result<Value> {
+pub(super) fn restore(
+    t: &mut (
+             impl AuditRepository
+             + HistoryRepository
+             + ProjectRepository
+             + PublicationRepository
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Restore,
+) -> Result<Value> {
     head(t, &r.project, true)?;
     membership(t, &r.project, s, true)?;
     t.commit_exists(&r.project, r.revision)?
@@ -464,6 +581,7 @@ pub(super) fn restore(t: &mut Transaction, s: &str, r: Restore) -> Result<Value>
     let result = new_workspace(t, s, &r.project, r.revision)?;
     let w = result["workspace"].as_str().ok_or_else(bad)?;
     t.restore_deltas(&r.project, r.revision, w)?;
+    t.restore_workspace_schemas(&r.project, w, r.revision - 1, r.revision)?;
     audit(
         t,
         &r.project,

@@ -2,6 +2,7 @@
 //!
 //! GL_TEST_TLS_DATABASE_URL: a TLS-only server (pg_hba `hostssl`) with `sslrootcert=<CA>`,
 //! database geoledger_test. GL_TEST_PLAINTEXT_DATABASE_URL: a server with `ssl=off`.
+//! GL_TEST_TLS_WRONG_HOST_DATABASE_URL: the TLS server reached using a name absent from its certificate.
 use geoledger_engine::{Application, Storage};
 use std::time::Duration;
 
@@ -26,6 +27,19 @@ fn verify_full_verify_ca_and_require_connect_over_tls() -> Result<(), Box<dyn st
     app(&with_param(&dsn, "sslmode=verify-full")).check_schema()?;
     app(&with_param(&dsn, "sslmode=verify-ca")).check_schema()?;
     app(&with_param(&dsn, "sslmode=require")).check_schema()?;
+    assert!(
+        app(&with_param(&dsn, "sslmode=disable"))
+            .check_schema()
+            .is_err(),
+        "TLS-only server accepted plaintext"
+    );
+    let wrong_host = std::env::var("GL_TEST_TLS_WRONG_HOST_DATABASE_URL")?;
+    // The same reachable server and trusted chain succeed without hostname verification.
+    app(&with_param(&wrong_host, "sslmode=verify-ca")).check_schema()?;
+    assert!(
+        app(&wrong_host).check_schema().is_err(),
+        "wrong hostname accepted"
+    );
     // A wrong trust anchor is rejected for verifying modes.
     let dir = tempfile::tempdir()?;
     let other = dir.path().join("other-ca.pem");

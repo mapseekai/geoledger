@@ -2,6 +2,7 @@
 import {
   call,
   type Commit,
+  type HistoryPage,
   type Project,
   type Workspace,
 } from "@/lib/browser-api";
@@ -95,14 +96,14 @@ export function VersionGraph({
       const ceiling = BigInt(upper);
       if (ceiling === 0n) return { rows: [] as Commit[], next: undefined };
       const after = ceiling > PAGE_SIZE ? ceiling - PAGE_SIZE : 0n;
-      const fetched = await call<Commit[]>({
+      const fetched = await call<HistoryPage>({
         action: "history",
         project: project.id,
         after: after.toString(),
         limit: Number(PAGE_SIZE),
       });
       const page = oldestFirst(
-        fetched.filter((commit) => BigInt(commit.revision) <= ceiling),
+        fetched.commits.filter((commit) => BigInt(commit.revision) <= ceiling),
       );
       const oldest = page.at(0);
       return {

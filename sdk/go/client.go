@@ -1,4 +1,7 @@
 // Package geoledger provides a transport-independent spatial version client.
+// Create a Client with Dial, close it when finished, and pass a non-nil Context
+// to service operations. Failures use *Error; errors.As retrieves the stable
+// business code without exposing generated transport types.
 package geoledger
 
 import (
@@ -7,6 +10,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"net"
+	"net/url"
+	"os"
+	"strings"
+	"sync/atomic"
+	"time"
+
 	pb "github.com/mapseekai/geoledger/sdk/go/internal/geoledgerv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -15,16 +26,13 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"math"
-	"net"
-	"net/url"
-	"os"
-	"strings"
-	"sync/atomic"
-	"time"
 )
 
 // Error is the stable business error contract; no transport imports are needed.
+// Uncertain means the server may have applied a request despite the failure.
+// For publication recovery, retry the original Publication unchanged rather
+// than generating a new request ID. A canceled local lock wait is certain and
+// does not change the outcome of an earlier uncertain publication.
 type Error struct {
 	Code      string     `json:"code"`
 	Message   string     `json:"message"`
@@ -82,6 +90,10 @@ func failure(err error) error {
 	return result
 }
 
+// Client owns a reusable service connection and is safe for concurrent calls.
+// Its zero value is not usable; obtain one from Dial or DialWithOptions and call
+// Close when finished. Do not copy a Client after use or mutate request data
+// while a call is in progress. Network methods require a non-nil Context.
 type Client struct {
 	rpc    pb.GeoLedgerClient
 	conn   *grpc.ClientConn
@@ -92,6 +104,9 @@ type Client struct {
 // unless AllowInsecure is set (or GL_ALLOW_INSECURE_TRANSPORT=true): the API Key would
 // otherwise cross the network unencrypted.
 type DialOptions struct {
+	// Timeout must be positive. It is applied to RPCs only when the supplied
+	// Context has no deadline; an existing deadline is not shortened. This
+	// default does not bound time spent waiting for a Workspace operation.
 	Timeout       time.Duration
 	AllowInsecure bool
 }
@@ -114,13 +129,21 @@ func insecureOptIn() bool {
 	return false
 }
 
-// Dial accepts a service URL and an API Key. It never retries writes automatically.
+// Dial creates a lazy connection to a service URL using an API Key and a
+// 30-second default RPC timeout. It does not verify connectivity or credentials
+// until a request is made and never retries writes automatically.
+// The caller owns the returned Client and must Close it.
 func Dial(endpoint, apiKey string) (*Client, error) {
 	return DialWithOptions(endpoint, apiKey, DialOptions{Timeout: 30 * time.Second})
 }
+
+// DialWithTimeout is Dial with a positive default RPC timeout.
 func DialWithTimeout(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
 	return DialWithOptions(endpoint, apiKey, DialOptions{Timeout: timeout})
 }
+
+// DialWithOptions validates the endpoint, API Key and options, then creates a
+// lazy connection. A zero DialOptions is invalid because Timeout must be positive.
 func DialWithOptions(endpoint, apiKey string, options DialOptions) (*Client, error) {
 	timeout := options.Timeout
 	u, err := url.Parse(endpoint)
@@ -156,6 +179,10 @@ func DialWithOptions(endpoint, apiKey string, options DialOptions) (*Client, err
 	}
 	return &Client{rpc: pb.NewGeoLedgerClient(conn), conn: conn}, nil
 }
+
+// Close releases the connection and interrupts outstanding RPCs. It also makes
+// Workspace handles using this Client unusable for further service operations.
+// Coordinate shutdown with callers; Close does not wait for their work to finish.
 func (c *Client) Close() error { c.closed.Store(true); return c.conn.Close() }
 func call[Request any, Reply proto.Message](c *Client, ctx context.Context, rpc func(context.Context, *Request, ...grpc.CallOption) (Reply, error), request *Request, output any) error {
 	if ctx == nil {
@@ -272,6 +299,34 @@ func decode(reply proto.Message, out any) error {
 			return err
 		}
 	}
+	// New schema collections have the same empty-array contract in every SDK.
+	switch reply.(type) {
+	case *pb.SchemaReply:
+		if _, present := obj["fields"]; !present {
+			obj["fields"] = json.RawMessage("[]")
+		}
+	case *pb.DiffReply, *pb.CommitReply, *pb.ChangeSummaryReply:
+		var changes []map[string]json.RawMessage
+		if raw := obj["schema_changes"]; len(raw) > 0 {
+			if err = json.Unmarshal(raw, &changes); err != nil {
+				return err
+			}
+		}
+		if changes == nil {
+			changes = []map[string]json.RawMessage{}
+		}
+		for _, change := range changes {
+			for _, key := range []string{"before", "after"} {
+				if _, present := change[key]; !present {
+					change[key] = json.RawMessage("[]")
+				}
+			}
+		}
+		obj["schema_changes"], err = json.Marshal(changes)
+		if err != nil {
+			return err
+		}
+	}
 	raw, err = json.Marshal(obj)
 	if err != nil {
 		return err
@@ -293,6 +348,9 @@ func (c *Client) Project(ctx context.Context, id string) (Project, error) {
 	e := call(c, ctx, c.rpc.GetProject, &pb.ProjectRequest{Project: id}, &r)
 	return r, e
 }
+
+// Projects returns one ID-ordered page; continue with the last returned ID
+// as Page.After. An empty page ends iteration.
 func (c *Client) Projects(ctx context.Context, page Page) ([]Project, error) {
 	var r struct {
 		Projects []Project `json:"projects"`
@@ -305,7 +363,8 @@ func (c *Client) SetMember(ctx context.Context, project, subject, role string) e
 	return call(c, ctx, c.rpc.SetMember, &pb.MemberRequest{Project: project, Subject: subject, Role: role}, &r)
 }
 
-// Members lists active members ordered by subject.
+// Members lists active members ordered by subject; continue with the last
+// Member.Subject as Page.After. An empty page ends iteration.
 func (c *Client) Members(ctx context.Context, project string, page Page) ([]Member, error) {
 	var r struct {
 		Members []Member `json:"members"`
@@ -360,6 +419,9 @@ func (c *Client) CreateDatasetWithCRS(ctx context.Context, project, name, geomet
 	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, GeometryType: geometryType, CoordinateDimension: coordinateDimension, Crs: crs}, &r)
 	return r, e
 }
+
+// Datasets returns one ID-ordered page; continue with the last returned ID
+// as Page.After. An empty page ends iteration.
 func (c *Client) Datasets(ctx context.Context, project string, page Page) ([]Dataset, error) {
 	var r struct {
 		Datasets []Dataset `json:"datasets"`
@@ -373,6 +435,9 @@ func limit(n int64) *int64 {
 	}
 	return &n
 }
+
+// CreateWorkspace creates an open draft handle tied to this Client. Keep one
+// handle per concurrently edited draft so its optimistic version stays current.
 func (c *Client) CreateWorkspace(ctx context.Context, project string) (*Workspace, error) {
 	var info WorkspaceInfo
 	if err := call(c, ctx, c.rpc.CreateWorkspace, &pb.ProjectRequest{Project: project}, &info); err != nil {
@@ -380,6 +445,9 @@ func (c *Client) CreateWorkspace(ctx context.Context, project string) (*Workspac
 	}
 	return &Workspace{client: c, project: project, info: info}, nil
 }
+
+// Workspace loads a draft handle and its current optimistic version. Independent
+// handles are not coordinated; conflicts require an explicit Refresh or resolution.
 func (c *Client) Workspace(ctx context.Context, project, id string) (*Workspace, error) {
 	var info WorkspaceInfo
 	if err := call(c, ctx, c.rpc.GetWorkspace, &pb.WorkspaceRequest{Project: project, Workspace: id}, &info); err != nil {
@@ -387,6 +455,9 @@ func (c *Client) Workspace(ctx context.Context, project, id string) (*Workspace,
 	}
 	return &Workspace{client: c, project: project, info: info}, nil
 }
+
+// Workspaces returns one ID-ordered page; continue with the last returned ID
+// as Page.After. An empty page ends iteration.
 func (c *Client) Workspaces(ctx context.Context, project string, page Page) ([]WorkspaceInfo, error) {
 	var r struct {
 		Workspaces []WorkspaceInfo `json:"workspaces"`
@@ -404,12 +475,22 @@ func (c *Client) Features(ctx context.Context, project, dataset string, query Fe
 	e := call(c, ctx, c.rpc.Features, &pb.FeaturesRequest{Project: project, Dataset: dataset, Workspace: query.Workspace, Revision: query.Revision, FeatureId: query.FeatureID, Bbox: query.Bbox, After: query.After, Limit: limit(query.Limit)}, &r)
 	return r, e
 }
-func (c *Client) History(ctx context.Context, project string, after int64, n int64) ([]Commit, error) {
-	var r struct {
-		Commits []Commit `json:"commits"`
+
+// Schema returns the fields at a published revision or workspace version.
+func (c *Client) Schema(ctx context.Context, project, dataset string, query SchemaQuery) (DatasetSchema, error) {
+	var r DatasetSchema
+	if query.Workspace != nil && query.Revision != nil {
+		return r, invalid("schema query cannot combine workspace and revision")
 	}
+	err := call(c, ctx, c.rpc.Schema, &pb.SchemaRequest{Project: project, Dataset: dataset, Workspace: query.Workspace, Revision: query.Revision}, &r)
+	return r, err
+}
+
+// History returns one ascending page. Continue with HistoryPage.NextAfter; nil ends this snapshot.
+func (c *Client) History(ctx context.Context, project string, after int64, n int64) (HistoryPage, error) {
+	var r HistoryPage
 	e := call(c, ctx, c.rpc.History, &pb.HistoryRequest{Project: project, After: after, Limit: limit(n)}, &r)
-	return r.Commits, e
+	return r, e
 }
 func (c *Client) WorkspaceSummary(ctx context.Context, project, workspace string) (ChangeSummary, error) {
 	var r ChangeSummary
@@ -421,6 +502,9 @@ func (c *Client) CommitSummary(ctx context.Context, project string, revision int
 	e := call(c, ctx, c.rpc.CommitSummary, &pb.SummaryCommitRequest{Project: project, Revision: revision}, &r)
 	return r, e
 }
+
+// Commit returns one page of revision changes. Continue with NextAfter as
+// Page.After, retaining the same revision. A nil NextAfter ends iteration.
 func (c *Client) Commit(ctx context.Context, project string, revision int64, page Page) (CommitChanges, error) {
 	var r CommitChanges
 	e := call(c, ctx, c.rpc.Commit, &pb.CommitRequest{Project: project, Revision: revision, After: page.After, Limit: limit(page.Limit)}, &r)
@@ -431,6 +515,10 @@ func (c *Client) Audit(ctx context.Context, project string, after, n int64) (Aud
 	e := call(c, ctx, c.rpc.Audit, &pb.HistoryRequest{Project: project, After: after, Limit: limit(n)}, &r)
 	return r, e
 }
+
+// Publish sends a complete publication intent, including its original request ID.
+// Use this to recover a serialized intent; retry every field unchanged after an
+// uncertain outcome. It does not update any existing Workspace handle.
 func (c *Client) Publish(ctx context.Context, intent Publication) (PublicationResult, error) {
 	var r PublicationResult
 	e := call(c, ctx, c.rpc.Publish, &pb.PublishRequest{Project: intent.Project, Workspace: intent.Workspace, ExpectedWorkspaceVersion: intent.ExpectedWorkspaceVersion, RequestId: intent.RequestID, Message: intent.Message}, &r)
@@ -444,8 +532,8 @@ func (c *Client) Restore(ctx context.Context, project string, revision int64) (*
 	return &Workspace{client: c, project: project, info: info}, nil
 }
 
-// TrackTable tracks an existing PostGIS table and creates its initial published revision.
-func (c *Client) TrackTable(ctx context.Context, project, name string, source PostgisTable) (Dataset, error) {
+// RegisterTable registers an existing PostGIS table and creates its initial published revision.
+func (c *Client) RegisterTable(ctx context.Context, project, name string, source PostgisTable) (Dataset, error) {
 	var r Dataset
 	e := call(c, ctx, c.rpc.CreateDataset, &pb.DatasetRequest{Project: project, Name: name, PostgisTable: &pb.PostgisTable{Schema: source.Schema, Table: source.Table, IdColumn: source.IDColumn, GeometryColumn: source.GeometryColumn}}, &r)
 	return r, e

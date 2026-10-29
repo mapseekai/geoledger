@@ -97,6 +97,7 @@ export function ChangeList({
     [reloadKey],
   );
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- fetchPage catches request/parse failures and reports them in component state.
     void fetchPage("", false);
   }, [fetchPage, retry]);
   const counts = useMemo(() => {

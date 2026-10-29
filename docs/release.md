@@ -4,23 +4,25 @@
 
 ## 可重复构建
 
-提交到源码的 Go、Python、TypeScript 协议绑定由 `grpcio-tools==1.78.0` 内置的同一 protoc 生成，Go 插件固定为 `protoc-gen-go v1.36.12`、`protoc-gen-go-grpc 1.5.1`，ts-proto 固定为 `2.13.0`。在 Python 虚拟环境安装工具，执行 `PYTHON=<虚拟环境解释器> scripts/generate-sdk.sh`。脚本在写入前核对版本；连续生成两次的文件摘要应一致，CI 检查生成结果与提交完全相同。
+提交到源码的 Go、Python、TypeScript 协议绑定由 `grpcio-tools==1.78.0` 内置的同一 protoc 生成，Go 插件固定为 `protoc-gen-go v1.36.12`、`protoc-gen-go-grpc 1.5.1`，ts-proto 固定为 `2.18.0`。在 Python 虚拟环境安装工具，执行 `PYTHON=<虚拟环境解释器> scripts/generate-sdk.sh`。脚本在写入前核对版本；连续生成两次的文件摘要应一致，CI 检查生成结果与提交完全相同。
 
 容器构建与运行基础镜像使用固定 digest；构建工具来源、SHA256 与版本由 `.security` 锁文件管理。AMD64 与 ARM64 分别在 `ubuntu-24.04`、`ubuntu-24.04-arm` 原生 runner 构建，不使用 QEMU 编译。每个架构的构建阶段与运行阶段分别扫描；合并时保留原始 image、SBOM 和 provenance blobs，再对完整双架构索引扫描并验收。Rust 扫描清单按包名和版本逐项覆盖 `Cargo.lock`，系统包及 npm、编译器清单一并校验。发布直接复制通过检查的 OCI blobs，核验 digest 后签名。Windows 原生依赖按校验和安装并运行真实存储启动测试。
 
 ## 候选版本与发布配置
 
-当前候选版本为 `0.3.0-alpha.4`，Python 包使用等价版本 `0.3.0a4`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.4`，将通过检查的提交作为候选 SHA。
+当前候选版本为 `0.3.0-alpha.7`，Python 包使用等价版本 `0.3.0a7`。创建标签前执行 `python3 scripts/check-release-version.py --tag v0.3.0-alpha.7`，将通过检查的提交作为候选 SHA。
 
 ### 仅源码与 Docker Hub 的预发布
 
 [Source prerelease and Docker Hub](../.github/workflows/source-docker-release.yml) 是独立的手动入口，仅发布 GitHub prerelease 和 `docker.io/zwishing/geoledger:<版本>`，覆盖 Linux AMD64 / ARM64；不分发 npm/PyPI 包、Go 模块标签或独立二进制。完整 SDK 发布继续使用下文的既有流程。
 
-先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（完整 40 位提交 SHA）及 `release_tag`（例如 `v0.3.0-alpha.4`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
+先将版本准备与流程改动提交至 main，再在 GitHub Actions 中选择该工作流和 main，填写 `source_sha`（当前 main HEAD 的完整 40 位提交 SHA；重跑可使用已固定标签的原候选）及 `release_tag`（例如 `v0.3.0-alpha.7`）。不要先从本地推送该版本 tag，否则会启动完整 SDK 发布链。工作流验证候选属于 main、包版本一致、已有 tag 没有冲突，以及既有 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 配置存在；不新增凭据。
 
-发布顺序为同 SHA 完整 CI、[性能验收脚本](../scripts/release-performance.sh)、受检构建阶段和双架构运行镜像、不可变 digest 推送和签名、两架构原生拉取与 SDK 验收，最后才创建 tag 并公开 prerelease。性能检查保留 20 并发、300 秒和原 p95 门限，使用显式 CRS 的 10,000 条合成要素及一次性数据库。镜像验收检查源码 revision、服务版本、统一容器健康状态、重启后的 API Key 及 SDK 业务流程。
+预检以 `contents: write` 的内置 `GITHUB_TOKEN` 创建并核对候选 tag，之后才启动同 SHA 完整 CI、[性能验收脚本](../scripts/release-performance.sh)、受检构建阶段和双架构运行镜像、不可变 digest 推送和签名、两架构原生拉取与 SDK 验收，最后公开 prerelease。性能检查保留 20 并发、300 秒和原 p95 门限，使用显式 CRS 的 10,000 条合成要素及一次性数据库。镜像验收检查源码 revision、服务版本、统一容器健康状态、重启后的 API Key 及 SDK 业务流程。
 
-工作流使用仓库 `GITHUB_TOKEN` 创建 tag，避免递归触发完整 SDK 流程。已有镜像标签指向不同 digest、已有公开 Release、候选 SHA 或验收证据不一致时停止；不会覆盖已有产物。中断后优先重跑同一次运行的失败 job，保留已通过的产物。镜像推送后若原生验收失败，GitHub prerelease 保持未公开；检查失败证据，不把镜像存在当作整个发布完成。
+工作流使用仓库 `GITHUB_TOKEN` 创建 tag，避免递归触发完整 SDK 流程。新标签只允许指向预检时的 main HEAD，避免历史工作流差异需要额外 Workflows 写权限；若 main 在预检中前移或权限不足，会在构建与镜像推送前失败。标签固定后 main 可以继续前进，重跑只接受同一 SHA，完成阶段绝不补建或移动标签。失败的验收可能留下候选 tag，但不代表公开 Release，也不会自动删除或复用为其他提交。
+
+Release 查询使用带认证、分页的 releases 列表匹配 `tag_name`，同时识别草稿与公开版本。创建草稿后直接核对创建响应中的 ID 和身份，不依赖列表立即可见；查询失败也不会被当作不存在。已上传附件仍逐项校验摘要，公开版本不补写附件。已有镜像标签指向不同 digest、已有公开 Release、候选 SHA 或验收证据不一致时停止；不会覆盖已有产物。中断后优先重跑同一次运行的失败 job，保留已通过的产物。镜像推送后若原生验收失败，GitHub prerelease 保持未公开；检查失败证据，不把镜像存在当作整个发布完成。
 
 签名由被调用的 `secure-images.yml` 产生。验收精确要求证书身份 `https://github.com/mapseekai/geoledger/.github/workflows/secure-images.yml@refs/heads/main` 和 issuer `https://token.actions.githubusercontent.com`；调用方工作流名称不能代替签名方身份。
 
@@ -28,17 +30,17 @@
 
 运行 `38732087093` 的同 SHA CI、性能、两架构原生构建、扫描、Docker Hub 推送和签名已成功，验收因预期签名身份写成调用方而失败。镜像源码候选仍为 `6dccccd5ebc655f520a08c374823cc1389651f81`，保留标签 `0.3.0-alpha.4` 对应的 `sha256:15474870959a39598366f6fb455044e7e5bcd06b222c71e2dd60f54646dd1b3b`。
 
-在 main 手动启动 [Recover alpha.4 source prerelease](../.github/workflows/source-release-recovery.yml)，无需输入参数。该一次性入口核对原运行全部前置 job、固定 artifact ID 和归档 SHA256、来源 SHA 及当前 registry 标签。使用全新的匿名 Docker 配置，在 AMD64 / ARM64 原生 runner 验证精确签名身份并按 digest 拉取，执行健康、版本、源码 revision、重启前后 SDK smoke。两边均成功后再次核对标签，只创建指向原候选的 Git tag 和 GitHub prerelease，附上原性能证据、镜像清单、恢复记录及新 smoke 结果。
+在 main 手动启动 [Recover alpha.4 source prerelease](../.github/workflows/source-release-recovery.yml)，无需输入参数。该一次性入口核对原运行全部前置 job、固定 artifact ID 和归档 SHA256、来源 SHA 及当前 registry 标签。使用全新的匿名 Docker 配置，在 AMD64 / ARM64 原生 runner 验证精确签名身份并按 digest 拉取，执行健康、版本、源码 revision、重启前后 SDK smoke。两边均成功后再次核对标签，要求指向原候选的 Git tag 已存在，随后创建 GitHub prerelease，附上原性能证据、镜像清单、恢复记录及新 smoke 结果。
 
 恢复流程不重新构建、推送或签名镜像，不发布 SDK，也不使用 registry 凭据。修复流程的 main 提交与镜像源码 SHA 分开记录。不要为这次恢复重跑旧运行（它仍使用错误的预期身份），也不要启动正常构建流程试图覆盖已发布标签。原产物过期、校验不一致或已有公开 Release 时停止，重新评估恢复方案。
 
-格式 16 需要初始化新数据库；上一发布的格式 14 旧库、备份及旧版程序独立保留。新流程不执行业务部署或旧数据迁移。
+格式 19 需要初始化新数据库；旧格式数据库及逻辑导出由当前版本明确拒绝，旧库、备份及匹配的旧版程序独立保留。新流程不执行业务部署或旧数据迁移。
 
 GitHub 的 `release` environment 配置 `NPM_TOKEN` secret，授予 `@geoledger/client` 的发布权限。PyPI 项目 `geoledger-client` 配置 Trusted Publisher：仓库 `mapseekai/geoledger`、工作流 `release.yml`、environment `release`；完成绑定后将该 environment 的 `PYPI_TRUSTED_PUBLISHING` variable 设置为 `true`。凭据由仓库与包管理员在平台设置中维护。预检验证配置存在，实际发布验证授权生效。
 
 ## 发布顺序
 
-候选提交先通过同 SHA 的完整 CI、双后端 SDK、受限数据库角色原生恢复与浏览器测试。npm 与 PyPI 的发布配置在构建交付前检查。二进制和镜像完成后创建草稿 Release，验证统一 combined 镜像清单属于当前 SHA；SDK 分发成功后才公开 Release。npm 包的 `repository` 指向实际源码仓库及 `sdk/ts` 目录，与 provenance 的发布来源一致。Rust 客户端按同一 tag 从 Git 引用。
+候选提交先通过同 SHA 的完整 CI、双后端 SDK、真实数据库 TLS 校验、受限数据库角色原生恢复与浏览器测试。PostGIS 门禁必须执行两个原先可选的 TLS 测试，并在 verify-full 下完成恢复后业务验证。npm 与 PyPI 的发布配置在构建交付前检查。二进制和镜像完成后创建草稿 Release，验证统一 combined 镜像清单属于当前 SHA；SDK 分发成功后才公开 Release。npm 包的 `repository` 指向实际源码仓库及 `sdk/ts` 目录，与 provenance 的发布来源一致。Rust 客户端按同一 tag 从 Git 引用。
 
 发布中断后使用同一次运行的失败 job 重跑，保留已经验收的构建产物。草稿 Release 校验标签提交和已有资产 SHA256，补传缺失资产；npm/PyPI 校验已有包的文件内容与权限（忽略归档时间及压缩差异），仅发布缺失包；Go 标签必须解析到候选 SHA。已有内容不一致时流程停止，保留原产物用于排查。SDK 安装验收连接打包后的服务器，执行新增、修改、删除、历史读取及发布重试，成功后公开 Release。
 

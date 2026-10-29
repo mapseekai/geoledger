@@ -29,5 +29,5 @@ grpc.geoledger.example {
 }
 console.geoledger.example {
 	import hsts
-	reverse_proxy console:3000
+	reverse_proxy geoledger:3000
 }

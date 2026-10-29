@@ -1,4 +1,8 @@
 use super::*;
+use crate::repository::{
+    AuditRepository, DatasetRepository, FeatureRepository, HistoryRepository, ProjectRepository,
+    ResponseBudget, WorkspaceRepository,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -14,7 +18,18 @@ pub(super) struct Features {
     #[serde(default = "page_size")]
     limit: i64,
 }
-pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Value> {
+pub(super) fn features(
+    t: &mut (
+             impl DatasetRepository
+             + FeatureRepository
+             + ProjectRepository
+             + ResponseBudget
+             + WorkspaceRepository
+             + ?Sized
+         ),
+    s: &str,
+    r: Features,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     dataset(t, &r.project, &r.dataset)?;
     let crs: String = t
@@ -33,8 +48,14 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
         text(k, 256)?;
     }
     let (revision, workspace_version) = if let Some(w) = &r.workspace {
-        let (base, version, _) = workspace(t, s, &r.project, w, None)?;
-        (base, Some(version))
+        let (base, version, status) = workspace(t, s, &r.project, w, None)?;
+        let revision = if status == "published" {
+            t.workspace_publication_revision(&r.project, w)?
+                .ok_or_else(|| Error::new(500, "missing workspace publication"))?
+        } else {
+            base
+        };
+        (revision, Some(version))
     } else {
         let h = head(t, &r.project, false)?;
         let v = r.revision.unwrap_or(h);
@@ -43,6 +64,8 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
         }
         (v, None)
     };
+    let definition =
+        effective_projection(t, &r.project, &r.dataset, revision, r.workspace.as_deref())?;
     let bbox = r.bbox.unwrap_or([-180., -90., 180., 90.]);
     if bbox.iter().any(|x| !x.is_finite()) || bbox[0] > bbox[2] || bbox[1] > bbox[3] {
         return Err(bad());
@@ -50,25 +73,28 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
     // Remove ALL shadowed base rows before spatial filtering, including deletes and moves.
     let mut values = Vec::new();
     let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
-    let mut after = r.after.clone();
+    let mut query = crate::repository::FeatureQuery {
+        project: r.project,
+        dataset: r.dataset,
+        revision,
+        workspace: r.workspace,
+        after: r.after,
+        feature_id: r.feature_id,
+        bbox: r.bbox,
+        limit: r.limit,
+    };
     while values.len() < r.limit as usize {
-        let batch_limit = (r.limit - values.len() as i64).min(32);
-        let rows = t.feature_page(&crate::repository::FeatureQuery {
-            project: r.project.clone(),
-            dataset: r.dataset.clone(),
-            revision,
-            workspace: r.workspace.clone(),
-            after: after.clone(),
-            feature_id: r.feature_id.clone(),
-            bbox: r.bbox,
-            limit: batch_limit,
-        })?;
+        query.limit = (r.limit - values.len() as i64).min(32);
+        let rows = t.feature_page(&query)?;
         if rows.is_empty() {
             break;
         }
         for row in rows {
-            after = row.get(0usize)?;
-            let properties: Value = codec::stored(&row.get::<_, String>(1usize)?)?;
+            query.after = row.get(0usize)?;
+            let mut properties: Value = codec::stored(&row.get::<_, String>(1usize)?)?;
+            if let Some(properties) = properties.as_object_mut() {
+                project_properties(properties, &definition);
+            }
             let geometry: Value = row
                 .get::<_, Option<String>>(2usize)?
                 .map(|s| serde_json::from_str(&s))
@@ -80,14 +106,19 @@ pub(super) fn features(t: &mut Transaction, s: &str, r: Features) -> Result<Valu
             values.push(item);
         }
     }
-    if r.feature_id.is_some() {
+    if query.feature_id.is_some() {
         let mut feature = values.pop().ok_or_else(missing)?;
         feature["crs"] = json!(crs);
         feature["revision"] = json!(revision);
         feature["workspace_version"] = json!(workspace_version);
         return Ok(feature);
     }
-    let next = values.last().and_then(|x| x.get("id")).cloned();
+    // Probe the same visible snapshot without loading an extra feature's payload.
+    let next = if values.len() == r.limit as usize && t.feature_exists(&query)? {
+        Some(query.after)
+    } else {
+        None
+    };
     Ok(
         json!({"type":"FeatureCollection","crs":crs,"features":values,"revision":revision,"workspace_version":workspace_version,"next_after":next}),
     )
@@ -102,7 +133,11 @@ pub(super) struct Diff {
     #[serde(default = "page_size")]
     pub(super) limit: i64,
 }
-pub(super) fn diff(t: &mut Transaction, s: &str, r: Diff) -> Result<Value> {
+pub(super) fn diff(
+    t: &mut (impl DatasetRepository + ProjectRepository + ResponseBudget + WorkspaceRepository + ?Sized),
+    s: &str,
+    r: Diff,
+) -> Result<Value> {
     let (base, version, _) = workspace(t, s, &r.project, &r.workspace, None)?;
     Page {
         after: r.after.clone(),
@@ -135,7 +170,18 @@ pub(super) fn diff(t: &mut Transaction, s: &str, r: Diff) -> Result<Value> {
             result.push(item);
         }
     }
-    Ok(json!({"base_revision":base,"version":version,"changes":result}))
+    // Probe only keys in the same snapshot: an unreturned large feature must
+    // not consume the current page's database/response byte budget.
+    let next = if result.len() == r.limit as usize {
+        let (dataset, key) = cursor_parts(&after)?;
+        t.diff_has_after(&r.project, &r.workspace, &dataset, &key)?
+            .then_some(after)
+    } else {
+        None
+    };
+    Ok(
+        json!({"base_revision":base,"version":version,"changes":result,"next_after":next,"schema_changes":workspace_schema_diff(t,&r.project,&r.workspace,base)?}),
+    )
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -146,13 +192,25 @@ pub(super) struct History {
     #[serde(default = "page_size")]
     limit: i64,
 }
-pub(super) fn history(t: &mut Transaction, s: &str, r: History) -> Result<Value> {
+pub(super) fn history(
+    t: &mut (impl HistoryRepository + ProjectRepository + ?Sized),
+    s: &str,
+    r: History,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     if r.after < 0 || !(1..=1000).contains(&r.limit) {
         return Err(bad());
     }
     let rows = t.history_page(&r.project, r.after, r.limit)?;
-    Ok(json!(rows.iter().map(|x|Ok(json!({"revision":x.get::<_,i64>(0usize)?,"subject":x.get::<_,String>(1usize)?,"message":x.get::<_,String>(2usize)?,"created_at":x.get::<_,String>(3usize)?,"source_workspace":x.get::<_,String>(4usize)?,"source_base_revision":x.get::<_,i64>(5usize)?}))).collect::<Result<Vec<_>>>()?))
+    let next = match rows.last() {
+        Some(row) if rows.len() == r.limit as usize => {
+            let after = row.get::<_, i64>(0usize)?;
+            t.history_has_after(&r.project, after)?.then_some(after)
+        }
+        _ => None,
+    };
+    let commits = rows.iter().map(|x|Ok(json!({"revision":x.get::<_,i64>(0usize)?,"subject":x.get::<_,String>(1usize)?,"message":x.get::<_,String>(2usize)?,"created_at":x.get::<_,String>(3usize)?,"source_workspace":x.get::<_,String>(4usize)?,"source_base_revision":x.get::<_,i64>(5usize)?}))).collect::<Result<Vec<_>>>()?;
+    Ok(json!({"commits":commits,"next_after":next}))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -164,7 +222,11 @@ pub(super) struct Commit {
     #[serde(default = "page_size")]
     limit: i64,
 }
-pub(super) fn commit_detail(t: &mut Transaction, s: &str, r: Commit) -> Result<Value> {
+pub(super) fn commit_detail(
+    t: &mut (impl DatasetRepository + HistoryRepository + ProjectRepository + ResponseBudget + ?Sized),
+    s: &str,
+    r: Commit,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     Page {
         after: r.after.clone(),
@@ -192,7 +254,16 @@ pub(super) fn commit_detail(t: &mut Transaction, s: &str, r: Commit) -> Result<V
             out.push(item);
         }
     }
-    Ok(json!({"revision":r.revision,"changes":out}))
+    let next = if out.len() == r.limit as usize {
+        let (dataset, key) = cursor_parts(&after)?;
+        t.commit_has_after(&r.project, r.revision, &dataset, &key)?
+            .then_some(after)
+    } else {
+        None
+    };
+    Ok(
+        json!({"revision":r.revision,"changes":out,"next_after":next,"schema_changes":commit_schema_diff(t,&r.project,r.revision)?}),
+    )
 }
 
 fn feature_row(row: &Row, key: &str, properties: usize, geometry: usize) -> Result<Value> {
@@ -231,7 +302,11 @@ pub(super) struct Audit {
     #[serde(default = "page_size")]
     limit: i64,
 }
-pub(super) fn audit_events(t: &mut Transaction, subject: &str, r: Audit) -> Result<Value> {
+pub(super) fn audit_events(
+    t: &mut (impl AuditRepository + ProjectRepository + ResponseBudget + ?Sized),
+    subject: &str,
+    r: Audit,
+) -> Result<Value> {
     if membership(t, &r.project, subject, false)? != "owner" {
         return Err(missing());
     }
@@ -239,6 +314,13 @@ pub(super) fn audit_events(t: &mut Transaction, subject: &str, r: Audit) -> Resu
         return Err(bad());
     }
     let rows = t.audit_page(&r.project, r.after, r.limit)?;
+    let next = match rows.last() {
+        Some(row) if rows.len() == r.limit as usize => {
+            let after = row.get::<_, i64>(0usize)?;
+            t.audit_has_after(&r.project, after)?.then_some(after)
+        }
+        _ => None,
+    };
     let mut events = Vec::new();
     let mut budget = codec::Budget::new(t.response_limit(), t.response_reservation());
     for row in rows {
@@ -247,7 +329,6 @@ pub(super) fn audit_events(t: &mut Transaction, subject: &str, r: Audit) -> Resu
         budget.include(&event)?;
         events.push(event);
     }
-    let next = events.last().map(|e| e["id"].clone());
     Ok(json!({"events":events,"next_after":next}))
 }
 
@@ -257,18 +338,28 @@ pub(super) struct SummaryCommit {
     project: String,
     revision: i64,
 }
-pub(super) fn workspace_summary(t: &mut Transaction, s: &str, r: Workspace) -> Result<Value> {
+pub(super) fn workspace_summary(
+    t: &mut (impl DatasetRepository + ProjectRepository + WorkspaceRepository + ?Sized),
+    s: &str,
+    r: Workspace,
+) -> Result<Value> {
     let (base, version, _) = workspace(t, s, &r.project, &r.workspace, None)?;
     let mut result = change_summary(t.workspace_summary(&r.project, &r.workspace, base)?)?;
     result["version"] = json!(version);
+    result["schema_changes"] = workspace_schema_diff(t, &r.project, &r.workspace, base)?;
     Ok(result)
 }
-pub(super) fn commit_summary(t: &mut Transaction, s: &str, r: SummaryCommit) -> Result<Value> {
+pub(super) fn commit_summary(
+    t: &mut (impl DatasetRepository + HistoryRepository + ProjectRepository + ?Sized),
+    s: &str,
+    r: SummaryCommit,
+) -> Result<Value> {
     membership(t, &r.project, s, false)?;
     t.commit_exists(&r.project, r.revision)?
         .ok_or_else(missing)?;
     let mut result = change_summary(t.commit_summary(&r.project, r.revision)?)?;
     result["revision"] = json!(r.revision);
+    result["schema_changes"] = commit_schema_diff(t, &r.project, r.revision)?;
     Ok(result)
 }
 fn change_summary(rows: Vec<Row>) -> Result<Value> {

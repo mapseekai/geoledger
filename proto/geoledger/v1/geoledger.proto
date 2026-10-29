@@ -23,6 +23,7 @@ service GeoLedger {
  rpc SaveStream(stream DataChunk) returns (SaveReply);
  rpc Discard(VersionRequest) returns (DiscardReply);
  rpc Features(FeaturesRequest) returns (FeaturesReply);
+ rpc Schema(SchemaRequest) returns (SchemaReply);
  // Concatenated chunks encode one snapshot-consistent FeaturesReply.
  rpc FeaturesStream(FeaturesRequest) returns (stream DataChunk);
  rpc WorkspaceSummary(WorkspaceRequest) returns (ChangeSummaryReply);
@@ -111,6 +112,44 @@ message SaveRequest {
  string workspace = 2;
  int64 expected_workspace_version = 3;
  repeated Edit edits = 4;
+ // Missing preserves the workspace schema intent; a present empty message clears it.
+ SchemaEdits schema_edits = 5;
+}
+message AddField {
+ string name = 1;
+ // string, number, integer, boolean or json; no SQL definitions.
+ string type = 2;
+}
+message SchemaEdit {
+ string dataset = 1;
+ repeated AddField add = 2;
+ repeated string drop = 3;
+}
+message SchemaEdits {
+ // Complete intent relative to workspace.base_revision, not incremental DDL.
+ repeated SchemaEdit edits = 1;
+}
+message SchemaRequest {
+ string project = 1;
+ string dataset = 2;
+ optional string workspace = 3;
+ optional int64 revision = 4;
+}
+message SchemaField {
+ string name = 1;
+ string type = 2;
+ bool nullable = 3;
+ bool editable = 4;
+}
+message SchemaReply {
+ int64 revision = 1;
+ optional int64 workspace_version = 2;
+ repeated SchemaField fields = 3;
+}
+message SchemaChange {
+ string dataset = 1;
+ repeated SchemaField before = 2;
+ repeated SchemaField after = 3;
 }
 message FeaturesRequest {
  string project = 1;
@@ -241,6 +280,9 @@ message DiffReply {
  int64 base_revision = 1;
  int64 version = 2;
  repeated Change changes = 3;
+ repeated SchemaChange schema_changes = 5;
+ // Present only if more changes exist in this request's read snapshot.
+ optional string next_after = 4;
 }
 message Conflict {
  string cursor = 1;
@@ -271,10 +313,14 @@ message CommitInfo {
 }
 message HistoryReply {
  repeated CommitInfo commits = 1;
+ // Ascending revision cursor; absent at the end of this read snapshot.
+ optional int64 next_after = 2;
 }
 message CommitReply {
  int64 revision = 1;
  repeated Change changes = 2;
+ repeated SchemaChange schema_changes = 4;
+ optional string next_after = 3;
 }
 message AuditEvent {
  int64 id = 1;
@@ -285,6 +331,7 @@ message AuditEvent {
 }
 message AuditReply {
  repeated AuditEvent events = 1;
+ // Absent when no later event exists in this request's read snapshot.
  optional int64 next_after = 2;
 }
 message PublishReply {
@@ -344,6 +391,7 @@ message DatasetChangeCounts {
  int64 modified = 5;
 }
 message ChangeSummaryReply {
+ repeated SchemaChange schema_changes = 5;
  ChangeCounts total = 1;
  repeated DatasetChangeCounts datasets = 2;
  optional int64 version = 3;

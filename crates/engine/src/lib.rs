@@ -4,6 +4,9 @@ pub mod authentication;
 pub use authentication::{ApiKey, AuthenticatedIdentity, User};
 mod workspace;
 use workspace::*;
+mod schema;
+use schema::*;
+pub use schema::{AddField, DatasetSchema, SchemaEdit, SchemaField};
 mod feature;
 mod geometry;
 pub use feature::Feature;
@@ -19,11 +22,13 @@ mod errors;
 pub mod fuzzing;
 mod session;
 use geoledger_core::{Cell, Record, merge::merge_record};
+use repository::Row;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
-use session::Row;
 pub mod repository;
-use repository::{RepositoryTransaction, StorageBackend};
+#[cfg(test)]
+use repository::RepositoryTransaction;
+use repository::StorageBackend;
 pub use session::pgtls::{PgTlsSummary, SslMode, summarize as postgres_tls_summary};
 
 use std::{
@@ -33,7 +38,7 @@ use std::{
 
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: i32 = 16;
+pub const FORMAT_VERSION: i32 = 19;
 pub type Result<T> = std::result::Result<T, Error>;
 pub use errors::Error;
 pub use session::portable::{DataSummary, EXPORT_VERSION, TableSummary};
@@ -117,6 +122,7 @@ pub struct PoolStats {
     /// Acquisitions that gave up because no connection became free before the deadline.
     pub wait_timeouts: u64,
 }
+#[cfg(test)]
 type Transaction = Box<dyn RepositoryTransaction>;
 impl Application {
     pub fn new(storage: Storage) -> Self {
@@ -226,6 +232,7 @@ impl Application {
                 | "list_workspaces"
                 | "get_workspace"
                 | "features"
+                | "schema"
                 | "diff"
                 | "workspace_summary"
                 | "commit_summary"
@@ -244,7 +251,9 @@ impl Application {
         }
         let mut t = self.storage.begin(read_only, remaining)?;
         let trusted_user = identity
-            .map(|identity| authentication::business_identity(&mut t, identity, verified_password))
+            .map(|identity| {
+                authentication::business_identity(t.as_mut(), identity, verified_password)
+            })
             .transpose()?;
         let subject = trusted_user
             .as_ref()
@@ -260,36 +269,37 @@ impl Application {
         t.set_response_limit(self.response_limit);
         t.set_response_reservation(self.response_reservation.clone());
         let result = match command {
-            Command::CreateProject(r) => create_project(&mut t, subject, policy, r),
-            Command::ListProjects(r) => list_projects(&mut t, subject, r),
-            Command::GetProject(r) => get_project(&mut t, subject, policy, r),
-            Command::SetMember(r) => set_member(&mut t, subject, policy, r),
-            Command::RemoveMember(r) => remove_member(&mut t, subject, policy, r),
-            Command::ListMembers(r) => list_members(&mut t, subject, policy, r),
-            Command::ArchiveProject(r) => archive_project(&mut t, subject, policy, r),
-            Command::DeleteProject(r) => delete_project(&mut t, subject, policy, r),
-            Command::RenameProject(r) => rename_project(&mut t, subject, policy, r),
-            Command::RenameDataset(r) => rename_dataset(&mut t, subject, r),
-            Command::DeleteDataset(r) => delete_dataset(&mut t, subject, policy, r),
-            Command::CreateDataset(r) => create_dataset(&mut t, subject, policy, r),
-            Command::ListDatasets(r) => list_datasets(&mut t, subject, r),
-            Command::CreateWorkspace(r) => create_workspace(&mut t, subject, r),
-            Command::ListWorkspaces(r) => list_workspaces(&mut t, subject, r),
-            Command::GetWorkspace(r) => get_workspace(&mut t, subject, r),
-            Command::Save(r) => save(&mut t, subject, r),
-            Command::Discard(r) => discard(&mut t, subject, r),
-            Command::Features(r) => features(&mut t, subject, r),
-            Command::WorkspaceSummary(r) => workspace_summary(&mut t, subject, r),
-            Command::CommitSummary(r) => commit_summary(&mut t, subject, r),
-            Command::Diff(r) => diff(&mut t, subject, r),
-            Command::Conflicts(r) => list_conflicts(&mut t, subject, r),
-            Command::Resolve(r) => resolve(&mut t, subject, r),
-            Command::History(r) => history(&mut t, subject, r),
-            Command::Audit(r) => audit_events(&mut t, subject, r),
-            Command::Commit(r) => commit_detail(&mut t, subject, r),
-            Command::Publish(r) => publish(&mut t, subject, r),
-            Command::Rebase(r) => rebase(&mut t, subject, r),
-            Command::Restore(r) => restore(&mut t, subject, r),
+            Command::CreateProject(r) => create_project(t.as_mut(), subject, policy, r),
+            Command::ListProjects(r) => list_projects(t.as_mut(), subject, r),
+            Command::GetProject(r) => get_project(t.as_mut(), subject, policy, r),
+            Command::SetMember(r) => set_member(t.as_mut(), subject, policy, r),
+            Command::RemoveMember(r) => remove_member(t.as_mut(), subject, policy, r),
+            Command::ListMembers(r) => list_members(t.as_mut(), subject, policy, r),
+            Command::ArchiveProject(r) => archive_project(t.as_mut(), subject, policy, r),
+            Command::DeleteProject(r) => delete_project(t.as_mut(), subject, policy, r),
+            Command::RenameProject(r) => rename_project(t.as_mut(), subject, policy, r),
+            Command::RenameDataset(r) => rename_dataset(t.as_mut(), subject, r),
+            Command::DeleteDataset(r) => delete_dataset(t.as_mut(), subject, policy, r),
+            Command::CreateDataset(r) => create_dataset(t.as_mut(), subject, policy, r),
+            Command::ListDatasets(r) => list_datasets(t.as_mut(), subject, r),
+            Command::CreateWorkspace(r) => create_workspace(t.as_mut(), subject, r),
+            Command::ListWorkspaces(r) => list_workspaces(t.as_mut(), subject, r),
+            Command::GetWorkspace(r) => get_workspace(t.as_mut(), subject, r),
+            Command::Save(r) => save(t.as_mut(), subject, r),
+            Command::Discard(r) => discard(t.as_mut(), subject, r),
+            Command::Features(r) => features(t.as_mut(), subject, r),
+            Command::Schema(r) => schema_query(t.as_mut(), subject, r),
+            Command::WorkspaceSummary(r) => workspace_summary(t.as_mut(), subject, r),
+            Command::CommitSummary(r) => commit_summary(t.as_mut(), subject, r),
+            Command::Diff(r) => diff(t.as_mut(), subject, r),
+            Command::Conflicts(r) => list_conflicts(t.as_mut(), subject, r),
+            Command::Resolve(r) => resolve(t.as_mut(), subject, r),
+            Command::History(r) => history(t.as_mut(), subject, r),
+            Command::Audit(r) => audit_events(t.as_mut(), subject, r),
+            Command::Commit(r) => commit_detail(t.as_mut(), subject, r),
+            Command::Publish(r) => publish(t.as_mut(), subject, r),
+            Command::Rebase(r) => rebase(t.as_mut(), subject, r),
+            Command::Restore(r) => restore(t.as_mut(), subject, r),
         }?;
         let encoded = codec::encode_limited(
             &result,
@@ -357,6 +367,43 @@ mod tests {
         }
         assert!(decode::<Publish>(json!({"project":"p","workspace":"w","expected_workspace_version":0,"request_id":Uuid::new_v4(),"message":"x","author":"forged"})).is_err());
     }
+
+    mod deadline_tests {
+        use super::*;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct ProbeBackend(AtomicBool);
+        impl crate::repository::StorageMaintenance for ProbeBackend {}
+        impl StorageBackend for ProbeBackend {
+            fn name(&self) -> &'static str {
+                "probe"
+            }
+            fn initialize(&self, _: Duration) -> Result<()> {
+                Ok(())
+            }
+            fn health(&self, _: Duration) -> Result<()> {
+                Ok(())
+            }
+            fn begin(&self, _: bool, _: Duration) -> Result<Box<dyn RepositoryTransaction>> {
+                self.0.store(true, Ordering::SeqCst);
+                Err(Error::new(500, "storage must not be reached after expiry"))
+            }
+        }
+        #[test]
+        fn expired_application_does_not_start_a_storage_operation() -> Result<()> {
+            let backend = Arc::new(ProbeBackend(AtomicBool::new(false)));
+            let app = Application::with_backend(backend.clone()).with_timeout(Duration::ZERO);
+            let error = app
+                .execute("alice", "list_projects", json!({}))
+                .err()
+                .ok_or_else(bad)?;
+            assert_eq!(error.status, 504);
+            assert!(!backend.0.load(Ordering::SeqCst));
+            Ok(())
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -381,6 +428,7 @@ enum Command {
     Save(Save),
     Discard(Version),
     Features(Features),
+    Schema(SchemaQuery),
     WorkspaceSummary(Workspace),
     CommitSummary(SummaryCommit),
     Diff(Diff),
@@ -406,41 +454,4 @@ pub struct PostgisTable {
     pub table: String,
     pub id_column: String,
     pub geometry_column: String,
-}
-
-#[cfg(test)]
-mod deadline_tests {
-    use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    struct ProbeBackend(AtomicBool);
-    impl StorageBackend for ProbeBackend {
-        fn name(&self) -> &'static str {
-            "probe"
-        }
-        fn initialize(&self, _: Duration) -> Result<()> {
-            Ok(())
-        }
-        fn health(&self, _: Duration) -> Result<()> {
-            Ok(())
-        }
-        fn begin(&self, _: bool, _: Duration) -> Result<Box<dyn RepositoryTransaction>> {
-            self.0.store(true, Ordering::SeqCst);
-            Err(Error::new(500, "storage must not be reached after expiry"))
-        }
-    }
-    #[test]
-    fn expired_application_does_not_start_a_storage_operation() -> Result<()> {
-        let backend = Arc::new(ProbeBackend(AtomicBool::new(false)));
-        let app = Application::with_backend(backend.clone()).with_timeout(Duration::ZERO);
-        let error = app
-            .execute("alice", "list_projects", json!({}))
-            .err()
-            .ok_or_else(bad)?;
-        assert_eq!(error.status, 504);
-        assert!(!backend.0.load(Ordering::SeqCst));
-        Ok(())
-    }
 }

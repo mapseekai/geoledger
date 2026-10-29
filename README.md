@@ -6,7 +6,9 @@ GeoLedger 是空间要素的版本管理与协作编辑服务。团队用项目�
 
 仓库包含 Rust 服务端 `geoledger-server`、远程命令行工具 `gl`、Web 控制台，以及 Rust、Go、TypeScript / Node.js 和 Python SDK。服务端管理 SQLite + SpatiaLite 或 PostGIS 中的数据，HTTP 与 gRPC 入口调用同一个业务引擎。
 
-当前源码版本为 `0.3.0-alpha.4`，存储格式为 16，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。
+当前源码版本为 `0.3.0-alpha.7`，存储格式为 19，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。
+
+自建数据集在创建时就拥有独立的物理表和空间索引；同一数据库中的道路、建筑、兴趣点等数据各自存储，版本与发布保持事务一致。
 
 ## 核心能力
 
@@ -15,6 +17,7 @@ GeoLedger 是空间要素的版本管理与协作编辑服务。团队用项目�
 | 数据集与坐标系 | 按点、线、面组织要素，设置二维或三维坐标以及 EPSG 标识或自定义 CRS；默认坐标系为 `EPSG:4326`。保存与发布保留源坐标和 GeoJSON 数值。 |
 | 工作区与差异审阅 | 一个工作区可编辑多个数据集，分批保存新增、修改和删除，并查看要素差异及数据集变更统计。草稿版本用于并发编辑校验。 |
 | 三方合并与发布 | 比较基础修订、当前共享修订和草稿，合并独立属性修改，按字段审阅冲突。发布在同一事务中写入要素、历史、修订、回执和审计。 |
+| 版本化字段增删 | 在工作区保存新增或删除普通属性字段；按修订读取字段定义，发布同步数据、schema 历史和原表 DDL；字段意图可撤销，HEAD 变化时保留草稿并明确拒绝并发发布。 |
 | 发布结果恢复 | SDK 保留发布请求 ID 和原始请求内容；连接中断后通过原请求重试确认结果。控制台提供发布恢复流程。 |
 | 查询与撤销 | 按修订、要素 ID、空间范围和分页游标查询；为指定提交生成反向变更工作区，经审阅后发布为新修订。 |
 | PostGIS 表纳管 | 将已有业务表接入数据集并建立初始版本，发布事务同步原表，保留源表坐标系。 |
@@ -38,7 +41,7 @@ cd geoledger
 | SQLite 服务 | SpatiaLite 原生扩展及其依赖；`GL_SPATIALITE_EXTENSION` 可指定扩展路径。仓库 Dockerfile 包含对应运行环境。 |
 | PostGIS 服务 | 启用 PostGIS 扩展的 PostgreSQL 数据库及服务账号。 |
 | Web 与 TypeScript SDK | Node.js 22 与 npm。 |
-| Go SDK | Go 1.27.2+，见 [go.mod](sdk/go/go.mod)。 |
+| Go SDK | Go 1.27.3+，见 [go.mod](sdk/go/go.mod)。 |
 | Python SDK | Python 3.10+，见 [pyproject.toml](sdk/python/pyproject.toml)。 |
 | 仓库检查 | Python 3.11+、Bash、rustfmt、Clippy；浏览器验证使用 Python Playwright 和可启用沙箱的 Chromium/Chrome。 |
 | 容器运行 | Docker、Docker Compose，以及用于生成会话密钥的 OpenSSL。 |
@@ -139,6 +142,8 @@ curl --fail http://127.0.0.1:7881/ready
 
 数据模型和合并规则见[使用指南](docs/user-guide.md)，分页和重试契约见 [API 与 SDK](docs/api.md)。
 
+`diff`、`commit`、`history`、`audit` 使用服务端页级游标确认当前快照的结束；`history` 返回 `commits` 页对象，详见 [分页契约](docs/api.md#差异提交历史与审计分页)。
+
 ## API 与 SDK
 
 HTTP 业务接口位于 `/api/v1`，四语言 SDK 与 CLI 通过 `geoledger.v1` gRPC 协议接入。SDK 使用用户 API Key，工作区对象维护草稿版本和待确认的发布请求。
@@ -217,7 +222,7 @@ CLI / SDKs -> gRPC ---------------------------> engine Application
 | `web` | Next.js 控制台、浏览器接口和地图工作台。 |
 | `deploy`、`scripts` | 部署模板、验证脚本与发布门禁。 |
 
-SQLite 使用 WAL、SpatiaLite 几何和 RTree 空间索引；PostGIS 使用 `geometry` 列和 GiST 索引。存储事务边界与后端一致性要求见[存储扩展](docs/storage.md)。
+SQLite 使用 WAL、SpatiaLite 几何和 RTree 空间索引；PostGIS 使用 `geometry` 列和 GiST 索引。存储能力按身份、项目、工作区、读取和发布等职责拆分，共享同一个事务；事务边界与后端一致性要求见[存储扩展](docs/storage.md)。
 
 ## 构建与验证
 
@@ -226,7 +231,7 @@ cargo build --release --locked --bins
 ./scripts/check.sh
 ```
 
-产物位于 `target/release/geoledger-server` 与 `target/release/gl`，Windows 使用 `.exe` 后缀。`check.sh` 执行文档与配置检查、rustfmt、Clippy、引擎与工作区测试、备份恢复演练；设置 `GL_TEST_DATABASE_URL` 可启用隔离 `geoledger_test` 数据库上的 PostGIS 用例。
+产物位于 `target/release/geoledger-server` 与 `target/release/gl`，Windows 使用 `.exe` 后缀。`check.sh` 需要 Python 3 和 ast-grep 0.51.0（`npm install --global @ast-grep/cli@0.51.0`），先验证三语言测试布局，再执行文档与配置检查、rustfmt、Clippy、引擎与工作区测试、备份恢复演练；设置 `GL_TEST_DATABASE_URL` 可启用隔离 `geoledger_test` 数据库上的 PostGIS 用例。
 
 Web 检查与生产构建：
 
@@ -240,13 +245,13 @@ npm --prefix web run build
 
 [开发指南](docs/development.md) 提供四语言 SDK 联调和真实浏览器验证命令。控制台 CI 的两个浏览器套件共用沙箱配置，Ubuntu 24.04 runner 使用系统 Chrome。依赖门禁 `./scripts/audit.sh` 检查 Rust、npm、Go 和 Python 公告。
 
-本次工作区修复的实测结果、执行环境及待补验证项单独记录在 [2026-10-15 验证记录](docs/ci-validation-2026-10-15.md)。
+alpha.6 的发布准备、本机实测和生产验收边界见 [alpha.6 验收记录](docs/release-alpha6-validation-2026-10-18.md)。早期工作区修复保留在 [2026-10-15 验证记录](docs/ci-validation-2026-10-15.md)。
 
 ## 部署与运行维护
 
 [Dockerfile](Dockerfile) 将业务服务、CLI、Next.js standalone 控制台及 SpatiaLite 运行依赖放入统一镜像，以 UID 10001 运行。Compose 持久化 `/data`，容器入口统一处理服务生命周期和健康检查。
 
-PostGIS 部署设置 `GL_STORAGE=postgis`、`GL_DATABASE_URL` 和服务账号。连接配置默认校验证书与主机名，可使用私有 CA；现有业务表通过 SDK 的 `track_table` / `trackTable` / `TrackTable` 接入。部署模板、systemd 和 HTTPS 网关见[生产运行](docs/production.md)。
+PostGIS 部署设置 `GL_STORAGE=postgis`、`GL_DATABASE_URL` 和服务账号。连接配置默认校验证书与主机名，可使用私有 CA；现有业务表通过 SDK 的 `register_table` / `registerTable` / `RegisterTable` 接入。部署模板、systemd 和 HTTPS 网关见[生产运行](docs/production.md)。
 
 | 运维接口 | 行为 |
 |---|---|

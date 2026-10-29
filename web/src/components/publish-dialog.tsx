@@ -9,7 +9,11 @@ import {
   type Project,
   type Workspace,
 } from "@/lib/browser-api";
-import type { ChangeSummary } from "@/lib/change-summary";
+import {
+  hasFeatureChanges,
+  isEmptySummary,
+  type ChangeSummary,
+} from "@/lib/change-summary";
 import { count } from "@/lib/format";
 import {
   publication,
@@ -30,6 +34,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ChangeList } from "./change-list";
+import { SchemaChangeSummary } from "./change-summary";
 import {
   CopyButton,
   DiffStat,
@@ -119,15 +124,12 @@ export function PublishDialog({
     setChecking(false);
   }, [project, workspace]);
   useEffect(() => {
-    void preflight();
+    void preflight().catch(() => setChecking(false));
   }, [preflight, recheck]);
 
   const total = info?.summary?.total;
-  const empty =
-    !!total &&
-    String(total.added) === "0" &&
-    String(total.modified) === "0" &&
-    String(total.deleted) === "0";
+  const empty = isEmptySummary(info?.summary);
+  const featureChanges = hasFeatureChanges(total);
   const conflicts = info?.conflicts ?? 0;
   const blocked = !pending && (conflicts > 0 || empty);
   const base = info?.workspace?.baseRevision;
@@ -318,7 +320,9 @@ export function PublishDialog({
               {count(conflicts)} 个要素与 r{head} 冲突
             </Notice>
           )}
-          {empty && !pending && <Notice tone="muted">无要素变更</Notice>}
+          {empty && !pending && (
+            <Notice tone="muted">没有待发布的要素或字段变更</Notice>
+          )}
           {info?.summary && info.summary.datasets.length > 0 && (
             <ul className="dataset-stats" aria-label="按数据集统计要素变更">
               {info.summary.datasets.map((row) => (
@@ -333,7 +337,8 @@ export function PublishDialog({
               ))}
             </ul>
           )}
-          {!empty && (
+          <SchemaChangeSummary changes={info?.summary?.schemaChanges ?? []} />
+          {featureChanges && (
             <Collapsible open={listOpen} onOpenChange={setListOpen}>
               <CollapsibleTrigger asChild>
                 <Button

@@ -1,0 +1,21 @@
+{
+  "goRoots": ["sdk/go"],
+  "tsRoots": { "web": "test", "sdk/ts": "test" },
+  "rustRoots": ["crates", "sdk/rust"],
+  "generatedDirectories": [
+    "sdk/go/internal/geoledgerv1",
+    "sdk/ts/src/_internal/geoledger"
+  ],
+  "integrationFiles": {
+    "web/test/crs.test.ts": "Native CRS metadata flows through datasetCrs and buildLayer projection without changing source data.",
+    "web/test/design-system.test.ts": "Project-wide UI policy and the actual Oxlint plugin/config run against positive and negative component fixtures.",
+    "web/test/operations.test.ts": "Request schema, operation dispatch and SDK transport stub preserve publication and FeatureCollection contracts.",
+    "web/test/summary.test.ts": "Operation dispatch uses aggregate summaries and avoids the alternative geometry/name RPCs.",
+    "web/test/session-policy.test.ts": "Cross-file Session/cookie and HTTP route policy assertions.",
+    "web/test/http.test.ts": "Child process exercises the server-only module condition across BFF/browser/publication modules.",
+    "web/test/fixtures/http-contract.ts": "Child-process fixture owned by http.test.ts; real BFF/browser adapter chain with controlled upstream responses.",
+    "web/test/fixtures/console-client.ts": "Shared typed transport stub for operations integration; unexpected calls fail.",
+    "sdk/ts/test/streaming.test.ts": "Real loopback gRPC server validates client chunk streaming, auth metadata and truncated response behavior.",
+    "sdk/ts/test/smoke.cjs": "Existing real-service SDK smoke entry used by test-sdks.sh on disposable backends."
+  }
+}

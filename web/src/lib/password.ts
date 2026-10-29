@@ -5,10 +5,17 @@ export function passwordError(value: string, minimum = 12): string {
     : "";
 }
 
-export function validatePasswordForm(form: HTMLFormElement): boolean {
-  for (const input of form.querySelectorAll<HTMLInputElement>(
-    "input[data-password-min]",
-  )) {
+type PasswordInput = Pick<
+  HTMLInputElement,
+  "value" | "dataset" | "setCustomValidity"
+>;
+export interface PasswordForm {
+  querySelectorAll(selector: string): Iterable<PasswordInput>;
+  reportValidity(): boolean;
+}
+
+export function validatePasswordForm(form: PasswordForm): boolean {
+  for (const input of form.querySelectorAll("input[data-password-min]")) {
     input.setCustomValidity(
       passwordError(input.value, Number(input.dataset.passwordMin)),
     );

@@ -196,6 +196,15 @@ fn input(mut value: Value) -> Result<Value> {
         {
             o.remove("bbox");
         }
+        if let Some(schema) = o.remove("schema_edits")
+            && !schema.is_null()
+        {
+            let edits = schema
+                .get("edits")
+                .and_then(Value::as_array)
+                .ok_or_else(bad)?;
+            o.insert("schema_edits".into(), Value::Array(edits.clone()));
+        }
         for key in ["edits", "resolutions"] {
             if let Some(items) = o.get_mut(key).and_then(Value::as_array_mut) {
                 for item in items {
@@ -346,7 +355,6 @@ impl Service {
             "list_projects" => json!({"projects":result}),
             "list_datasets" => json!({"datasets":result}),
             "list_workspaces" => json!({"workspaces":result}),
-            "history" => json!({"commits":result}),
             "list_members" => json!({"members":result}),
             "features" if result["type"] == "Feature" => {
                 json!({"crs":result["crs"],"revision":result["revision"],"workspace_version":result["workspace_version"],"features":[result]})
@@ -599,6 +607,12 @@ impl pb::geo_ledger_server::GeoLedger for Service {
     ) -> std::result::Result<tonic::Response<pb::FeaturesReply>, tonic::Status> {
         self.call(request, "features").await
     }
+    async fn schema(
+        &self,
+        request: tonic::Request<pb::SchemaRequest>,
+    ) -> std::result::Result<tonic::Response<pb::SchemaReply>, tonic::Status> {
+        self.call(request, "schema").await
+    }
     async fn workspace_summary(
         &self,
         request: tonic::Request<pb::WorkspaceRequest>,
@@ -688,5 +702,60 @@ impl pb::geo_ledger_server::GeoLedger for Service {
         request: tonic::Request<pb::DeleteProjectRequest>,
     ) -> std::result::Result<tonic::Response<pb::OkReply>, tonic::Status> {
         self.call(request, "delete_project").await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_intent_presence_survives_protobuf_to_application()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let omitted = input(serde_json::to_value(pb::SaveRequest::default())?)
+            .map_err(|e| format!("input status {}", e.status))?;
+        assert!(omitted.get("schema_edits").is_none());
+        let clear = pb::SaveRequest {
+            schema_edits: Some(pb::SchemaEdits::default()),
+            ..Default::default()
+        };
+        let clear = input(serde_json::to_value(clear)?)
+            .map_err(|e| format!("input status {}", e.status))?;
+        assert_eq!(clear["schema_edits"], json!([]));
+        let request = pb::SaveRequest {
+            schema_edits: Some(pb::SchemaEdits {
+                edits: vec![pb::SchemaEdit {
+                    dataset: "d".into(),
+                    add: vec![pb::AddField {
+                        name: "note".into(),
+                        r#type: "string".into(),
+                    }],
+                    drop: vec![],
+                }],
+            }),
+            ..Default::default()
+        };
+        let encoded = request.encode_to_vec();
+        let decoded = pb::SaveRequest::decode(encoded.as_slice())?;
+        let input = input(serde_json::to_value(decoded)?)
+            .map_err(|e| format!("input status {}", e.status))?;
+        assert_eq!(
+            input["schema_edits"],
+            json!([{"dataset":"d","add":[{"name":"note","type":"string"}],"drop":[]}])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn schema_reply_preserves_version_and_field_capabilities()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let response: pb::SchemaReply = serde_json::from_value(output(
+            json!({"revision":7,"workspace_version":3,"fields":[{"name":"id","type":"int8","nullable":false,"editable":false}]}),
+        ))?;
+        assert_eq!(response.revision, 7);
+        assert_eq!(response.workspace_version, Some(3));
+        assert_eq!(response.fields[0].r#type, "int8");
+        assert!(!response.fields[0].nullable && !response.fields[0].editable);
+        Ok(())
     }
 }

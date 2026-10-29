@@ -24,7 +24,7 @@ from benchmark import fingerprint, monitor, native_leaks, ports, stop
 
 
 # SQL fixture initialization targets the current service storage contract only.
-STORAGE_FORMAT = 16
+STORAGE_FORMAT = 19
 INTERNAL_SRID = 0
 
 
@@ -86,16 +86,23 @@ def shift_geometry(geometry):
 
 
 def postgis_seed_sql(project, dataset, revision, source_srid):
-    # Business coordinates retain their declared SRID. Shared history uses SRID 0
-    # and the dataset CRS supplies coordinate meaning; neither path reprojects.
+    # The source table is the only current copy; untouched rows inherit registration revision.
+    project, dataset = str(uuid.UUID(project)), str(uuid.UUID(dataset))
     return f"""BEGIN;
+DO $fixture$ BEGIN
+ PERFORM project,dataset,revision,definition FROM gl_schema_history LIMIT 0;
+ PERFORM project,workspace,dataset,definition FROM gl_workspace_schemas LIMIT 0;
+ IF EXISTS(SELECT 1 FROM gl_schema_history WHERE project='{project}' AND dataset='{dataset}')
+ OR EXISTS(SELECT 1 FROM gl_workspace_schemas WHERE project='{project}' AND dataset='{dataset}') THEN
+  RAISE EXCEPTION 'fixture seeding rejects existing schema state';
+ END IF;
+END $fixture$;
 SELECT set_config('geoledger.publication_table','business.source'::regclass::oid::text,true);
 CREATE TEMP TABLE fixture_payload(payload text);
 COPY fixture_payload FROM '/tmp/fixture.jsonl' WITH(FORMAT csv,DELIMITER E'\\x01',QUOTE E'\\x02');
 INSERT INTO business.source SELECT payload::jsonb->>'id',payload::jsonb->'properties'->'attributes',ST_SetSRID(ST_GeomFromGeoJSON(payload::jsonb->'geometry'),{source_srid}) FROM fixture_payload;
-INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,geom) SELECT '{project}','{dataset}',payload::jsonb->>'id',{int(revision)},(payload::jsonb->'properties')::text,(payload::jsonb->'geometry')::text,ST_SetSRID(ST_GeomFromGeoJSON(payload::jsonb->'geometry'),{INTERNAL_SRID}) FROM fixture_payload;
-DO $$ BEGIN IF to_regclass('public.gl_source_changes') IS NOT NULL THEN EXECUTE 'DELETE FROM gl_source_changes'; END IF; END $$;
-ANALYZE business.source; ANALYZE gl_history; COMMIT;
+DELETE FROM gl_source_changes WHERE schema_name='business' AND table_name='source';
+ANALYZE business.source; COMMIT;
 SELECT count(*) FROM business.source;
 """
 
@@ -147,19 +154,32 @@ def sqlite_seed(path, fixture, project, dataset, revision, dimension, extension)
         if dimension not in (2, 3):
             raise ValueError("fixture dimension must be 2 or 3")
         check_storage_format(db.execute("SELECT version FROM gl_format").fetchone()[0])
+        for schema_table, columns in [("gl_schema_history", "project,dataset,revision,definition"),
+                                      ("gl_workspace_schemas", "project,workspace,dataset,definition")]:
+            try:
+                db.execute(f"SELECT {columns} FROM {schema_table} LIMIT 0")
+                present = db.execute(f"SELECT EXISTS(SELECT 1 FROM {schema_table} WHERE project=? AND dataset=?)", (project, dataset)).fetchone()[0]
+            except sqlite3.OperationalError as error:
+                raise ValueError(f"fixture schema contract requires {schema_table}") from error
+            if present:
+                raise ValueError("fixture seeding rejects existing schema state")
         column = "geom_z" if dimension == 3 else "geom"
-        contract = db.execute("SELECT coord_dimension,srid FROM geometry_columns WHERE f_table_name='gl_history' AND f_geometry_column=?", (column,)).fetchone()
+        table = db.execute("SELECT storage_table FROM gl_datasets WHERE project=? AND id=?", (project, dataset)).fetchone()[0]
+        if not isinstance(table, str) or not re.fullmatch(r"gl_data_[0-9a-f]{32}", table):
+            raise ValueError("fixture requires a managed dataset table")
+        contract = db.execute("SELECT coord_dimension,srid FROM geometry_columns WHERE f_table_name=? AND f_geometry_column=?", (table, column)).fetchone()
         if contract != (dimension, INTERNAL_SRID):
-            raise ValueError(f"gl_history.{column} geometry contract differs: expected dimension/SRID {(dimension, INTERNAL_SRID)}, got {contract}")
-        sql = f"INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties,geometry_json,{column}) VALUES(?,?,?,?,?,?,coalesce(SetSRID(GeomFromGeoJSON(?),{INTERNAL_SRID}),SetSRID(GeomFromGeoJSON(?),{INTERNAL_SRID})))"
+            raise ValueError(f"{table}.{column} geometry contract differs: expected dimension/SRID {(dimension, INTERNAL_SRID)}, got {contract}")
+        db.create_function("gl_dataset_write_allowed", 0, lambda: 1)
+        sql = f"INSERT INTO {table}(feature_id,valid_from,properties,geometry_json,{column}) VALUES(?,?,?,?,coalesce(SetSRID(GeomFromGeoJSON(?),{INTERNAL_SRID}),SetSRID(GeomFromGeoJSON(?),{INTERNAL_SRID})))"
         count = 0
         for feature in rows(fixture, dimension):
             count += 1
             if count == 1:
                 continue  # The API published the first row to establish a real baseline revision.
             geometry = compact(feature["geometry"])
-            db.execute(sql, (project, dataset, feature["id"], revision, compact(feature["properties"]), geometry, geometry, collection(feature["geometry"])))
-        bad = db.execute(f"SELECT count(*) FROM gl_history WHERE project=? AND dataset=? AND {column} IS NULL", (project, dataset)).fetchone()[0]
+            db.execute(sql, (feature["id"], revision, compact(feature["properties"]), geometry, geometry, collection(feature["geometry"])))
+        bad = db.execute(f"SELECT count(*) FROM {table} WHERE {column} IS NULL").fetchone()[0]
         if bad:
             raise ValueError(f"fixture contains {bad} unrepresented native geometries")
         db.execute("ANALYZE")
@@ -274,7 +294,7 @@ def self_test_source_crud():
 def check_results(result, count):
     if result["client"]["exit_code"] != 0:
         return
-    if result["history_live"] != count or result.get("source_live", count) != count:
+    if result["current_live"] != count or result.get("source_live", count) != count:
         raise AssertionError("CRUD cycle did not restore background feature count")
     result["integrity_verified"] = True
     if result.get("soak", {}).get("exit_code", 0):
@@ -448,20 +468,21 @@ def main():
                 db.enable_load_extension(True)
                 db.load_extension(extension)
                 db.enable_load_extension(False)
-                result["history_srids"] = [row[0] for row in db.execute("SELECT DISTINCT ST_SRID(coalesce(geom,geom_z)) FROM gl_history WHERE project=? AND dataset=? AND properties IS NOT NULL", (project, dataset))]
-                live = db.execute("SELECT count(*) FROM gl_history WHERE project=? AND dataset=? AND valid_to IS NULL AND properties IS NOT NULL", (project, dataset)).fetchone()[0]
-            result["history_live"] = live
+                table = db.execute("SELECT storage_table FROM gl_datasets WHERE project=? AND id=?", (project, dataset)).fetchone()[0]
+                result["current_srids"] = [row[0] for row in db.execute(f"SELECT DISTINCT ST_SRID(coalesce(geom,geom_z)) FROM {table}")]
+                result["current_live"] = db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                result["history_rows"] = db.execute("SELECT count(*) FROM gl_history WHERE project=? AND dataset=?", (project, dataset)).fetchone()[0]
         else:
             if result["client"]["exit_code"] == 0:
                 result.update(verify_source_crud(call, psql, project, dataset, first))
-            counts = psql(f"SELECT count(*) FROM business.source; SELECT count(*) FROM gl_history WHERE project='{project}' AND dataset='{dataset}' AND valid_to IS NULL AND properties IS NOT NULL;").splitlines()
-            result["source_live"], result["history_live"] = map(int, counts)
+            counts = psql(f"SELECT count(*) FROM business.source; SELECT count(*) FROM gl_history WHERE project='{project}' AND dataset='{dataset}';").splitlines()
+            result["source_live"], result["history_rows"] = map(int, counts)
+            result["current_live"] = result["source_live"]
             result["source_srids"] = [int(value) for value in psql("SELECT DISTINCT ST_SRID(geom) FROM business.source").splitlines()]
-            result["history_srids"] = [int(value) for value in psql(f"SELECT DISTINCT ST_SRID(geom) FROM gl_history WHERE project='{project}' AND dataset='{dataset}' AND properties IS NOT NULL").splitlines()]
             if result["source_srids"] != [source_srid]:
                 raise AssertionError("business source SRID differs from fixture CRS")
-        if result["history_srids"] != [INTERNAL_SRID]:
-            raise AssertionError("history SRID differs from the internal geometry contract")
+        if args.backend == "sqlite" and result["current_srids"] != [INTERNAL_SRID]:
+            raise AssertionError("managed table SRID differs from the internal geometry contract")
         result["crs_verified"] = True
         check_results(result, count)
         if result["success"]:

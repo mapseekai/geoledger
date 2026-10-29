@@ -130,6 +130,7 @@ function DeleteProjectDialog({
           const confirmName = String(
             new FormData(event.currentTarget).get("confirm"),
           );
+          // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
           void task.run(async () => {
             if (confirmName !== project.name)
               throw new Error("请输入完全一致的项目名称。");

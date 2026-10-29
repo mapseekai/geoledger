@@ -5,6 +5,7 @@ name: Release
 # tags the Go module. The Rust client is consumed from git until geoledger-rpc
 # vendors its proto for crates.io packaging.
 on:
+  workflow_dispatch:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+*']
 permissions:
@@ -15,11 +16,18 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
 jobs:
+  tag-release-only:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - run: test "$GITHUB_REF_TYPE" = tag
   quality:
+    needs: tag-release-only
     uses: ./.github/workflows/ci.yml
     with:
       source_sha: ${{ github.sha }}
   credentials:
+    needs: tag-release-only
     runs-on: ubuntu-24.04
     environment: release
     steps:
@@ -31,6 +39,7 @@ jobs:
           test -n "$NPM_TOKEN" || { echo "NPM_TOKEN is required"; exit 1; }
           test "$PYPI_ENABLED" = true || { echo "PyPI trusted publishing is required"; exit 1; }
   verify:
+    needs: tag-release-only
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -138,7 +147,7 @@ jobs:
           subject-path: |
             geoledger-*.tar.gz
             geoledger-*.zip
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-${{ matrix.target }}
           path: |
@@ -169,12 +178,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: binaries-*
           merge-multiple: true
           path: dist
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: image-inventory-*
           merge-multiple: true
@@ -212,7 +221,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           registry-url: https://registry.npmjs.org
@@ -242,7 +251,7 @@ jobs:
         run: |
           python3 scripts/release-resume.py go
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: binaries-x86_64-unknown-linux-gnu
           path: packaged-binary
@@ -275,3 +284,181 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh release edit "$GITHUB_REF_NAME" --draft=false
+
+  # Temporary, explicitly authorized alpha.7 supplement. It never calls image publication.
+  sdk-supplement:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: f0109c8ff424dc974421072cb2ff9b366f12c17a
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - name: Require SDK publishing configuration
+        working-directory: ${{ github.workspace }}
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PYPI_ENABLED: ${{ vars.PYPI_TRUSTED_PUBLISHING }}
+        run: |
+          test -n "$NPM_TOKEN" || { echo "NPM_TOKEN is required in the release environment"; exit 1; }
+          test "$PYPI_ENABLED" = true || { echo "PYPI_TRUSTED_PUBLISHING=true is required"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f0109c8ff424dc974421072cb2ff9b366f12c17a
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-python@06da6279cdbca41027908073e81a4544dc79c06b
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: source/sdk/go/go.mod
+          cache: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Verify the public release and unchanged signed image
+        run: |
+          python3 ../control/scripts/supplement-alpha7-sdks.py prepare --source "$PWD" --directory "$RUNNER_TEMP/original"
+          image=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/original/geoledger-images.json"))["image"])')
+          cosign verify --certificate-identity https://github.com/mapseekai/geoledger/.github/workflows/secure-images.yml@refs/heads/main --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image"
+      - name: Build SDK packages from the original release source
+        run: |
+          npm ci --prefix sdk/ts
+          npm --prefix sdk/ts run build
+          mkdir sdk-packages
+          npm pack ./sdk/ts --pack-destination sdk-packages
+          python3 -m pip install build==1.2.2
+          export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+          python3 -m build sdk/python --outdir sdk/python/dist
+      - name: Install built packages and exercise the original image before publication
+        run: |
+          python3 ../control/scripts/supplement-alpha7-sdks.py consumer --source "$PWD" --packages "$PWD" --directory "$RUNNER_TEMP/pre-consumer"
+          python3 ../control/scripts/smoke-release-image.py --inventory "$RUNNER_TEMP/original" --sha "$SOURCE_SHA" --version 0.3.0-alpha.7 --arch amd64 --sdk-consumer "$RUNNER_TEMP/pre-consumer" --output sdk-preflight-wheel.json
+          "$RUNNER_TEMP/pre-consumer/python/bin/pip" install --force-reinstall --no-deps sdk/python/dist/*.tar.gz
+          python3 ../control/scripts/smoke-release-image.py --inventory "$RUNNER_TEMP/original" --sha "$SOURCE_SHA" --version 0.3.0-alpha.7 --arch amd64 --sdk-consumer "$RUNNER_TEMP/pre-consumer" --output sdk-preflight-sdist.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: alpha7-sdk-packages-${{ github.run_attempt }}
+          path: |
+            source/sdk-packages/*
+            source/sdk/python/dist/*
+            source/sdk-preflight-*.json
+          if-no-files-found: error
+      - name: TypeScript client (npm, provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: python3 ../control/scripts/supplement-alpha7-sdks.py npm --source "$PWD"
+      - name: Verify previously published Python packages
+        id: supplement-python
+        run: python3 ../control/scripts/supplement-alpha7-sdks.py pypi --source "$PWD"
+      - name: Python client (PyPI trusted publishing)
+        if: steps.supplement-python.outputs.pending == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+        with:
+          packages-dir: source/sdk/python/dist
+      - name: Go module tag
+        run: python3 ../control/scripts/supplement-alpha7-sdks.py go --source "$PWD"
+
+  sdk-acceptance:
+    needs: sdk-supplement
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: f0109c8ff424dc974421072cb2ff9b366f12c17a
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f0109c8ff424dc974421072cb2ff9b366f12c17a
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@06da6279cdbca41027908073e81a4544dc79c06b
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: source/sdk/go/go.mod
+          cache: false
+      - name: Install all three SDKs from public registries and exercise the published image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python3 ../control/scripts/supplement-alpha7-sdks.py prepare --source "$PWD" --directory "$RUNNER_TEMP/original"
+          python3 ../control/scripts/supplement-alpha7-sdks.py consumer --source "$PWD" --directory "$RUNNER_TEMP/sdk-consumer"
+          python3 ../control/scripts/smoke-release-image.py --inventory "$RUNNER_TEMP/original" --sha "$SOURCE_SHA" --version 0.3.0-alpha.7 --arch "$ARCH" --sdk-consumer "$RUNNER_TEMP/sdk-consumer" --output "sdk-acceptance-$ARCH.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: alpha7-sdk-acceptance-${{ matrix.arch }}
+          overwrite: true
+          path: source/sdk-acceptance-${{ matrix.arch }}.json
+          if-no-files-found: error
+
+  sdk-complete:
+    needs: [sdk-supplement, sdk-acceptance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f0109c8ff424dc974421072cb2ff9b366f12c17a
+          path: source
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: alpha7-sdk-acceptance-*
+          merge-multiple: true
+          path: sdk-evidence
+      - name: Record successful SDK installation without changing release assets or images
+        run: python3 ../control/scripts/supplement-alpha7-sdks.py complete --source "$PWD" --directory "$GITHUB_WORKSPACE/sdk-evidence"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: alpha7-sdk-acceptance
+          overwrite: true
+          path: sdk-evidence/sdk-acceptance.json
+          if-no-files-found: error

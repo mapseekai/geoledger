@@ -163,7 +163,38 @@ export interface FeaturePage {
   features: Feature[];
   revision: bigint;
   workspaceVersion?: bigint;
+  /** Absent on the final page; pass the opaque value back unchanged. */
   nextAfter?: string;
+}
+
+export interface SchemaField {
+  name: string;
+  type: string;
+  nullable: boolean;
+  editable: boolean;
+}
+export interface DatasetSchema {
+  revision: bigint;
+  workspaceVersion?: bigint;
+  fields: SchemaField[];
+}
+export interface SchemaQuery {
+  revision?: bigint;
+  workspace?: string;
+}
+export interface AddField {
+  name: string;
+  type: "string" | "number" | "integer" | "boolean" | "json";
+}
+export interface SchemaEdit {
+  dataset: string;
+  add?: readonly AddField[];
+  drop?: readonly string[];
+}
+export interface SchemaChange {
+  dataset: string;
+  before: SchemaField[];
+  after: SchemaField[];
 }
 
 export interface Change {
@@ -177,9 +208,12 @@ export interface Change {
 }
 
 export interface Diff {
+  schemaChanges: SchemaChange[];
   baseRevision: bigint;
   version: bigint;
   changes: Change[];
+  /** Absent at the current read snapshot end; pass back unchanged. */
+  nextAfter?: string;
 }
 
 export interface Conflict {
@@ -198,6 +232,7 @@ export interface Conflicts {
   head: bigint;
   version: bigint;
   total: bigint;
+  /** Opaque continuation position; truncated indicates whether more conflicts remain. */
   nextAfter?: string;
   truncated: boolean;
   conflicts: Conflict[];
@@ -211,9 +246,18 @@ export interface Commit {
   sourceWorkspace: string;
   sourceBaseRevision: bigint;
 }
+/** Commits are ordered by ascending revision. Later requests may see new publications. */
+export interface HistoryPage {
+  commits: Commit[];
+  /** Absent at the current read snapshot end. */
+  nextAfter?: bigint;
+}
 export interface CommitChanges {
+  schemaChanges: SchemaChange[];
   revision: bigint;
   changes: Change[];
+  /** Absent at the current read snapshot end; pass back unchanged. */
+  nextAfter?: string;
 }
 
 export interface AuditEvent {
@@ -249,6 +293,7 @@ export interface RebaseResult {
   changes: bigint;
 }
 
+/** Cursor page: after is opaque and must be returned unchanged; limit bounds one request. */
 export interface Page {
   after?: string;
   limit?: number;
@@ -274,6 +319,7 @@ export interface Publication {
 
 export type ChangeCounts = { added: bigint; deleted: bigint; modified: bigint };
 export type ChangeSummary = {
+  schemaChanges: SchemaChange[];
   total: ChangeCounts;
   datasets: (ChangeCounts & { id: string; name: string })[];
   version?: bigint;

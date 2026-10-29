@@ -157,14 +157,63 @@ Python SDK 与 TS SDK 分别按上文安装和构建；统一安装与联调流�
 |---|---|
 | Client | info、create_project、project、projects、set_member |
 | Client | members、remove_member、archive_project、delete_project |
-| Client | create_dataset、track_table、datasets、create_workspace、workspace、workspaces |
-| Client | features、history、commit、audit、restore |
-| Workspace | save、save_batch、delete、features、diff、conflicts |
+| Client | create_dataset、register_table、datasets、create_workspace、workspace、workspaces |
+| Client | features、schema、history、commit、audit、restore |
+| Workspace | save、save_batch、save_changes、delete、features、schema、diff、conflicts |
 | Workspace | publish、resolve、rebase、discard、refresh |
 
 `save` 直接接收带字符串 `id` 的完整 GeoJSON Feature。批量编辑使用 SDK 自身的 `Edit`，
 删除通过 `delete()` 或显式 `null` / `None` 表达，保存操作提供完整要素字段。 `save` 保存草稿，`publish` 发布版本，`discard` 丢弃工作区草稿；`restore(project, revision)` 创建撤销指定提交的工作区，需要再次发布，不是将整个项目直接重置到该版本。`archive_project` 只读归档并保留历史，`delete_project` / `delete_dataset` 清除对应版本数据，纳管原表保留。
 正式要素分页固定首次返回的 revision，后续查询带该版本及 next_after；草稿分页需核对 workspace_version。
+按工作区查询 `features` 时，开放工作区读取基线叠加草稿；已发布工作区读取其发布修订的固定快照，后续发布不会改变该结果。工作区的 `base_revision` 保留原值，仍用于差异与摘要的基线比较。
+
+### 版本化字段定义与原子保存
+
+`schema` / `Schema` RPC 查询指定 Dataset 的字段定义，选择固定 `revision` 或 `workspace`，二者互斥。响应包含 `revision`、可选的 `workspace_version` 及 `fields[{name,type,nullable,editable}]`；`type` 是实际存储类型名，例如 `text`、`int8`。工作区查询与要素查询使用同一基线/版本规则；客户端应校验字段定义和要素页的版本一致。
+
+`SaveChanges` 将完整字段意图与同批要素修改原子保存，共用 `expected_workspace_version`。字段意图相对 `workspace.base_revision`，不是逐条执行的 DDL：省略保留已经保存的意图；显式空数组撤销整套字段意图。每项是 `{dataset,add:[{name,type}],drop:[name]}`，新增类型限定 `string`、`number`、`integer`、`boolean`、`json`；只支持普通 nullable 属性字段的新增/删除，主键、几何、受保护字段及 rename/type-change/SQL 默认值不在该能力内。字段和要素发布仍使用原有不可变 request ID 与工作区版本协议。
+
+| SDK | 固定版本读取 | 原子保存字段意图 |
+| --- | --- | --- |
+| Go | `client.Schema(ctx, project, dataset, SchemaQuery{Revision: &revision})` | `draft.SaveChanges(ctx, edits, &schemaEdits)`；`nil` 保留，指向空 slice 清空 |
+| Rust | `client.schema(project, dataset, SchemaQuery{revision: Some(revision), workspace: None})` | `draft.save_changes(&edits, Some(&schema_edits))`；`None` 保留，`Some(&[])` 清空 |
+| TypeScript | `client.schema(project, dataset, {revision})` | `draft.saveChanges(edits, schemaEdits)`；`undefined` 保留，`[]` 清空 |
+| Python | `client.schema(project, dataset, revision=revision)` | `draft.save_changes(edits, schema_edits)`；`None` 保留，`[]` 清空 |
+
+各语言另提供 `Workspace.schema(dataset)` / Go `Schema(ctx,dataset)`，自动选择当前工作区。原 `save_batch` / `SaveBatch` / `saveBatch` 保持“只保存要素、保留字段意图”的语义。
+
+`diff`、`commit` 和两种 summary 响应新增独立的 `schema_changes`（TypeScript `schemaChanges`）：`[{dataset,before:[SchemaField],after:[SchemaField]}]`。没有要素变化也必须展示这些字段变化，不能仅根据 `changes` 数组或要素统计判断草稿/提交为空。固定修订的 `commit` 各页（包括显式查询的空终页）重复返回同一套完整字段变化，字段元数据不随要素分页裁剪；消费方每个修订只应用一次。Protobuf 的 `SaveRequest.schema_edits` 使用可选 `SchemaEdits{edits}` 消息保留缺席与空数组的区别；该包装是内部线协议，公开业务 SDK 仍接收字段意图数组。
+
+### 差异、提交、历史与审计分页
+
+`diff`、`commit`、`history`、`audit` 只在同一读取快照内确有后续记录时返回页级 `next_after`；空页、短终页和恰好整页终页均返回 `null`（gRPC 可选字段缺席）。不需要依据条数推测，也无需再请求空页确认结束。下一请求保持项目、工作区或提交修订等条件，并将游标原样传给 `after`。
+
+开放工作区的 `diff.changes[].draft` 是当前保存的草稿；发布后草稿正文被清理，该字段从提交版本重建，表示三方合并后的实际发布结果，可能包含其他工作区先发布的独立字段。丢弃工作区的差异为空。需要核对提交前后的版本时，请使用固定修订号的 `commit`。
+
+| 查询 | HTTP 页内容 | 游标 |
+| --- | --- | --- |
+| `diff` | `base_revision`、`version`、`changes`、`next_after` | 最后返回的 `dataset/feature_id`；工作区分页还须核对 `version` 未变 |
+| `commit` | `revision`、`changes`、`next_after` | 最后返回的 `dataset/feature_id`；保持同一修订 |
+| `history` | `commits`、`next_after` | 最后返回的修订号，按 `revision > after` 升序 |
+| `audit` | `events`、`next_after` | 最后返回的事件 ID，按 `id > after` 升序；仅 owner 可读 |
+
+SDK 的 `history` 统一返回页对象：Rust/Go 为 `HistoryPage`，TypeScript 为 `HistoryPage`（`commits` / `nextAfter`），Python 为 `commits` / `next_after` 字典。Rust/Python 的终页游标为 `None`，Go 为 `nil`，TypeScript/Web 省略 `nextAfter`；修订号和事件 ID 在 TypeScript SDK 中使用 `bigint`，浏览器 HTTP 中使用十进制字符串。`diff` / `commit` 的条目 `cursor` 仍保留，翻页使用页级游标。
+
+结束信号仅描述当前请求快照。history/audit 的各次请求独立建立读取快照；下一请求前新增的、更大修订号或事件 ID 可以被读到。需要等待新记录时保存最后观察到的修订号/事件 ID，显式以该值轮询；`next_after = null` 不表示未来不会新增。跨请求不维持冻结的历史/审计快照，diff 的工作区也可能在两页之间改变；提交明细保持固定修订。
+
+HTTP `history` 从数组改为页对象，四语言 SDK 的 `history` 返回类型同步改变；调用方读取 `commits` 并跟随页级游标。此为当前协议的响应/源码兼容性变更，服务端、SDK、CLI 与 Web 同版本更新；不提供旧数组兼容层。新增 Protobuf 字段保留原字段编号；该分页协议变更保留当时的格式 16。自建数据集分表使用的当前格式见[当前版本契约](#当前版本契约)。
+
+```python
+after = 0
+while True:
+    page = client.history(project.id, after=after, limit=100)
+    for commit in page["commits"]:
+        print(commit["revision"])
+    if page["next_after"] is None:
+        break
+    after = page["next_after"]
+```
+
 `history` 的每条提交还包含实际发布工作区及其发布时基线：Go 使用 `SourceWorkspace` / `SourceBaseRevision`，Rust/Python 使用 `source_workspace` / `source_base_revision`，TypeScript 使用 `sourceWorkspace` / `sourceBaseRevision`。基线随发布前 rebase 更新；已发布工作区保持其基线不变。
 JSON 对象键通过递归校验，保护普通对象的编解码语义；
 `$serde_json::private::RawValue` 和 `$serde_json::private::Number` 为保留键，
@@ -232,7 +281,7 @@ Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / ar
 
 当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-当前存储格式为 16，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+当前存储格式为 19，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
 
 `Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 返回当前服务的实际编码请求预算，默认 67,108,864 字节。单要素仍受所在请求和响应的总预算约束。
 
@@ -252,16 +301,20 @@ Save/SaveStream 返回 `warnings` 字符串列表，指出几何自相交等拓�
 
 ### PostGIS 表纳管
 
-业务 SDK 使用 `create_dataset`（Go/TypeScript 按各语言命名风格）创建原生数据集，使用 `track_table` / `TrackTable` / `trackTable` 将已有表纳入版本控制。当前表纳管仅支持服务所连接的 PostGIS 数据库，因此来源类型与协议字段仍为 `PostgisTable` / `postgis_table`，不表示支持任意数据库。底层 RPC 共用 `CreateDataset`；HTTP 与 `gl call` 使用 `create_dataset` 加 `postgis_table`，不增加别名。文件导入继续使用创建数据集、分批保存到工作区、发布的流程。
+业务 SDK 使用 `create_dataset`（Go/TypeScript 按各语言命名风格）创建原生数据集，使用 `register_table` / `RegisterTable` / `registerTable` 将已有表纳入版本控制。当前表纳管仅支持服务所连接的 PostGIS 数据库，因此来源类型与协议字段仍为 `PostgisTable` / `postgis_table`，不表示支持任意数据库。底层 RPC 共用 `CreateDataset`；HTTP 与 `gl call` 使用 `create_dataset` 加 `postgis_table`，不增加别名。文件导入继续使用创建数据集、分批保存到工作区、发布的流程。
 
 `create_dataset` 的 `postgis_table` 指定 `{schema, table, id_column, geometry_column}`，纳管时几何类型和维度由原表读取。返回和数据集列表中的 `postgis_table` 描述绑定；内部数据集该字段为空。操作要求平台管理员同时具有项目写权限。纳管建立首个发布版本，日后的 `save`、`publish`、`restore` 使用现有工作区契约。
 
 | SDK | 业务接口 |
 |---|---|
-| Rust | `track_table(project, name, &PostgisTable)` |
-| Go | `TrackTable(ctx, project, name, PostgisTable)` |
-| TypeScript | `trackTable(project, name, {schema, table, idColumn, geometryColumn})` |
-| Python | `track_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
+| Rust | `register_table(project, name, &PostgisTable)` |
+| Go | `RegisterTable(ctx, project, name, PostgisTable)` |
+| TypeScript | `registerTable(project, name, {schema, table, idColumn, geometryColumn})` |
+| Python | `register_table(project, name, schema=..., table=..., id_column=..., geometry_column=...)` |
+
+命名迁移：升级 SDK 时，Rust/Python 的 `track_table`、Go 的 `TrackTable`、TypeScript 和 Web 私有动作的 `trackTable` 分别替换为上述注册名称，参数和返回值不变；这是源码调用与 Web 动作的破坏性改名，不保留旧别名。控制台前端与 Node BFF 应配套部署，并刷新已打开的页面。CLI、HTTP 和 gRPC 仍使用原来的创建数据集请求，不新增注册命令或 RPC；`proto/geoledger/v1/geoledger.proto` 及其生成绑定无需变更。当前没有独立的取消注册接口；删除数据集仍使用 `delete_dataset` 系列接口，原业务表保留。
+
+此改名不修改存储格式或已有数据，不需要重建、导入或迁移数据库。既有表绑定、触发器、备份及原历史提交说明继续有效；新注册提交的默认说明改为 `Register table`，权限失败仍返回相同错误类别。PostGIS 的 `gl_source_track` / `gl_versioned_track` 记录原表写入以检测外部变更，属于变更跟踪，不是注册操作，保留原名。
 
 原表要求和发布事务见 [已有业务表](storage.md#已有业务表)。
 

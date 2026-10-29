@@ -1,0 +1,14 @@
+{
+  "id": "rust-stringified-error",
+  "valid": [
+    "fn f() { let x = result.map_err(anyhow::Error::from); }",
+    "fn f() { let x = result.map_err(|e| anyhow::anyhow!(e)); }",
+    "fn f() { let x = result.map_err(|e| e.to_string()); }",
+    "fn f() { let x = result.map_err(|e| anyhow::anyhow!(other.to_string())); }",
+    "#[cfg(test)] mod tests { fn f() { let x = result.map_err(|e| anyhow::anyhow!(e.to_string())); } }"
+  ],
+  "invalid": [
+    "fn f() { let x = result.map_err(|e| anyhow::anyhow!(e.to_string())); }",
+    "fn f() { let x = load().map_err(|err| anyhow::anyhow!(err.to_string()))?; }"
+  ]
+}

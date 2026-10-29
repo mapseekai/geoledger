@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Server limits and storage/protocol metadata for the connected service.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub platform_admin: bool,
@@ -12,6 +13,7 @@ pub struct ServerInfo {
     pub max_feature_bytes: u32,
 }
 
+/// Project identity, current revision and the caller’s server-authorized role.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     #[serde(rename = "project")]
@@ -72,6 +74,51 @@ pub struct FeaturePage {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SchemaField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub nullable: bool,
+    pub editable: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DatasetSchema {
+    pub revision: i64,
+    pub workspace_version: Option<i64>,
+    pub fields: Vec<SchemaField>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SchemaQuery {
+    pub revision: Option<i64>,
+    pub workspace: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AddField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SchemaEdit {
+    pub dataset: String,
+    #[serde(default)]
+    pub add: Vec<AddField>,
+    #[serde(default)]
+    pub drop: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SchemaChange {
+    pub dataset: String,
+    pub before: Vec<SchemaField>,
+    pub after: Vec<SchemaField>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Change {
     pub cursor: String,
     pub dataset: String,
@@ -84,9 +131,13 @@ pub struct Change {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Diff {
+    #[serde(default)]
+    pub schema_changes: Vec<SchemaChange>,
     pub base_revision: i64,
     pub version: i64,
     pub changes: Vec<Change>,
+    /// Present only when another page exists in the current read snapshot.
+    pub next_after: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -122,9 +173,19 @@ pub struct Commit {
     pub source_base_revision: i64,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPage {
+    pub commits: Vec<Commit>,
+    pub next_after: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CommitChanges {
+    #[serde(default)]
+    pub schema_changes: Vec<SchemaChange>,
     pub revision: i64,
     pub changes: Vec<Change>,
+    /// Present only when another page exists in the current read snapshot.
+    pub next_after: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -175,12 +236,19 @@ pub struct Edit {
     #[serde(deserialize_with = "required_feature")]
     pub feature: Option<Value>,
 }
+/// A page request whose continuation key depends on the called method.
+/// Use the last ID for project/dataset/workspace lists, the last subject for
+/// members, or the returned `next_after` for diff/commit changes and conflicts.
+/// Start with an empty `after`.
+/// `None` for `limit` selects the server default; follow each method's end condition.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Page {
     pub after: String,
     pub limit: Option<i64>,
 }
+/// Feature filters. `workspace` and `revision` are mutually exclusive;
+/// draft handles select their own workspace. Continue with the returned cursor.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FeatureQuery {
@@ -224,6 +292,8 @@ pub struct DatasetChangeCounts {
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChangeSummary {
+    #[serde(default)]
+    pub schema_changes: Vec<SchemaChange>,
     pub total: ChangeCounts,
     pub datasets: Vec<DatasetChangeCounts>,
     pub version: Option<i64>,

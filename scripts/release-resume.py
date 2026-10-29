@@ -118,19 +118,36 @@ def go(repo, tag, sha):
         raise ValueError('existing Go tag points to a different commit')
 
 
+def find_release(repo, tag):
+    # The tag endpoint excludes drafts; list releases with the authenticated token.
+    page = 1
+    while True:
+        records = gh(f'repos/{repo}/releases?per_page=100&page={page}')
+        if records is None:
+            raise RuntimeError('release listing is unavailable')
+        for record in records:
+            if record['tag_name'] == tag:
+                return record
+        if len(records) < 100:
+            return None
+        page += 1
+
+
 def release(repo, tag, sha, directory):
     files = sorted(directory.iterdir())
     if not files or not all(path.is_file() for path in files):
         raise ValueError('release assets must be nonempty files')
     if tag_sha(repo, tag) != sha:
         raise ValueError('release tag differs from candidate commit')
-    existing = gh(f'repos/{repo}/releases/tags/{tag}')
+    existing = find_release(repo, tag)
     if existing is None:
-        args = ['gh', 'release', 'create', tag, '--draft', '--verify-tag', '--title', 'GeoLedger ' + tag[1:], '--notes-file', 'notes.md', '--repo', repo]
-        if '-' in tag:
-            args.append('--prerelease')
-        run(*args)
-        existing = gh(f'repos/{repo}/releases/tags/{tag}')
+        # Use the returned ID: the release listing may still omit this new draft.
+        existing = json.loads(run('gh', 'api', f'repos/{repo}/releases', '--method', 'POST',
+                                  '-f', 'tag_name=' + tag, '-f', 'name=GeoLedger ' + tag[1:],
+                                  '-F', 'draft=true', '-F', 'prerelease=' + str('-' in tag).lower(),
+                                  '-F', 'body=@notes.md'))
+        if existing['tag_name'] != tag or not existing['draft'] or existing['prerelease'] != ('-' in tag):
+            raise ValueError('created release identity differs')
     assets = gh(f'repos/{repo}/releases/{existing["id"]}/assets?per_page=100')
     if len(assets) == 100:
         raise ValueError('unexpected release asset count')

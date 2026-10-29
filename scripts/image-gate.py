@@ -151,16 +151,21 @@ def validate_cargo_inventory(report: dict, lock: dict) -> None:
               if r.get('Type') == 'cargo' for p in (r.get('Packages') or [])}
     missing = expected - actual
     if not expected or missing:
-        raise ValueError(f'Rust inventory does not cover Cargo.lock: {len(missing)} missing packages')
+        details = ', '.join(f'{name}@{version}' for name, version in sorted(missing))
+        raise ValueError(f'Rust inventory does not cover Cargo.lock: {len(missing)} missing packages: {details}')
 
 
-def validate_source_inventory(report: dict, kind: str) -> None:
+def source_cargo_lock(cargo_lock: Path | None = None) -> Path:
+    return cargo_lock if cargo_lock is not None else Path(__file__).resolve().parents[1] / 'Cargo.lock'
+
+
+def validate_source_inventory(report: dict, kind: str, cargo_lock: Path | None = None) -> None:
     if kind.startswith(('server', 'combined')):
-        lock = Path(__file__).resolve().parents[1] / 'Cargo.lock'
+        lock = source_cargo_lock(cargo_lock)
         validate_cargo_inventory(report, tomllib.loads(lock.read_text()))
 
 
-def scan(layout: Path, output: Path, kind: str, platforms: set[str], sha: str) -> dict:
+def scan(layout: Path, output: Path, kind: str, platforms: set[str], sha: str, *, cargo_lock: Path | None = None) -> dict:
     if not re.fullmatch(r'[0-9a-f]{40}', sha):
         raise ValueError('source must be a full commit SHA')
     output.mkdir(parents=True, exist_ok=True)
@@ -210,7 +215,7 @@ def scan(layout: Path, output: Path, kind: str, platforms: set[str], sha: str) -
         verify_image_identity(layout, digest, platform, sha, report)
         try:
             validate_report(report, kind)
-            validate_source_inventory(report, kind)
+            validate_source_inventory(report, kind, cargo_lock)
         except ValueError as error:
             failures.append(f'{platform}: {error}')
         reports[platform] = {'manifest': digest, 'report': filename, 'sha256': digest_file(path)}
@@ -218,12 +223,14 @@ def scan(layout: Path, output: Path, kind: str, platforms: set[str], sha: str) -
         raise ValueError('; '.join(failures))
     gate = {'schema': 1, 'source_sha': sha, 'root': root, 'kind': kind, 'platforms': reports,
             'scanner': lock['version'], 'created_at': datetime.now(timezone.utc).isoformat()}
+    if kind.startswith(('server', 'combined')):
+        gate['cargo_lock_sha256'] = digest_file(source_cargo_lock(cargo_lock))
     receipt.write_text(json.dumps(gate, indent=2) + '\n')
     print(f'PASS {kind} {root}: all {len(images)} architectures scanned')
     return gate
 
 
-def verify(layout: Path, output: Path, sha: str, kind: str | None = None) -> dict:
+def verify(layout: Path, output: Path, sha: str, kind: str | None = None, *, cargo_lock: Path | None = None) -> dict:
     gate = json.loads((output / 'gate.json').read_text())
     if kind is not None and gate['kind'] != kind:
         raise ValueError('scan receipt belongs to a different image policy')
@@ -235,6 +242,9 @@ def verify(layout: Path, output: Path, sha: str, kind: str | None = None) -> dic
     lock = json.loads((Path(__file__).resolve().parents[1] / '.security/trivy.lock.json').read_text())
     if gate['scanner'] != lock['version']:
         raise ValueError('receipt uses a different scanner from current policy')
+    if gate['kind'].startswith(('server', 'combined')):
+        if gate.get('cargo_lock_sha256') != digest_file(source_cargo_lock(cargo_lock)):
+            raise ValueError('Cargo.lock differs from the scanned source inventory baseline')
     root, images = inventory(layout)
     if root != gate['root'] or images != {p: r['manifest'] for p, r in gate['platforms'].items()}:
         raise ValueError('scanned OCI image has changed')
@@ -250,7 +260,7 @@ def verify(layout: Path, output: Path, sha: str, kind: str | None = None) -> dic
         value = json.loads(report.read_text())
         verify_image_identity(layout, record['manifest'], platform, sha, value)
         validate_report(value, gate['kind'])
-        validate_source_inventory(value, gate['kind'])
+        validate_source_inventory(value, gate['kind'], cargo_lock)
     return gate
 
 

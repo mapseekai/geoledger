@@ -1,0 +1,12 @@
+id: test-layout-rust-test-gate
+snapshots:
+  "mod tests { #[test] fn works() {} }":
+    labels:
+    - source: "mod tests { #[test] fn works() {} }"
+      style: primary
+      start: 0
+      end: 35
+    - source: tests
+      style: secondary
+      start: 4
+      end: 9

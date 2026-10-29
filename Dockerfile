@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Both services share musl; retain APK inventories for native dependency scans.
 FROM rust:1.98-alpine3.24@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS server-build
-RUN apk upgrade --no-cache && apk add --no-cache build-base cmake pkgconf openssl-dev protobuf-dev protobuf libspatialite
+RUN apk upgrade --no-cache && apk add --no-cache build-base cmake pkgconf openssl-dev protobuf-dev protobuf libspatialite 'brotli-libs>=1.2.1-r0'
 # Dynamic CRT is required for SpatiaLite extension loading.
 ENV CARGO_BUILD_JOBS=2 RUSTFLAGS="-C target-feature=-crt-static" GL_SPATIALITE_EXTENSION=/usr/lib/mod_spatialite.so.8
 WORKDIR /src
@@ -14,8 +14,10 @@ RUN mkdir -p /src/build-evidence && \
     cargo build --release --locked --offline --bins --message-format=json > /src/build-evidence/cargo-artifacts.jsonl && \
     rustc -vV > /src/build-evidence/rustc.txt && \
     rm -rf /usr/local/cargo/registry /usr/local/cargo/git
-FROM node:22-alpine3.24@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS node-runtime
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS toolchain
+# Node 22.23.4 backports CVE-2026-111497; its bundled Brotli still reports 1.1.0.
+FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS node-runtime
+RUN node -e 'require("node:assert/strict").equal(process.versions.node, "22.23.4")'
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS toolchain
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libstdc++
 COPY --from=node-runtime /usr/local/bin/node /nodejs/bin/node
 SHELL ["/bin/sh", "-ec"]
@@ -24,8 +26,8 @@ ENV PATH=/nodejs/bin:/opt/npm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/
 ADD --checksum=sha256:6666b48816b39b86c3febac7b51a4ee4de6c5ca589c382ad8004b6b113f86677 https://registry.npmjs.org/npm/-/npm-12.2.0.tgz /tmp/npm.tgz
 ADD --checksum=sha256:ef8448ec78f20b692f04fa6d01f39b5ab34c66404bea3429f5a39c6c9e0be8b4 https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz /tmp/brace-expansion.tgz
 ADD --checksum=sha256:d75e1e6a11587954da5e2f0e2b5c4b397a16d28cc2f7bdf64e9027fc2fe593ee https://registry.npmjs.org/http-cache-semantics/-/http-cache-semantics-4.3.0.tgz /tmp/http-cache-semantics.tgz
-ADD --checksum=sha256:e18191aac9c0ff43dac7fe9b10b7041a22d07addb7b66a6e8ac14a52a5b69b74 https://registry.npmjs.org/undici/-/undici-6.28.1.tgz /tmp/undici.tgz
-ADD --checksum=sha256:7f99ac7abda701afe1fd1e36de462236fb4d1eb8c595d7ae0267bba7d8ee55f8 https://registry.npmjs.org/ip-address/-/ip-address-10.7.1.tgz /tmp/ip-address.tgz
+ADD --checksum=sha256:29c4b8e0b2d86cb8795571c1959012ce057a14ecfd34858335f47c31e770a04f https://registry.npmjs.org/undici/-/undici-6.29.1.tgz /tmp/undici.tgz
+ADD --checksum=sha256:f9e1d0dd369c002f43770c6ee35942c8078e76d080a1e18e89113eef865f26ff https://registry.npmjs.org/ip-address/-/ip-address-10.7.4.tgz /tmp/ip-address.tgz
 ADD --checksum=sha256:48c903f98c5591d8d26f16f389d5cb3435459474c645209a79f6241bf4b657b6 https://registry.npmjs.org/postcss-selector-parser/-/postcss-selector-parser-7.1.6.tgz /tmp/postcss-selector-parser.tgz
 COPY .security/node-build.lock.json scripts/verify-node-build.cjs /opt/build-policy/
 # Refresh bundled transitive packages before executing npm for the first time.
@@ -45,13 +47,16 @@ COPY sdk/ts ./sdk/ts
 COPY web ./web
 ENV NEXT_TELEMETRY_DISABLED=1
 # Build-stage inventories remain available to the gate; only /output enters runtime.
+# Lint runs in CI; remove unused native linters from this build without changing locks.
 # proxy_ca is optional for ordinary builds and supplies managed-cloud CA trust.
 RUN --mount=type=secret,id=proxy_ca \
     if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
     npm ci --ignore-scripts --prefix sdk/ts && \
+    npm uninstall --ignore-scripts --no-save --prefix sdk/ts oxlint oxlint-tsgolint && \
     node /opt/build-policy/rebuild-typescript.cjs install /app/sdk/ts && \
     npm --prefix sdk/ts run build && \
     npm ci --ignore-scripts --prefix web && \
+    npm uninstall --ignore-scripts --no-save --prefix web oxlint oxlint-tsgolint && \
     node /opt/build-policy/rebuild-typescript.cjs install /app/web && \
     npm --prefix web run build && \
     mkdir /output && \
@@ -66,8 +71,8 @@ COPY --from=console-build /app /app
 COPY --from=console-build /output /output
 # A standalone lock avoids scanner workspace-resolution gaps in build images.
 COPY Cargo.lock /usr/share/geoledger/Cargo.lock
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime
-RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libssl3 libcrypto3 libgcc libstdc++ libspatialite tini && \
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libssl3 libcrypto3 libgcc libstdc++ libspatialite tini 'brotli-libs>=1.2.1-r0' && \
     addgroup -g 10001 geoledger && adduser -D -u 10001 -G geoledger geoledger && \
     mkdir /data && chown 10001:10001 /data
 COPY --from=node-runtime /usr/local/bin/node /nodejs/bin/node

@@ -1,0 +1,41 @@
+{
+  "id": "rust-stringified-error",
+  "language": "Rust",
+  "severity": "hint",
+  "message": "Review error source loss: stringifying before wrapping may erase the source chain.",
+  "files": [
+    "crates/*/src/**/*.rs",
+    "sdk/rust/src/**/*.rs"
+  ],
+  "ignores": [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/generated/**",
+    "**/__generated__/**",
+    "**/dist/**",
+    "**/target/**",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/*.generated.*",
+    "**/*.gen.*",
+    "**/benches/**",
+    "**/examples/**",
+    "**/test/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/*_tests.rs"
+  ],
+  "rule": {
+    "pattern": "$RESULT.map_err(|$ERR| anyhow::anyhow!($ERR.to_string()))",
+    "not": {
+      "inside": {
+        "pattern": "mod tests { $$$BODY }",
+        "stopBy": "end"
+      }
+    }
+  }
+}

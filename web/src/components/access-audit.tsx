@@ -115,6 +115,7 @@ function MemberDialog({
           event.preventDefault();
           if (!validatePasswordForm(event.currentTarget)) return;
           const data = new FormData(event.currentTarget);
+          // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
           void task.run(async () => {
             await call({
               action: "setMember",
@@ -263,6 +264,7 @@ function Members({
               const currentPassword = String(
                 new FormData(event.currentTarget).get("currentPassword"),
               );
+              // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
               void task.run(async () => {
                 await call({
                   action: "removeMember",

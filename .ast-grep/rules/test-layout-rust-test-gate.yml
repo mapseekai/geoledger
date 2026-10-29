@@ -1,0 +1,48 @@
+{
+  "id": "test-layout-rust-test-gate",
+  "language": "Rust",
+  "severity": "error",
+  "message": "Keep unit tests in the unique source-owned test location.",
+  "files": [
+    "crates/**/src/**/*.rs",
+    "sdk/rust/src/**/*.rs"
+  ],
+  "ignores": [
+    "**/generated/**",
+    "**/target/**"
+  ],
+  "rule": {
+    "all": [
+      {
+        "kind": "mod_item",
+        "has": {
+          "field": "name",
+          "regex": "^tests$"
+        }
+      },
+      {
+        "not": {
+          "follows": {
+            "kind": "attribute_item",
+            "regex": "^#\\[\\s*cfg\\(\\s*test\\s*\\)\\s*\\]$",
+            "stopBy": {
+              "not": {
+                "any": [
+                  {
+                    "kind": "attribute_item"
+                  },
+                  {
+                    "kind": "line_comment"
+                  },
+                  {
+                    "kind": "block_comment"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

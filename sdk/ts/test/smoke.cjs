@@ -54,9 +54,10 @@ const client = new Client(
       feature,
     );
     const history = await client.history(project.id);
-    assert.equal(history.length, 1);
-    assert.equal(history[0].sourceWorkspace, receipt.workspace);
-    assert.equal(history[0].sourceBaseRevision, 0n);
+    assert.equal(history.commits.length, 1);
+    assert.equal(history.nextAfter, undefined);
+    assert.equal(history.commits[0].sourceWorkspace, receipt.workspace);
+    assert.equal(history.commits[0].sourceBaseRevision, 0n);
     assert.equal(
       (await client.commit(project.id, receipt.revision)).changes.length,
       1,

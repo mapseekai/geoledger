@@ -1,5 +1,6 @@
 "use client";
 import { cn } from "@/lib/utils";
+import { leaveFullscreen, toggleFullscreen } from "@/lib/fullscreen";
 import {
   call,
   type Dataset,
@@ -115,12 +116,14 @@ export function FeatureExplorer({
   writable,
   back,
   initialWorkspace = "",
+  projectChanged,
 }: {
   initialWorkspace?: string;
   project: Project;
   dataset: Dataset;
   writable: boolean;
   back: () => void;
+  projectChanged: () => void;
 }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]),
     [workspace, setWorkspace] = useState(initialWorkspace),
@@ -227,6 +230,7 @@ export function FeatureExplorer({
         workspaceId={workspace}
         writable={writable}
         source={source}
+        projectChanged={projectChanged}
         alert={<ErrorBox message={task.error || workspaceError} />}
       />
     </section>
@@ -449,10 +453,6 @@ function useLayer(project: string, dataset: string, workspaceId: string) {
   return { ...state, load };
 }
 
-function leaveFullscreen() {
-  if (document.fullscreenElement) void document.exitFullscreen();
-}
-
 export function FeatureWorkspace({
   project,
   dataset,
@@ -460,6 +460,7 @@ export function FeatureWorkspace({
   writable,
   source,
   alert,
+  projectChanged,
 }: {
   project: Project;
   dataset: Dataset;
@@ -467,6 +468,7 @@ export function FeatureWorkspace({
   writable: boolean;
   source: ReactNode;
   alert: ReactNode;
+  projectChanged: () => void;
 }) {
   const layerState = useLayer(project.id, dataset.id, workspaceId);
   const [topologyWarnings, setTopologyWarnings] = useState<{
@@ -504,6 +506,7 @@ export function FeatureWorkspace({
     setPending(readPublication(sessionStorage.getItem("gl.publication")));
   }, []);
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- load catches request/parse failures and reports them in component state.
     void load(false);
     // `load` changes with the loaded length; reload only on explicit refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -570,9 +573,9 @@ export function FeatureWorkspace({
     id: item.id,
     geojson: item.raw,
   });
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void body?.requestFullscreen?.();
+  const togglePageFullscreen = () => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- fullscreen helpers catch browser rejections internally.
+    void toggleFullscreen(body, () => toast.error("无法切换全屏，请重试。"));
   };
   const showLeft = narrow ? drawer === "left" : left;
   const showRight = narrow ? drawer === "right" : right;
@@ -611,11 +614,13 @@ export function FeatureWorkspace({
       canEdit={canEdit}
       zoom={() => selected.bounds && mapRef.current?.fit(selected.bounds)}
       edit={() => {
-        leaveFullscreen();
+        // oxlint-disable-next-line typescript/no-floating-promises -- fullscreen helpers catch browser rejections internally.
+        void leaveFullscreen();
         setEdit(raw(selected));
       }}
       remove={() => {
-        leaveFullscreen();
+        // oxlint-disable-next-line typescript/no-floating-promises -- fullscreen helpers catch browser rejections internally.
+        void leaveFullscreen();
         setRemove(raw(selected));
       }}
       close={() => setSelectedId(undefined)}
@@ -648,7 +653,8 @@ export function FeatureWorkspace({
               aria-label="添加要素"
               disabled={!canEdit}
               onClick={() => {
-                leaveFullscreen();
+                // oxlint-disable-next-line typescript/no-floating-promises -- fullscreen helpers catch browser rejections internally.
+                void leaveFullscreen();
                 setEdit("new");
               }}
             >
@@ -666,7 +672,8 @@ export function FeatureWorkspace({
                 busy
               }
               onClick={() => {
-                leaveFullscreen();
+                // oxlint-disable-next-line typescript/no-floating-promises -- fullscreen helpers catch browser rejections internally.
+                void leaveFullscreen();
                 setPublish(true);
               }}
             >
@@ -765,7 +772,7 @@ export function FeatureWorkspace({
                 onHover={setHovered}
                 describe={describe}
                 fullscreen={fullscreen}
-                toggleFullscreen={toggleFullscreen}
+                toggleFullscreen={togglePageFullscreen}
               >
                 {busy && (
                   <div className="map-progress" role="status">
@@ -937,6 +944,7 @@ export function FeatureWorkspace({
           }}
           complete={() => {
             setPending(undefined);
+            projectChanged();
             reload();
           }}
         />
@@ -1531,6 +1539,7 @@ export function FeatureEditor({
             const form = new FormData(e.currentTarget);
             const id =
               feature === "new" ? String(form.get("id")).trim() : feature.id;
+            // oxlint-disable-next-line typescript/no-floating-promises -- useAction.run catches failures and reports them in component state.
             void task.run(() =>
               (async () => {
                 const raw = featureText(String(form.get("geojson")), id);

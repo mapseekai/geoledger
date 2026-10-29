@@ -87,6 +87,20 @@ impl Fixture {
     fn backend(&mut self) -> Result<i32, BoxError> {
         Ok(self.monitor.query_one("SELECT pid FROM pg_stat_activity WHERE application_name=$1 ORDER BY backend_start LIMIT 1",&[&self.tag])?.get(0))
     }
+    fn idle_backend(&mut self, expected: i32) -> TestResult {
+        let stats = self.app.pool_stats().ok_or("pool")?;
+        assert_eq!((stats.active, stats.idle, stats.retiring), (0, 1, 0));
+        let rows = self.monitor.query(
+            "SELECT pid,state,xact_start IS NULL,backend_xid IS NULL FROM pg_stat_activity WHERE application_name=$1",
+            &[&self.tag],
+        )?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get::<_, i32>(0), expected);
+        assert_eq!(rows[0].get::<_, String>(1), "idle");
+        assert!(rows[0].get::<_, bool>(2));
+        assert!(rows[0].get::<_, bool>(3));
+        Ok(())
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -100,6 +114,72 @@ impl Drop for Fixture {
 }
 #[test]
 #[ignore = "requires isolated geoledger_test PostGIS database"]
+fn expected_404s_reuse_connection_without_leaking_transaction_or_partial_save() -> TestResult {
+    let mut f = Fixture::new(StorageOptions {
+        pool_size: 1,
+        ..StorageOptions::default()
+    })?;
+    let dataset = f.call(
+        "create_dataset",
+        json!({"name":"reuse","geometry_type":"point"}),
+    )?["dataset"]
+        .clone();
+    let feature = json!({"type":"Feature","id":"deleted","properties":{"label":"seed"},"geometry":{"type":"Point","coordinates":[1,2]}});
+    for value in [feature, Value::Null] {
+        let workspace = f.call("create_workspace", json!({}))?["workspace"].clone();
+        f.call("save", json!({"workspace":workspace,"expected_workspace_version":0,"edits":[{"dataset":dataset,"feature_id":"deleted","feature":value}]}))?;
+        f.call("publish", json!({"workspace":workspace,"expected_workspace_version":1,"request_id":Uuid::new_v4(),"message":"404 reuse fixture"}))?;
+    }
+    let pid = f.backend()?;
+    for _ in 0..20 {
+        let error = f
+            .call(
+                "features",
+                json!({"dataset":dataset,"feature_id":"deleted"}),
+            )
+            .err()
+            .ok_or("deleted feature must return 404")?;
+        assert_eq!(error.status, 404, "{error:?}");
+        f.idle_backend(pid)?;
+    }
+    let workspace = f.call("create_workspace", json!({}))?["workspace"].clone();
+    let mut edits: Vec<_> = (0..32)
+        .map(|i| {
+            let id = format!("partial-{i}");
+            json!({"dataset":dataset,"feature_id":id,"feature":{"type":"Feature","id":id,"properties":{},"geometry":null}})
+        })
+        .collect();
+    // The first 32 drafts are flushed before this missing dataset returns 404.
+    edits.push(json!({"dataset":Uuid::new_v4(),"feature_id":"missing","feature":null}));
+    assert_eq!(
+        f.call(
+            "save",
+            json!({"workspace":workspace,"expected_workspace_version":0,"edits":edits})
+        )
+        .err()
+        .ok_or("missing dataset must return 404")?
+        .status,
+        404
+    );
+    f.idle_backend(pid)?;
+    assert_eq!(
+        f.call("get_workspace", json!({"workspace":workspace}))?["version"],
+        0
+    );
+    assert_eq!(
+        f.call("diff", json!({"workspace":workspace}))?["changes"],
+        json!([])
+    );
+    f.call("rename_project", json!({"name":"after rollback"}))?;
+    assert_eq!(f.call("get_project", json!({}))?["name"], "after rollback");
+    f.idle_backend(pid)?;
+    eprintln!(
+        "expected_404s=20 partial_save_404s=1 flushed_drafts_rolled_back=32 backend_pid={pid} distinct_backends=1 idle=1 active=0 retiring=0 residual_transactions=0 subsequent_read_write=ok"
+    );
+    Ok(())
+}
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
 fn deadlines_cancel_database_work_and_hold_pool_slot_until_cleanup() -> TestResult {
     let mut f = Fixture::new(StorageOptions {
         pool_size: 1,
@@ -107,6 +187,8 @@ fn deadlines_cancel_database_work_and_hold_pool_slot_until_cleanup() -> TestResu
     })?;
     f.pause_updates()?;
     for _ in 0..4 {
+        f.app.check_schema()?;
+        let pid = f.backend()?;
         let start = Instant::now();
         let error = f
             .app
@@ -127,6 +209,9 @@ fn deadlines_cancel_database_work_and_hold_pool_slot_until_cleanup() -> TestResu
             "database work exceeded pool capacity: {active}"
         );
         f.drained()?;
+        assert_eq!(f.app.pool_stats().ok_or("pool")?.idle, 0);
+        assert_eq!(f.call("get_project", json!({}))?["name"], "review");
+        assert_ne!(f.backend()?, pid, "timed-out connection was reused");
         f.admin
             .batch_execute("BEGIN; SET LOCAL lock_timeout='250ms'")?;
         f.admin.query_one(
@@ -144,6 +229,50 @@ fn deadlines_cancel_database_work_and_hold_pool_slot_until_cleanup() -> TestResu
         )?
         .get(0);
     assert_eq!(audits, 0);
+    Ok(())
+}
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn commit_deadline_retires_connection_without_partial_commit() -> TestResult {
+    let mut f = Fixture::new(StorageOptions {
+        pool_size: 1,
+        ..StorageOptions::default()
+    })?;
+    let name = format!("gl_review_{}", Uuid::new_v4().simple());
+    f.admin.batch_execute(&format!("CREATE FUNCTION {name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(2); RETURN NEW; END $$; CREATE CONSTRAINT TRIGGER {name} AFTER UPDATE ON gl_projects DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.id='{}') EXECUTE FUNCTION {name}()",f.project))?;
+    f.triggers.push(name);
+    let pid = f.backend()?;
+    let (app, project, owner) = (f.app.clone(), f.project.clone(), f.owner.clone());
+    let task = std::thread::spawn(move || {
+        app.with_timeout(Duration::from_millis(300)).execute(
+            &owner,
+            "rename_project",
+            json!({"project":project,"name":"must-not-commit"}),
+        )
+    });
+    f.wait_event("PgSleep", 1)?;
+    let error = task
+        .join()
+        .map_err(|_| "worker panic")?
+        .err()
+        .ok_or("commit timeout")?;
+    assert_eq!(error.status, 504, "{error:?}");
+    f.drained()?;
+    assert_eq!(f.app.pool_stats().ok_or("pool")?.idle, 0);
+    assert_eq!(f.call("get_project", json!({}))?["name"], "review");
+    let replacement = f.backend()?;
+    assert_ne!(replacement, pid, "uncertain commit connection was reused");
+    let audits: i64 = f
+        .admin
+        .query_one(
+            "SELECT count(*) FROM gl_audit_events WHERE project=$1 AND action='rename_project'",
+            &[&f.project],
+        )?
+        .get(0);
+    assert_eq!(audits, 0);
+    eprintln!(
+        "commit_deadline=504 retired_backend={pid} replacement_backend={replacement} project_unchanged=true committed_audits=0"
+    );
     Ok(())
 }
 #[test]
@@ -190,7 +319,9 @@ fn terminated_active_backend_is_verified_before_replacement() -> TestResult {
     f.admin.batch_execute("ROLLBACK")?;
     assert!(task.join().map_err(|_| "worker panic")?.is_err());
     f.drained()?;
+    assert_eq!(f.app.pool_stats().ok_or("pool")?.idle, 0);
     assert_eq!(f.call("get_project", json!({}))?["name"], "review");
+    assert_ne!(f.backend()?, pid, "terminated connection was reused");
     Ok(())
 }
 #[test]
@@ -202,12 +333,16 @@ fn statement_deadline_and_explicit_cancellation_are_distinct() -> TestResult {
         ..StorageOptions::default()
     })?;
     f.pause_updates()?;
+    let pid = f.backend()?;
     let error = f
         .call("rename_project", json!({"name":"timeout"}))
         .err()
         .ok_or("timeout")?;
     assert_eq!(error.status, 504, "{error:?}");
     f.drained()?;
+    assert_eq!(f.app.pool_stats().ok_or("pool")?.idle, 0);
+    assert_eq!(f.call("get_project", json!({}))?["name"], "review");
+    assert_ne!(f.backend()?, pid, "statement timeout connection was reused");
     let mut f = Fixture::new(StorageOptions {
         pool_size: 1,
         ..StorageOptions::default()
@@ -231,7 +366,13 @@ fn statement_deadline_and_explicit_cancellation_are_distinct() -> TestResult {
         .ok_or("cancelled")?;
     assert_eq!(error.body["error"]["code"], "cancelled", "{error:?}");
     f.drained()?;
+    assert_eq!(f.app.pool_stats().ok_or("pool")?.idle, 0);
     assert_eq!(f.call("get_project", json!({}))?["name"], "review");
+    let replacement = f.backend()?;
+    assert_ne!(replacement, pid, "cancelled connection was reused");
+    eprintln!(
+        "explicit_cancellation=cancelled retired_backend={pid} replacement_backend={replacement} project_unchanged=true"
+    );
     Ok(())
 }
 #[test]

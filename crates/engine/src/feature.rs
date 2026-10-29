@@ -1,4 +1,5 @@
 use super::*;
+use crate::repository::{DatasetRepository, FeatureRepository};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -184,7 +185,7 @@ pub(super) fn stored_row(r: &Row, properties: usize, geom: usize) -> Result<Opti
     .transpose()
 }
 pub(super) fn at_revision(
-    t: &mut Transaction,
+    t: &mut (impl FeatureRepository + ?Sized),
     p: &str,
     d: &str,
     key: &str,
@@ -195,14 +196,14 @@ pub(super) fn at_revision(
         .transpose()
         .map(Option::flatten)
 }
-pub(super) fn dataset(t: &mut Transaction, p: &str, d: &str) -> Result<()> {
+pub(super) fn dataset(t: &mut (impl DatasetRepository + ?Sized), p: &str, d: &str) -> Result<()> {
     id(d)?;
     t.dataset_exists(p, d)?.ok_or_else(missing)?;
     Ok(())
 }
 
 pub(super) fn validate_dataset_geometry(
-    t: &mut Transaction,
+    t: &mut (impl DatasetRepository + ?Sized),
     p: &str,
     d: &str,
     v: &Stored,
@@ -250,4 +251,40 @@ pub(super) fn validate_dataset_geometry(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::{Cell, FeatureQuery};
+
+    struct FeatureOnly;
+    impl FeatureRepository for FeatureOnly {
+        fn feature_page(&mut self, _: &FeatureQuery) -> Result<Vec<Row>> {
+            Err(Error::new(500, "unexpected page read"))
+        }
+        fn feature_at(
+            &mut self,
+            p: &str,
+            d: &str,
+            key: &str,
+            revision: i64,
+        ) -> Result<Option<Row>> {
+            assert_eq!((p, d, key, revision), ("p", "d", "one", 7));
+            Ok(Some(Row::new(vec![
+                Cell::Text(r#"{"value":9007199254740993}"#.into()),
+                Cell::Null,
+            ])))
+        }
+    }
+
+    #[test]
+    fn historical_feature_helper_accepts_only_the_feature_capability() -> Result<()> {
+        // This substitute implements no credentials, writes, transaction ownership or commit.
+        let features: &mut dyn FeatureRepository = &mut FeatureOnly;
+        let stored = at_revision(features, "p", "d", "one", 7)?.ok_or_else(missing)?;
+        assert_eq!(stored.properties["value"], json!(9007199254740993_u64));
+        assert!(stored.geometry.is_none());
+        Ok(())
+    }
 }

@@ -67,6 +67,36 @@ type FeaturePage struct {
 	NextAfter        *string           `json:"next_after"`
 }
 
+type SchemaField struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Nullable bool   `json:"nullable"`
+	Editable bool   `json:"editable"`
+}
+type DatasetSchema struct {
+	Revision         int64         `json:"revision"`
+	WorkspaceVersion *int64        `json:"workspace_version"`
+	Fields           []SchemaField `json:"fields"`
+}
+type SchemaQuery struct {
+	Workspace *string `json:"workspace,omitempty"`
+	Revision  *int64  `json:"revision,omitempty"`
+}
+type AddField struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+type SchemaEdit struct {
+	Dataset string     `json:"dataset"`
+	Add     []AddField `json:"add"`
+	Drop    []string   `json:"drop"`
+}
+type SchemaChange struct {
+	Dataset string        `json:"dataset"`
+	Before  []SchemaField `json:"before"`
+	After   []SchemaField `json:"after"`
+}
+
 type Change struct {
 	Cursor    string          `json:"cursor"`
 	Dataset   string          `json:"dataset"`
@@ -78,9 +108,11 @@ type Change struct {
 }
 
 type Diff struct {
-	BaseRevision int64    `json:"base_revision"`
-	Version      int64    `json:"version"`
-	Changes      []Change `json:"changes"`
+	SchemaChanges []SchemaChange `json:"schema_changes"`
+	BaseRevision  int64          `json:"base_revision"`
+	Version       int64          `json:"version"`
+	Changes       []Change       `json:"changes"`
+	NextAfter     *string        `json:"next_after"`
 }
 
 type Conflict struct {
@@ -112,9 +144,19 @@ type Commit struct {
 	SourceWorkspace    string `json:"source_workspace"`
 	SourceBaseRevision int64  `json:"source_base_revision"`
 }
+
+// HistoryPage contains commits in ascending revision order. A nil NextAfter
+// marks the current read snapshot end; later publications can still be appended.
+type HistoryPage struct {
+	Commits   []Commit `json:"commits"`
+	NextAfter *int64   `json:"next_after"`
+}
+
 type CommitChanges struct {
-	Revision int64    `json:"revision"`
-	Changes  []Change `json:"changes"`
+	SchemaChanges []SchemaChange `json:"schema_changes"`
+	Revision      int64          `json:"revision"`
+	Changes       []Change       `json:"changes"`
+	NextAfter     *string        `json:"next_after"`
 }
 
 type AuditEvent struct {
@@ -158,16 +200,30 @@ type Feature struct {
 	Geometry   any            `json:"geometry"`
 }
 
-// Feature must be nonempty JSON. Use JSON null (or Workspace.Delete) for deletion.
+// Edit changes one feature. Feature must be explicit JSON; use JSON null
+// (or Workspace.Delete) for deletion.
 type Edit struct {
 	Dataset   string          `json:"dataset"`
 	FeatureID string          `json:"feature_id"`
 	Feature   json.RawMessage `json:"feature"`
 }
+
+// Page selects one page, not automatic iteration. Its zero value selects the
+// first page with the server's default size; a nonzero Limit is sent unchanged
+// for server validation. After is the method's continuation key: retain returned
+// cursors unchanged, and use the last ID for ID-ordered list methods.
 type Page struct {
 	After string `json:"after,omitempty"`
 	Limit int64  `json:"limit,omitempty"`
 }
+
+// FeatureQuery selects features from a published revision or a draft. With
+// neither Revision nor Workspace set, the server selects the published head.
+// Limit zero uses the server default. Continue using FeaturePage.NextAfter
+// unchanged with the same filters. Pin the first returned Revision for published
+// pages; for drafts, check WorkspaceVersion has not changed between pages.
+// A nil NextAfter ends iteration.
+// Workspace.Features supplies Workspace itself and rejects either override.
 type FeatureQuery struct {
 	Workspace *string   `json:"workspace,omitempty"`
 	Revision  *int64    `json:"revision,omitempty"`
@@ -177,7 +233,9 @@ type FeatureQuery struct {
 	Limit     int64     `json:"limit,omitempty"`
 }
 
-// Publication is safe to serialize for recovery; retry it unchanged.
+// Publication is safe to serialize for recovery; retry it unchanged, including
+// RequestID, expected version and message. Obtain it from PendingPublication
+// rather than constructing a new identity after an uncertain result.
 type Publication struct {
 	Project                  string `json:"project"`
 	Workspace                string `json:"workspace"`
@@ -199,8 +257,9 @@ type DatasetChangeCounts struct {
 	Modified int64  `json:"modified"`
 }
 type ChangeSummary struct {
-	Total    ChangeCounts          `json:"total"`
-	Datasets []DatasetChangeCounts `json:"datasets"`
-	Version  *int64                `json:"version,omitempty"`
-	Revision *int64                `json:"revision,omitempty"`
+	SchemaChanges []SchemaChange        `json:"schema_changes"`
+	Total         ChangeCounts          `json:"total"`
+	Datasets      []DatasetChangeCounts `json:"datasets"`
+	Version       *int64                `json:"version,omitempty"`
+	Revision      *int64                `json:"revision,omitempty"`
 }

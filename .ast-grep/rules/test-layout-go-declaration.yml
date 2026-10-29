@@ -1,0 +1,54 @@
+{
+  "id": "test-layout-go-declaration",
+  "language": "Go",
+  "severity": "error",
+  "message": "Keep unit tests in the unique source-owned test location.",
+  "files": [
+    "sdk/go/**/*.go"
+  ],
+  "ignores": [
+    "**/*_test.go",
+    "**/test/**",
+    "**/internal/geoledgerv1/**"
+  ],
+  "rule": {
+    "all": [
+      {
+        "kind": "function_declaration"
+      },
+      {
+        "has": {
+          "kind": "identifier",
+          "regex": "^(Test|Benchmark|Fuzz)[A-Z0-9_]|^Example([A-Z_]|$)",
+          "field": "name"
+        }
+      },
+      {
+        "any": [
+          {
+            "has": {
+              "field": "parameters",
+              "regex": "^\\(\\s*\\w+\\s+\\*testing\\.(T|B|F)\\s*\\)$"
+            }
+          },
+          {
+            "all": [
+              {
+                "has": {
+                  "field": "name",
+                  "regex": "^Example([A-Z_]|$)"
+                }
+              },
+              {
+                "has": {
+                  "field": "parameters",
+                  "regex": "^\\(\\s*\\)$"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

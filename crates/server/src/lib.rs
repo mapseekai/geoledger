@@ -316,12 +316,13 @@ impl Service {
 }
 
 #[cfg(test)]
-mod admission_tests {
+mod tests {
     use super::*;
     use geoledger_engine::repository::{RepositoryTransaction, StorageBackend};
     use std::{future::Future, sync::atomic::AtomicUsize, task::Poll};
 
     struct CountingStorage(AtomicUsize);
+    impl geoledger_engine::repository::StorageMaintenance for CountingStorage {}
     impl StorageBackend for CountingStorage {
         fn name(&self) -> &'static str {
             "test"

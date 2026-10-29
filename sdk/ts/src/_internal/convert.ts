@@ -10,11 +10,14 @@ import {
   type SaveResult,
   type DiscardResult,
   type FeaturePage,
+  type DatasetSchema,
+  type SchemaChange,
   type Change,
   type Diff,
   type Conflict,
   type Conflicts,
   type Commit,
+  type HistoryPage,
   type CommitChanges,
   type AuditEvent,
   type AuditPage,
@@ -27,8 +30,26 @@ import {
   type Publication,
   type Json,
 } from "../models";
+function jsonObject(value: Json | undefined): value is { [key: string]: Json } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function decodeFeature(value: wire.Feature): Feature {
+  const parsed = parseJson(value.geojson);
+  if (!jsonObject(parsed)) throw new Error("Invalid Feature object");
+  const { id, properties, geometry } = parsed;
+  if (
+    parsed.type !== "Feature" ||
+    typeof id !== "string" ||
+    !jsonObject(properties) ||
+    geometry === undefined ||
+    (geometry !== null && !jsonObject(geometry))
+  )
+    throw new Error("Invalid Feature object");
+  // Only check the transport envelope; exact properties and geometry stay untouched.
+  return { ...parsed, type: "Feature", id, properties, geometry };
+}
 function feature(value: wire.Feature | undefined): Feature | null {
-  return value ? (parseJson(value.geojson) as unknown as Feature) : null;
+  return value ? decodeFeature(value) : null;
 }
 
 export function decodeServerInfo(v: wire.InfoReply): ServerInfo {
@@ -54,14 +75,21 @@ export function decodeMember(v: wire.MemberInfo): Member {
   return { subject: v.subject, role: v.role };
 }
 export function decodeDataset(v: wire.DatasetReply): Dataset {
-  if (!["point", "line", "polygon"].includes(v.geometryType))
+  const { geometryType, coordinateDimension } = v;
+  if (
+    geometryType !== "point" &&
+    geometryType !== "line" &&
+    geometryType !== "polygon"
+  )
     throw new Error("Invalid dataset geometry type");
+  if (coordinateDimension !== 2 && coordinateDimension !== 3)
+    throw new Error("Invalid dataset coordinate dimension");
   return {
     ...(v.postgisTable ? { postgisTable: v.postgisTable } : {}),
     id: v.dataset,
     name: v.name,
-    geometryType: v.geometryType as Dataset["geometryType"],
-    coordinateDimension: (v.coordinateDimension || 2) as 2 | 3,
+    geometryType,
+    coordinateDimension,
     crs: v.crs,
   };
 }
@@ -86,11 +114,12 @@ export function decodeDiscardResult(v: wire.DiscardReply): DiscardResult {
 export function decodeFeaturePage(v: wire.FeaturesReply): FeaturePage {
   return {
     crs: v.crs,
-    features: v.features.map((item) => feature(item) as Feature),
+    features: v.features.map(decodeFeature),
     revision: BigInt(v.revision),
-    workspaceVersion:
-      v.workspaceVersion === undefined ? undefined : BigInt(v.workspaceVersion),
-    nextAfter: v.nextAfter === undefined ? undefined : v.nextAfter,
+    ...(v.workspaceVersion === undefined
+      ? {}
+      : { workspaceVersion: BigInt(v.workspaceVersion) }),
+    ...(v.nextAfter === undefined ? {} : { nextAfter: v.nextAfter }),
   };
 }
 export function decodeChange(v: wire.Change): Change {
@@ -104,11 +133,29 @@ export function decodeChange(v: wire.Change): Change {
     after: feature(v.after),
   };
 }
+export function decodeDatasetSchema(v: wire.SchemaReply): DatasetSchema {
+  return {
+    revision: BigInt(v.revision),
+    fields: v.fields.map((field) => ({ ...field })),
+    ...(v.workspaceVersion === undefined
+      ? {}
+      : { workspaceVersion: BigInt(v.workspaceVersion) }),
+  };
+}
+function decodeSchemaChange(v: wire.SchemaChange): SchemaChange {
+  return {
+    dataset: v.dataset,
+    before: v.before.map((field) => ({ ...field })),
+    after: v.after.map((field) => ({ ...field })),
+  };
+}
 export function decodeDiff(v: wire.DiffReply): Diff {
   return {
     baseRevision: BigInt(v.baseRevision),
     version: BigInt(v.version),
     changes: v.changes.map((item) => decodeChange(item)),
+    schemaChanges: v.schemaChanges.map(decodeSchemaChange),
+    ...(v.nextAfter === undefined ? {} : { nextAfter: v.nextAfter }),
   };
 }
 export function decodeConflict(v: wire.Conflict): Conflict {
@@ -121,10 +168,9 @@ export function decodeConflict(v: wire.Conflict): Conflict {
     current: feature(v.current),
     draft: feature(v.draft),
     reason: v.reason,
-    resolvedAgainstRevision:
-      v.resolvedAgainstRevision === undefined
-        ? undefined
-        : BigInt(v.resolvedAgainstRevision),
+    ...(v.resolvedAgainstRevision === undefined
+      ? {}
+      : { resolvedAgainstRevision: BigInt(v.resolvedAgainstRevision) }),
   };
 }
 export function decodeConflicts(v: wire.ConflictsReply): Conflicts {
@@ -132,7 +178,7 @@ export function decodeConflicts(v: wire.ConflictsReply): Conflicts {
     head: BigInt(v.head),
     version: BigInt(v.version),
     total: BigInt(v.total),
-    nextAfter: v.nextAfter === undefined ? undefined : v.nextAfter,
+    ...(v.nextAfter === undefined ? {} : { nextAfter: v.nextAfter }),
     truncated: v.truncated,
     conflicts: v.conflicts.map((item) => decodeConflict(item)),
   };
@@ -147,10 +193,18 @@ export function decodeCommit(v: wire.CommitInfo): Commit {
     sourceBaseRevision: BigInt(v.sourceBaseRevision),
   };
 }
+export function decodeHistoryPage(v: wire.HistoryReply): HistoryPage {
+  return {
+    commits: v.commits.map(decodeCommit),
+    ...(v.nextAfter === undefined ? {} : { nextAfter: BigInt(v.nextAfter) }),
+  };
+}
 export function decodeCommitChanges(v: wire.CommitReply): CommitChanges {
   return {
+    schemaChanges: v.schemaChanges.map(decodeSchemaChange),
     revision: BigInt(v.revision),
     changes: v.changes.map((item) => decodeChange(item)),
+    ...(v.nextAfter === undefined ? {} : { nextAfter: v.nextAfter }),
   };
 }
 export function decodeAuditEvent(v: wire.AuditEvent): AuditEvent {
@@ -165,7 +219,7 @@ export function decodeAuditEvent(v: wire.AuditEvent): AuditEvent {
 export function decodeAuditPage(v: wire.AuditReply): AuditPage {
   return {
     events: v.events.map((item) => decodeAuditEvent(item)),
-    nextAfter: v.nextAfter === undefined ? undefined : BigInt(v.nextAfter),
+    ...(v.nextAfter === undefined ? {} : { nextAfter: BigInt(v.nextAfter) }),
   };
 }
 export function decodePublicationResult(
@@ -205,8 +259,9 @@ export function decodeChangeSummary(
   if (!v.total) throw new Error("Missing summary total");
   return {
     total: counts(v.total),
+    schemaChanges: v.schemaChanges.map(decodeSchemaChange),
     datasets: v.datasets.map((d) => ({ id: d.id, name: d.name, ...counts(d) })),
-    version: v.version === undefined ? undefined : BigInt(v.version),
-    revision: v.revision === undefined ? undefined : BigInt(v.revision),
+    ...(v.version === undefined ? {} : { version: BigInt(v.version) }),
+    ...(v.revision === undefined ? {} : { revision: BigInt(v.revision) }),
   };
 }

@@ -1,0 +1,45 @@
+{
+  "id": "double-assertion-ts",
+  "language": "TypeScript",
+  "severity": "warning",
+  "message": "Review double assertion: validate or document the invariant at this boundary.",
+  "files": [
+    "web/src/**/*.ts",
+    "web/src/**/*.mts",
+    "web/src/**/*.cts",
+    "sdk/ts/src/**/*.ts",
+    "sdk/ts/src/**/*.mts",
+    "sdk/ts/src/**/*.cts"
+  ],
+  "ignores": [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/generated/**",
+    "**/__generated__/**",
+    "**/dist/**",
+    "**/target/**",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/testdata/**",
+    "**/fixtures/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/*.generated.*",
+    "**/*.gen.*",
+    "**/*.d.ts",
+    "**/test/**",
+    "**/build/**",
+    "**/coverage/**",
+    "sdk/ts/src/_internal/geoledger/**"
+  ],
+  "rule": {
+    "any": [
+      {
+        "pattern": "$VALUE as unknown as $TYPE"
+      },
+      {
+        "pattern": "($VALUE as unknown) as $TYPE"
+      }
+    ]
+  }
+}

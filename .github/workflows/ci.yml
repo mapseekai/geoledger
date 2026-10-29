@@ -39,6 +39,17 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U mapseekai -d geoledger_test"
           --health-interval 5s --health-timeout 5s --health-retries 20
+      postgis-latin1:
+        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+        env:
+          POSTGRES_USER: mapseekai
+          POSTGRES_DB: geoledger_test
+          POSTGRES_PASSWORD: geoledger-ci-disposable
+          POSTGRES_INITDB_ARGS: --encoding=LATIN1 --locale=C
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mapseekai -d geoledger_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       GL_TEST_DATABASE_URL: postgresql://mapseekai:geoledger-ci-disposable@127.0.0.1:5432/geoledger_test?sslmode=disable
     steps:
@@ -46,7 +57,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -62,9 +73,14 @@ jobs:
           python3 -m pip install grpcio-tools==1.78.0
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+          npm install --global @ast-grep/cli@0.51.0
           npm ci --prefix sdk/ts
       - name: Shared contracts and service lifecycle
         run: ./scripts/check.sh
+      - name: Non-UTF8 PostGIS publication byte budgets
+        env:
+          GL_TEST_DATABASE_URL: postgresql://mapseekai:geoledger-ci-disposable@127.0.0.1:5433/geoledger_test?sslmode=disable
+        run: cargo test --locked -p geoledger-engine --lib postgis_hot_spatial_queries_batch_merge_preserves_history_and_byte_budget -- --ignored --test-threads=1
       - name: Generated SDK reproducibility
         run: |
           ./scripts/generate-sdk.sh
@@ -107,13 +123,15 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - name: Web dependencies and production checks
         run: |
+          npm install --global @ast-grep/cli@0.51.0
           npm ci --prefix sdk/ts
           npm --prefix sdk/ts run build
+          npm --prefix sdk/ts run lint
           npm ci --prefix web
           npm --prefix web test
           npm --prefix web run lint
@@ -211,7 +229,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -237,7 +255,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '22'
       - name: Build service and console
@@ -251,8 +269,15 @@ jobs:
           npm ci --prefix web
           npm --prefix web run build
           python3 -m pip install playwright
-          python3 -m playwright install --with-deps chromium
-      - name: Restricted database role, native restore and browser binding
+          python3 -m playwright install-deps chromium
+          test -x /opt/google/chrome/chrome
+          /opt/google/chrome/chrome --version
+      - name: Database TLS, restricted role, native restore and browser binding
         run: |
-          chromium=$(python3 -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')
-          python3 scripts/test-postgis-release.py --output "$RUNNER_TEMP/postgis-release" --web --chromium "$chromium"
+          # Use Ubuntu's existing Chrome AppArmor profile with sandboxing enabled.
+          python3 scripts/test-postgis-release.py --output "$RUNNER_TEMP/postgis-release" --web --chromium /opt/google/chrome/chrome
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: postgis-release-acceptance
+          path: ${{ runner.temp }}/postgis-release/result.json
+          if-no-files-found: error

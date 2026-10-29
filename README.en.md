@@ -6,7 +6,9 @@ GeoLedger is a version control and collaborative editing service for spatial fea
 
 The repository contains the Rust server `geoledger-server`, the remote `gl` CLI, a web console, and SDKs for Rust, Go, TypeScript / Node.js, and Python. The server manages data in SQLite + SpatiaLite or PostGIS. HTTP and gRPC requests use the same application engine.
 
-The current source version is `0.3.0-alpha.4`, with storage format 16, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
+The current source version is `0.3.0-alpha.7`, with storage format 19, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
+
+Each internally created dataset immediately gets its own physical table and spatial indexes. Roads, buildings, points of interest, and other datasets remain separate within one database, with transactional publication and version history.
 
 ## Key Capabilities
 
@@ -15,9 +17,10 @@ The current source version is `0.3.0-alpha.4`, with storage format 16, defined i
 | Datasets and coordinate systems | Organize point, line, and polygon features with two- or three-dimensional coordinates and an EPSG identifier or custom CRS. The default CRS is `EPSG:4326`. Saving and publishing preserve source coordinates and GeoJSON numeric values. |
 | Workspaces and review | Edit multiple datasets in one workspace, save additions, updates, and deletions in batches, and inspect feature differences and dataset change summaries. Draft versions check concurrent edits. |
 | Three-way merge and publication | Compare the base revision, current shared revision, and draft; merge independent property changes and review conflicting fields. Publication writes features, history, the revision, receipt, and audit records in one transaction. |
+| Versioned fields | Save property-field additions or removals in a workspace, query definitions at a fixed revision, and publish schema history and business-table DDL atomically. Field intent can be cleared; a changed HEAD rejects schema publication while preserving the draft. |
 | Publication recovery | SDKs retain the publication request ID and original payload. Retrying the original request confirms the result after a connection interruption. The console provides a publication recovery flow. |
 | Queries and commit reversal | Query by revision, feature ID, spatial bounds, and pagination cursor. Generate a workspace containing the inverse changes of a selected commit, then review and publish a new revision. |
-| PostGIS table tracking | Connect an existing business table to a dataset and create an initial version. Publication updates the source table transactionally and retains its CRS. |
+| PostGIS table registration | Connect an existing business table to a dataset and create an initial version. Publication updates the source table transactionally and retains its CRS. |
 | GIS console | Map, layer tree, feature search, attribute table, GeoJSON editing and upload, workspace version graph, conflict review, and mobile layouts. Map previews transform coordinates to WGS 84 as needed. |
 | Identity and access | User management, project member roles, personal API keys, database sessions, and HTTP/gRPC TLS and mTLS configuration. |
 
@@ -38,7 +41,7 @@ Run the shell commands below from the repository root.
 | SQLite service | The native SpatiaLite extension and its dependencies. Set `GL_SPATIALITE_EXTENSION` to select its path. The repository Dockerfile includes the runtime. |
 | PostGIS service | A PostgreSQL database with the PostGIS extension enabled and a service account. |
 | Web and TypeScript SDK | Node.js 22 and npm. |
-| Go SDK | Go 1.27.2+, as declared in [go.mod](sdk/go/go.mod). |
+| Go SDK | Go 1.27.3+, as declared in [go.mod](sdk/go/go.mod). |
 | Python SDK | Python 3.10+, as declared in [pyproject.toml](sdk/python/pyproject.toml). |
 | Repository checks | Python 3.11+, Bash, rustfmt, and Clippy. Browser verification uses Python Playwright and Chromium/Chrome with a working sandbox. |
 | Containers | Docker, Docker Compose, and OpenSSL to generate the session secret. |
@@ -139,6 +142,8 @@ curl --fail http://127.0.0.1:7881/ready
 
 See the [User Guide](docs/user-guide.md) for the data model and merge rules, and [API and SDKs](docs/api.md) for pagination and retry contracts.
 
+`diff`, `commit`, `history`, and `audit` use server page cursors to mark the end of the current read snapshot. `history` returns a page containing `commits`; see the [pagination contract](docs/api.md#差异提交历史与审计分页).
+
 ## API and SDKs
 
 HTTP business endpoints live under `/api/v1`. The four SDKs and CLI use the `geoledger.v1` gRPC protocol. SDKs authenticate with user API keys; workspace objects maintain draft versions and pending publication requests.
@@ -217,7 +222,7 @@ Browser sessions use random Session IDs inside encrypted HttpOnly cookies, with 
 | `web` | Next.js console, browser endpoints, and map workspace. |
 | `deploy`, `scripts` | Deployment templates, verification scripts, and release gates. |
 
-SQLite uses WAL, SpatiaLite geometry, and RTree spatial indexes. PostGIS uses `geometry` columns and GiST indexes. See [Storage Extensions](docs/storage.md) for transaction boundaries and backend conformance requirements.
+SQLite uses WAL, SpatiaLite geometry, and RTree spatial indexes. PostGIS uses `geometry` columns and GiST indexes. Storage capabilities separate credentials, projects, workspaces, reads, and publication while sharing one transaction. See [Storage Extensions](docs/storage.md) for transaction boundaries and backend conformance requirements.
 
 ## Build and Verification
 
@@ -226,7 +231,7 @@ cargo build --release --locked --bins
 ./scripts/check.sh
 ```
 
-Binaries are written to `target/release/geoledger-server` and `target/release/gl`, with an `.exe` suffix on Windows. `check.sh` runs documentation and configuration checks, rustfmt, Clippy, engine and workspace tests, and a backup/restore drill. Set `GL_TEST_DATABASE_URL` to enable PostGIS cases against an isolated `geoledger_test` database.
+Binaries are written to `target/release/geoledger-server` and `target/release/gl`, with an `.exe` suffix on Windows. `check.sh` requires Python 3 and ast-grep 0.51.0 (`npm install --global @ast-grep/cli@0.51.0`). It validates the three-language test layout, then runs documentation and configuration checks, rustfmt, Clippy, engine and workspace tests, and a backup/restore drill. Set `GL_TEST_DATABASE_URL` to enable PostGIS cases against an isolated `geoledger_test` database.
 
 Web checks and production build:
 
@@ -240,13 +245,13 @@ npm --prefix web run build
 
 The [Development Guide](docs/development.md) provides commands for four-language SDK integration and real browser verification. Both console CI browser suites share sandbox configuration, and the Ubuntu 24.04 runner uses system Chrome. The dependency gate `./scripts/audit.sh` checks Rust, npm, Go, and Python advisories.
 
-Measured results for this workspace fix, its execution environment, and outstanding verification items are recorded separately in the [2026-10-15 Validation Record](docs/ci-validation-2026-10-15.md).
+The [alpha.6 Validation Record](docs/release-alpha6-validation-2026-10-18.md) covers release preparation, local measurements, and production acceptance boundaries. Earlier workspace fixes remain in the [2026-10-15 Validation Record](docs/ci-validation-2026-10-15.md).
 
 ## Deployment and Operations
 
 The [Dockerfile](Dockerfile) packages the business service, CLI, Next.js standalone console, and SpatiaLite runtime into one image, running as UID 10001. Compose persists `/data`; the container entry point manages service lifecycles and health checks.
 
-For PostGIS, configure `GL_STORAGE=postgis`, `GL_DATABASE_URL`, and the service account. Connections verify certificates and hostnames by default and accept private CA configuration. Existing business tables are connected through the SDK methods `track_table` / `trackTable` / `TrackTable`. See [Production Operations](docs/production.md) for deployment templates, systemd, and HTTPS gateways.
+For PostGIS, configure `GL_STORAGE=postgis`, `GL_DATABASE_URL`, and the service account. Connections verify certificates and hostnames by default and accept private CA configuration. Existing business tables are connected through the SDK methods `register_table` / `registerTable` / `RegisterTable`. See [Production Operations](docs/production.md) for deployment templates, systemd, and HTTPS gateways.
 
 | Operational interface | Behavior |
 |---|---|

@@ -6,7 +6,9 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tarfile
 import tomllib
 import tempfile
@@ -119,7 +121,7 @@ class GateTests(unittest.TestCase):
         self.layout = self.root / 'layout'
         self.output = self.root / 'reports'
         fixture(self.layout)
-    def scan(self, response=None):
+    def scan(self, response=None, cargo_lock=None):
         def scanner(command, **kwargs):
             self.assertIn('--ignorefile', command)
             self.assertIn('--list-all-pkgs', command)
@@ -134,7 +136,35 @@ class GateTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0)
         version = json.loads((ROOT / '.security/trivy.lock.json').read_text())['version']
         with patch.object(gate.subprocess, 'check_output', return_value=f'Version: {version}'), patch.object(gate.subprocess, 'run', side_effect=scanner), patch('builtins.print'):
-            return gate.scan(self.layout, self.output, 'server', gate.DEFAULT_PLATFORMS, SHA)
+            return gate.scan(self.layout, self.output, 'server', gate.DEFAULT_PLATFORMS, SHA, cargo_lock=cargo_lock)
+
+    def test_release_baseline_is_used_for_both_scans_and_receipt_verification(self):
+        baseline = self.root / 'release-Cargo.lock'
+        baseline.write_text('[[package]]\nname = "historical-dependency"\nversion = "1.0.0"\n')
+        value = report()
+        value['Results'][1]['Packages'] = [{'Name': 'historical-dependency', 'Version': '1.0.0'}]
+        receipt = self.scan(value, baseline)
+        self.assertEqual(receipt['cargo_lock_sha256'], gate.digest_file(baseline))
+        self.assertEqual(set(receipt['platforms']), gate.DEFAULT_PLATFORMS)
+        gate.verify(self.layout, self.output, SHA, cargo_lock=baseline)
+        with self.assertRaisesRegex(ValueError, 'baseline'):
+            gate.verify(self.layout, self.output, SHA)
+        baseline.write_text(baseline.read_text().replace('1.0.0', '1.0.1'))
+        with self.assertRaisesRegex(ValueError, 'baseline'):
+            gate.verify(self.layout, self.output, SHA, cargo_lock=baseline)
+
+    def test_release_baseline_does_not_relax_missing_dependencies_or_vulnerabilities(self):
+        baseline = self.root / 'release-Cargo.lock'
+        baseline.write_text('[[package]]\nname = "historical-dependency"\nversion = "1.0.0"\n')
+        with self.assertRaisesRegex(ValueError, 'historical-dependency@1.0.0'):
+            self.scan(cargo_lock=baseline)
+        self.assertFalse((self.output / 'gate.json').exists())
+        value = report()
+        value['Results'][1]['Packages'] = [{'Name': 'historical-dependency', 'Version': '1.0.0'}]
+        value['Results'][1]['Vulnerabilities'] = [{'VulnerabilityID': 'TEST-RELEASE', 'PkgName': 'historical-dependency', 'Severity': 'CRITICAL'}]
+        with self.assertRaisesRegex(ValueError, 'blocking HIGH/CRITICAL'):
+            self.scan(value, baseline)
+        self.assertFalse((self.output / 'gate.json').exists())
     def test_two_architectures_and_same_digest_can_pass(self):
         self.scan()
         result = gate.verify(self.layout, self.output, SHA)
@@ -478,8 +508,6 @@ class OciBuilderDriverTests(unittest.TestCase):
         files['secure-images.yml'] = files['secure-images.yml'].replace('driver: docker-container', 'driver: docker')
         with self.assertRaises(ValueError): policy.check(files)
 
-if __name__ == '__main__': unittest.main()
-
 
 class ReleaseInventoryTests(unittest.TestCase):
     def test_requires_complete_matching_immutable_images(self):
@@ -488,6 +516,77 @@ class ReleaseInventoryTests(unittest.TestCase):
         audit.validate_inventories(records, SHA)
         for broken in ([], records * 2, [dict(records[0], source_sha='c'*40)], [dict(records[0], image='ghcr.io/test/combined:latest')]):
             with self.assertRaises(ValueError): audit.validate_inventories(broken, SHA)
+
+    def test_baseline_download_requires_sha_and_never_falls_back_to_checkout(self):
+        audit = load('published_audit', 'audit-published-images.py')
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / 'Cargo.lock'
+            with patch.object(audit.subprocess, 'check_output') as read:
+                with self.assertRaises(ValueError):
+                    audit.download_cargo_lock('test/repo', 'main', destination)
+                read.assert_not_called()
+            for response in (b'not a lockfile', b'version = 4\n'):
+                with patch.object(audit.subprocess, 'check_output', return_value=response):
+                    with self.assertRaises(ValueError):
+                        audit.download_cargo_lock('test/repo', SHA, destination)
+            with patch.object(audit.subprocess, 'check_output', side_effect=subprocess.CalledProcessError(1, ['gh'])):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    audit.download_cargo_lock('test/repo', SHA, destination)
+            self.assertFalse(destination.exists())
+
+    def test_published_audit_uses_release_data_and_current_policy_end_to_end(self):
+        audit = load('published_audit', 'audit-published-images.py')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            layout = root / 'original'
+            fixture(layout)
+            digest, _ = gate.inventory(layout)
+            records = [{'kind': 'combined', 'source_sha': SHA, 'image': 'docker.io/test/combined@' + digest}]
+            output = root / 'reports'
+            baseline = b'[[package]]\nname = "historical-dependency"\nversion = "1.0.0"\n'
+            version = json.loads((ROOT / '.security/trivy.lock.json').read_text())['version']
+            scanned = []
+            def read(command, **kwargs):
+                if command[:2] == ['gh', 'api']:
+                    if '/commits/' in command[2]:
+                        return SHA + '\n'
+                    self.assertEqual(command[2], f'repos/test/repo/contents/Cargo.lock?ref={SHA}')
+                    return baseline
+                self.assertEqual(command, ['trivy', '--version'])
+                return f'Version: {version}\n'
+            def run(command, **kwargs):
+                if command[:3] == ['gh', 'release', 'download']:
+                    directory = Path(command[command.index('--dir') + 1])
+                    (directory / 'geoledger-images.json').write_text(json.dumps(records[0]))
+                elif command[:2] == ['skopeo', 'copy']:
+                    self.assertIn('--all', command)
+                    self.assertIn('--preserve-digests', command)
+                    self.assertEqual(command[-2], 'docker://' + records[0]['image'])
+                    shutil.copytree(layout, command[-1].removeprefix('oci:'))
+                else:
+                    self.assertEqual(command[:2], ['trivy', 'image'])
+                    platform = command[command.index('--platform') + 1]
+                    scanned.append(platform)
+                    view = Path(command[command.index('--input') + 1])
+                    descriptor = json.loads((view / 'index.json').read_text())['manifests'][0]
+                    manifest = json.loads((view / 'blobs/sha256' / descriptor['digest'][7:]).read_text())
+                    value = report()
+                    value['Results'][1]['Packages'] = [{'Name': 'historical-dependency', 'Version': '1.0.0'}]
+                    value['Results'].append({'Class': 'lang-pkgs', 'Type': 'node-pkg', 'Packages': [{'Name': 'next'}]})
+                    os_name, arch = platform.split('/')
+                    value['Metadata'].update(ImageID=manifest['config']['digest'], ImageConfig={'os': os_name, 'architecture': arch})
+                    Path(command[command.index('--output') + 1]).write_text(json.dumps(value))
+                return subprocess.CompletedProcess(command, 0)
+            with patch.object(sys, 'argv', ['audit', '--repository', 'test/repo', '--tag', 'v1.0.0', '--output', str(output)]), patch.object(audit.subprocess, 'check_output', side_effect=read), patch.object(audit.subprocess, 'run', side_effect=run), patch('builtins.print'):
+                audit.main()
+            self.assertEqual(set(scanned), gate.DEFAULT_PLATFORMS)
+            self.assertEqual(len(scanned), 2)
+            self.assertEqual((output / 'source/Cargo.lock').read_bytes(), baseline)
+            status = json.loads((output / 'audit-status.json').read_text())
+            self.assertEqual(status['status'], 'passed')
+            self.assertEqual(status['source_sha'], SHA)
+            self.assertEqual(status['images'], records)
+            self.assertEqual(json.loads((output / 'combined/gate.json').read_text())['scanner'], version)
 
 
 class ReleaseCompletionTests(unittest.TestCase):
@@ -499,6 +598,16 @@ class ReleaseCompletionTests(unittest.TestCase):
 
 
 class ProductionRoleTests(unittest.TestCase):
+    def test_database_tls_and_restore_acceptance_cannot_be_skipped(self):
+        files = {p.name: p.read_text() for p in (ROOT / '.github/workflows').glob('*.yml')}
+        for before, after in [('python3 scripts/test-postgis-release.py', 'echo skipped'),
+                              ('      - name: Database TLS, restricted role, native restore and browser binding',
+                               '      - if: false\n        name: Database TLS, restricted role, native restore and browser binding')]:
+            broken = dict(files)
+            broken['ci.yml'] = files['ci.yml'].replace(before, after)
+            with self.subTest(before=before), self.assertRaises(ValueError):
+                policy.check(broken)
+
     def test_runtime_role_is_separate_and_unprivileged(self):
         compose=(ROOT/'deploy/compose.production.yaml').read_text()
         initialize=(ROOT/'deploy/postgis/initialize.sh').read_text()
@@ -558,14 +667,14 @@ class ReleaseResumeTests(unittest.TestCase):
     def test_partial_draft_upload_preserves_existing_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one'); (root / 'two').write_bytes(b'two')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': True}, [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'one'), patch.object(resume, 'run') as write:
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[{'id': 1, 'tag_name': 'v1', 'draft': True}], [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'one'), patch.object(resume, 'run') as write:
                 resume.release('test/repo', 'v1', 'sha', root)
                 write.assert_called_once_with('gh', 'release', 'upload', 'v1', str(root / 'two'), '--repo', 'test/repo')
 
     def test_different_release_asset_blocks_upload(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': True}, [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'wrong'), patch.object(resume, 'run') as write:
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[{'id': 1, 'tag_name': 'v1', 'draft': True}], [{'name': 'one', 'id': 2}]]), patch.object(resume.subprocess, 'check_output', return_value=b'wrong'), patch.object(resume, 'run') as write:
                 with self.assertRaises(ValueError): resume.release('test/repo', 'v1', 'sha', root)
                 write.assert_not_called()
 
@@ -583,21 +692,67 @@ class ReleaseResumeTests(unittest.TestCase):
     def test_published_release_cannot_receive_missing_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[{'id': 1, 'draft': False}, []]), patch.object(resume, 'run') as write:
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[[{'id': 1, 'tag_name': 'v1', 'draft': False}], []]), patch.object(resume, 'run') as write:
                 with self.assertRaises(ValueError): resume.release('test/repo', 'v1', 'sha', root)
                 write.assert_not_called()
 
     def test_new_release_stays_draft_and_uploads_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / 'one').write_bytes(b'one')
-            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[None, {'id': 1, 'draft': True}, []]), patch.object(resume, 'run') as write:
+            draft = {'id': 1, 'tag_name': 'v1-alpha.1', 'draft': True, 'prerelease': True}
+            with patch.object(resume, 'tag_sha', return_value='sha') as tag, patch.object(resume, 'gh', side_effect=[[], []]), patch.object(resume, 'run', return_value=json.dumps(draft)) as write:
                 resume.release('test/repo', 'v1-alpha.1', 'sha', root)
-                self.assertIn('--draft', write.call_args_list[0].args)
-                self.assertIn('--verify-tag', write.call_args_list[0].args)
-                self.assertIn('--prerelease', write.call_args_list[0].args)
+                tag.assert_called_once_with('test/repo', 'v1-alpha.1')
+                self.assertEqual(write.call_args_list[0].args[:5], ('gh', 'api', 'repos/test/repo/releases', '--method', 'POST'))
+                for field in ('draft=true', 'prerelease=true', 'body=@notes.md'):
+                    self.assertIn(field, write.call_args_list[0].args)
+                self.assertFalse(any(arg.startswith('target_commitish=') for arg in write.call_args_list[0].args))
+                self.assertEqual(write.call_args_list[1].args[1:3], ('release', 'upload'))
+
+    def test_created_release_identity_must_match_before_upload(self):
+        draft = {'id': 1, 'tag_name': 'v1-alpha.1', 'draft': True, 'prerelease': True}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            for changed in ({'tag_name': 'v2'}, {'draft': False}, {'prerelease': False}):
+                with self.subTest(changed=changed), patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', return_value=[]), patch.object(resume, 'run', return_value=json.dumps({**draft, **changed})) as write:
+                    with self.assertRaisesRegex(ValueError, 'identity'):
+                        resume.release('test/repo', 'v1-alpha.1', 'sha', root)
+                    self.assertEqual(write.call_count, 1)
+
+    def test_release_lookup_finds_drafts_on_later_pages(self):
+        draft = {'id': 101, 'tag_name': 'v2', 'draft': True}
+        with patch.object(resume, 'gh', side_effect=[[{'tag_name': 'v1'}] * 100, [draft]]) as api:
+            self.assertEqual(resume.find_release('test/repo', 'v2'), draft)
+            self.assertEqual(api.call_args_list[-1].args, ('repos/test/repo/releases?per_page=100&page=2',))
+
+    def test_release_listing_errors_never_create_a_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            for error in (None, RuntimeError('HTTP 403')):
+                with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=[error]), patch.object(resume, 'run') as write:
+                    with self.assertRaises(RuntimeError):
+                        resume.release('test/repo', 'v1', 'sha', root)
+                    write.assert_not_called()
+
+    def test_new_draft_uses_creation_response_when_listing_lags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'one').write_bytes(b'one')
+            draft = {'id': 42, 'tag_name': 'v1', 'draft': True, 'prerelease': False}
+            def api(endpoint):
+                if endpoint == 'repos/test/repo/releases?per_page=100&page=1': return []
+                self.assertEqual(endpoint, 'repos/test/repo/releases/42/assets?per_page=100')
+                return []
+            with patch.object(resume, 'tag_sha', return_value='sha'), patch.object(resume, 'gh', side_effect=api) as reads, patch.object(resume, 'run', return_value=json.dumps(draft)) as write:
+                resume.release('test/repo', 'v1', 'sha', root)
+                self.assertEqual(reads.call_count, 2)
+                self.assertEqual(write.call_count, 2)
                 self.assertEqual(write.call_args_list[1].args[1:3], ('release', 'upload'))
 
     def test_unknown_npm_lookup_outcome_never_publishes(self):
         with patch.object(resume, 'fetch', side_effect=TimeoutError), patch.object(resume.subprocess, 'run') as write:
             with self.assertRaises(TimeoutError): resume.npm(Path('package.tgz'), '0.3.0-alpha.2')
             write.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

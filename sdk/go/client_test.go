@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
+	"fmt"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -16,59 +17,26 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// These tests substitute the private transport; users never import its types.
-type contractRPC struct {
-	pb.GeoLedgerClient
-	saves        []*pb.SaveRequest
-	publications []*pb.PublishRequest
-	publishError error
-}
-
-func (s *contractRPC) Save(_ context.Context, request *pb.SaveRequest, _ ...grpc.CallOption) (*pb.SaveReply, error) {
-	s.saves = append(s.saves, proto.Clone(request).(*pb.SaveRequest))
-	return &pb.SaveReply{Version: request.ExpectedWorkspaceVersion + 1, Changes: 1}, nil
-}
-func (s *contractRPC) Publish(_ context.Context, request *pb.PublishRequest, _ ...grpc.CallOption) (*pb.PublishReply, error) {
-	s.publications = append(s.publications, proto.Clone(request).(*pb.PublishRequest))
-	if s.publishError != nil {
-		err := s.publishError
-		s.publishError = nil
-		return nil, err
-	}
-	return &pb.PublishReply{Workspace: request.Workspace, Revision: 2, Version: request.ExpectedWorkspaceVersion + 1, Status: "published", Changes: 1}, nil
-}
-
-func draftWith(rpc *contractRPC) *Workspace {
-	return &Workspace{client: &Client{rpc: rpc}, project: "project", info: WorkspaceInfo{ID: "draft", BaseRevision: 1, Version: 4, Status: "open"}}
-}
-
-func requireBusinessError(t *testing.T, err error, code string, uncertain bool) {
-	t.Helper()
-	var own *Error
-	if !errors.As(err, &own) || own.Code != code || own.Uncertain != uncertain {
-		t.Fatalf("expected %s uncertain=%v, received %v", code, uncertain, err)
-	}
-}
-
-func TestMissingFeatureCannotBecomeDeletion(t *testing.T) {
-	rpc := &contractRPC{}
-	w := draftWith(rpc)
-	ctx := context.Background()
-	missing := []Edit{{Dataset: "dataset", FeatureID: "one"}}
-	_, err := w.SaveBatch(ctx, missing)
-	requireBusinessError(t, err, "invalid_argument", false)
-	_, err = w.Resolve(ctx, 1, missing)
-	requireBusinessError(t, err, "invalid_argument", false)
-	_, err = w.Rebase(ctx, 1, missing)
-	requireBusinessError(t, err, "invalid_argument", false)
-	if len(rpc.saves) != 0 {
-		t.Fatal("missing feature reached the server")
-	}
-	if _, err := w.Delete(ctx, "dataset", "one"); err != nil {
+func TestRegisterTablePreservesCreateDatasetWireContract(t *testing.T) {
+	source := PostgisTable{Schema: "business", Table: "roads", IDColumn: "road_id", GeometryColumn: "shape"}
+	rpc := &datasetRPC{}
+	client := &Client{rpc: rpc}
+	dataset, err := client.RegisterTable(context.Background(), "project", "roads", source)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if rpc.saves[0].Edits[0].Feature != nil || w.Info().Version != 5 {
-		t.Fatal("explicit deletion or version update failed")
+	want := &pb.DatasetRequest{Project: "project", Name: "roads", PostgisTable: &pb.PostgisTable{Schema: source.Schema, Table: source.Table, IdColumn: source.IDColumn, GeometryColumn: source.GeometryColumn}}
+	if !proto.Equal(rpc.request, want) {
+		t.Fatalf("registration changed the wire request: %v", rpc.request)
+	}
+	if dataset.ID != "dataset" || dataset.GeometryType != "line" || dataset.CoordinateDimension != 3 || dataset.CRS != "EPSG:3857" || dataset.PostgisTable == nil || *dataset.PostgisTable != source {
+		t.Fatalf("registration lost inferred source metadata: %+v", dataset)
+	}
+	rpc.err = status.Error(codes.PermissionDenied, "registration denied")
+	_, err = client.RegisterTable(context.Background(), "project", "roads", source)
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != "permission_denied" || failure.Uncertain {
+		t.Fatalf("registration changed permission errors: %v", err)
 	}
 }
 
@@ -90,133 +58,6 @@ func TestOpaquePropertiesAndExactNumbersSurviveReplyConversion(t *testing.T) {
 	}
 }
 
-func TestUnknownPublicationOutcomeReusesAnImmutableIntent(t *testing.T) {
-	rpc := &contractRPC{publishError: status.Error(codes.Unavailable, "response lost")}
-	w := draftWith(rpc)
-	ctx := context.Background()
-	_, err := w.Publish(ctx, "roads updated")
-	requireBusinessError(t, err, "unavailable", true)
-	pending := w.PendingPublication()
-	if pending == nil {
-		t.Fatal("uncertain publication lost its intent")
-	}
-	pending.Message = "caller mutation must not affect the retry"
-	_, err = w.Publish(ctx, "different message")
-	requireBusinessError(t, err, "invalid_argument", false)
-	_, err = w.Delete(ctx, "dataset", "one")
-	requireBusinessError(t, err, "invalid_argument", false)
-	if len(rpc.publications) != 1 {
-		t.Fatal("changed publication was sent")
-	}
-	if _, err = w.Publish(ctx, "roads updated"); err != nil {
-		t.Fatal(err)
-	}
-	if !proto.Equal(rpc.publications[0], rpc.publications[1]) {
-		t.Fatal("publication retry changed the request")
-	}
-	if w.Info().Version != 5 || w.Info().Status != "published" {
-		t.Fatal("successful publication did not update the handle")
-	}
-}
-
-func TestBusinessConflictDetailsAndDefiniteFailure(t *testing.T) {
-	raw := `{"type":"Feature","id":"one","geometry":null,"properties":{"exact":9007199254740993}}`
-	s, err := status.New(codes.Aborted, "merge conflicts").WithDetails(&pb.ErrorDetail{
-		Code: "conflict", Message: "merge conflicts", RequestId: "request",
-		Conflicts: &pb.ConflictsReply{Head: 2, Version: 4, Total: 1, Conflicts: []*pb.Conflict{{FeatureId: "one", Draft: &pb.Feature{Geojson: raw}}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rpc := &contractRPC{publishError: s.Err()}
-	w := draftWith(rpc)
-	_, err = w.Publish(context.Background(), "roads updated")
-	requireBusinessError(t, err, "conflict", false)
-	var own *Error
-	if !errors.As(err, &own) || own.Conflicts == nil || own.RequestID != "request" {
-		t.Fatal("business conflict metadata was lost")
-	}
-	if !json.Valid(own.Conflicts.Conflicts[0].Draft) || string(own.Conflicts.Conflicts[0].Draft) != raw {
-		t.Fatal("conflict feature changed")
-	}
-	if w.PendingPublication() != nil || w.Info().Version != 4 {
-		t.Fatal("definitive rejection must release intent without advancing version")
-	}
-}
-
-func TestRetryAccessFailuresPreserveOriginalIntent(t *testing.T) {
-	for _, code := range []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.NotFound} {
-		t.Run(code.String(), func(t *testing.T) {
-			rpc := &contractRPC{publishError: status.Error(codes.Unavailable, "lost")}
-			w := draftWith(rpc)
-			ctx := context.Background()
-			w.Publish(ctx, "original")
-			original := *w.PendingPublication()
-			rpc.publishError = status.Error(code, "access denied")
-			if _, err := w.Publish(ctx, "original"); err == nil {
-				t.Fatal("expected rejection")
-			}
-			if pending := w.PendingPublication(); pending == nil || *pending != original {
-				t.Fatal("lost original intent")
-			}
-			if _, err := w.Publish(ctx, "changed"); err == nil {
-				t.Fatal("changed message accepted")
-			}
-			if _, err := w.Publish(ctx, "original"); err != nil {
-				t.Fatal(err)
-			}
-			for _, request := range rpc.publications {
-				if !proto.Equal(request, rpc.publications[0]) {
-					t.Fatal("retry changed request")
-				}
-			}
-		})
-	}
-}
-
-func TestTypedRequestsPreserveExactGeoJSONAndRejectInvalidInput(t *testing.T) {
-	rpc := &contractRPC{}
-	w := draftWith(rpc)
-	raw := json.RawMessage(` {"type":"Feature", "id":"one","properties":{"exact":9007199254740993}} `)
-	if _, err := w.SaveBatch(context.Background(), []Edit{{Dataset: "dataset", FeatureID: "one", Feature: raw}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := rpc.saves[0].Edits[0].Feature.Geojson; got != string(raw) {
-		t.Fatalf("GeoJSON changed: %q", got)
-	}
-	if _, err := w.SaveBatch(context.Background(), []Edit{{Dataset: "dataset", FeatureID: "one", Feature: json.RawMessage("invalid")}}); err == nil {
-		t.Fatal("invalid JSON accepted")
-	}
-	if _, err := w.client.Publish(nil, Publication{}); err == nil {
-		t.Fatal("nil context accepted")
-	}
-	if _, err := w.client.Features(context.Background(), "project", "dataset", FeatureQuery{Bbox: []float64{math.NaN()}}); err == nil {
-		t.Fatal("nonfinite bbox accepted")
-	}
-	w.client.closed.Store(true)
-	if _, err := w.client.Publish(context.Background(), Publication{}); err == nil {
-		t.Fatal("closed client accepted")
-	}
-}
-
-func TestFirstAccessFailureAndRetryConflictReleaseIntent(t *testing.T) {
-	for _, code := range []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.NotFound, codes.Aborted} {
-		rpc := &contractRPC{publishError: status.Error(code, "rejected")}
-		w := draftWith(rpc)
-		if code == codes.Aborted {
-			rpc.publishError = status.Error(codes.Unavailable, "lost")
-			w.Publish(context.Background(), "original")
-			rpc.publishError = status.Error(code, "rejected")
-		}
-		if _, err := w.Publish(context.Background(), "original"); err == nil {
-			t.Fatal("expected failure")
-		}
-		if w.PendingPublication() != nil {
-			t.Fatalf("%s did not release intent", code)
-		}
-	}
-}
-
 func TestPlaintextRemoteRequiresOptIn(t *testing.T) {
 	t.Setenv("GL_ALLOW_INSECURE_TRANSPORT", "")
 	if _, err := Dial("http://geoledger.example:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err == nil || err.(*Error).Code != "invalid_argument" {
@@ -231,5 +72,98 @@ func TestPlaintextRemoteRequiresOptIn(t *testing.T) {
 		if IsLoopbackHost(host) != want {
 			t.Fatalf("%s", host)
 		}
+	}
+}
+
+func TestQueryPageContinuationsSurviveReplyConversion(t *testing.T) {
+	for _, cursor := range []*string{nil, new("dataset/key/with/slashes")} {
+		var diff Diff
+		if err := decode(&pb.DiffReply{NextAfter: cursor}, &diff); err != nil {
+			t.Fatal(err)
+		}
+		var commit CommitChanges
+		if err := decode(&pb.CommitReply{NextAfter: cursor}, &commit); err != nil {
+			t.Fatal(err)
+		}
+		for _, got := range []*string{diff.NextAfter, commit.NextAfter} {
+			if (got == nil) != (cursor == nil) || got != nil && *got != *cursor {
+				t.Fatalf("cursor = %v, want %v", got, cursor)
+			}
+		}
+	}
+	for _, cursor := range []*int64{nil, new(int64(9007199254740993))} {
+		var history HistoryPage
+		if err := decode(&pb.HistoryReply{NextAfter: cursor}, &history); err != nil {
+			t.Fatal(err)
+		}
+		var audit AuditPage
+		if err := decode(&pb.AuditReply{NextAfter: cursor}, &audit); err != nil {
+			t.Fatal(err)
+		}
+		for _, got := range []*int64{history.NextAfter, audit.NextAfter} {
+			if (got == nil) != (cursor == nil) || got != nil && *got != *cursor {
+				t.Fatalf("cursor = %v, want %v", got, cursor)
+			}
+		}
+	}
+}
+
+func ExampleDial() {
+	// Dial is lazy: this example does not contact a service.
+	client, err := Dial("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+	fmt.Println(client != nil)
+	// Output: true
+}
+
+// datasetRPC substitutes only the private RPC used by table registration.
+type datasetRPC struct {
+	pb.GeoLedgerClient
+	request *pb.DatasetRequest
+	err     error
+}
+
+func (s *datasetRPC) CreateDataset(_ context.Context, request *pb.DatasetRequest, _ ...grpc.CallOption) (*pb.DatasetReply, error) {
+	s.request = proto.Clone(request).(*pb.DatasetRequest)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &pb.DatasetReply{Dataset: "dataset", Name: request.Name, GeometryType: "line", CoordinateDimension: 3, Crs: "EPSG:3857", PostgisTable: request.PostgisTable}, nil
+}
+
+func TestSchemaChangesSurviveDiffAndCommitConversion(t *testing.T) {
+	change := &pb.SchemaChange{Dataset: "d", Before: []*pb.SchemaField{}, After: []*pb.SchemaField{{Name: "note", Type: "text", Nullable: true, Editable: true}}}
+	var diff Diff
+	if err := decode(&pb.DiffReply{SchemaChanges: []*pb.SchemaChange{change}}, &diff); err != nil {
+		t.Fatal(err)
+	}
+	var commit CommitChanges
+	if err := decode(&pb.CommitReply{SchemaChanges: []*pb.SchemaChange{change}}, &commit); err != nil {
+		t.Fatal(err)
+	}
+	if len(diff.SchemaChanges) != 1 || len(commit.SchemaChanges) != 1 || diff.SchemaChanges[0].After[0].Type != "text" {
+		t.Fatal("schema-only changes were hidden")
+	}
+}
+
+func TestSchemaCollectionsMarshalAsEmptyArrays(t *testing.T) {
+	var schema DatasetSchema
+	if err := decode(&pb.SchemaReply{}, &schema); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil || !strings.Contains(string(raw), `"fields":[]`) {
+		t.Fatalf("empty schema fields became null: %s %v", raw, err)
+	}
+	var diff Diff
+	if err := decode(&pb.DiffReply{SchemaChanges: []*pb.SchemaChange{{Dataset: "d"}}}, &diff); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(diff)
+	if err != nil || !strings.Contains(string(raw), `"before":[]`) || !strings.Contains(string(raw), `"after":[]`) {
+		t.Fatalf("schema change arrays became null: %s %v", raw, err)
 	}
 }

@@ -1,9 +1,10 @@
 import { httpCode, uncertainStatus } from "./http-status";
-import type { Client, Edit, Conflicts } from "@geoledger/client";
+import type { Client, Edit, WorkspaceInfo } from "@geoledger/client";
 import { stringifyJson, GeoLedgerError } from "@geoledger/client";
 import { parseLosslessJson } from "./conflicts";
 import { isLosslessNumber } from "lossless-json";
 import { configuration } from "./config";
+import { decodeConflicts, validateBusinessResponse } from "./console-response";
 
 export type ConsoleClient = Pick<
   Client,
@@ -16,12 +17,11 @@ export type ConsoleClient = Pick<
   | "renameDataset"
   | "deleteDataset"
   | "createDataset"
-  | "trackTable"
+  | "registerTable"
   | "workspaces"
   | "workspaceInfo"
   | "workspaceSummary"
   | "commitSummary"
-  | "createWorkspace"
   | "features"
   | "save"
   | "publish"
@@ -32,12 +32,14 @@ export type ConsoleClient = Pick<
   | "discard"
   | "history"
   | "commit"
-  | "restore"
   | "audit"
   | "members"
   | "archiveProject"
   | "deleteProject"
 > & {
+  /** The HTTP adapter returns metadata, not a stateful SDK Workspace handle. */
+  createWorkspace(project: string): Promise<{ info: WorkspaceInfo }>;
+  restore(project: string, revision: bigint): Promise<{ info: WorkspaceInfo }>;
   setMember(
     project: string,
     subject: string,
@@ -103,15 +105,17 @@ async function request<T>(
         ),
         response.headers.get("x-request-id") ??
           (typeof detail.requestId === "string" ? detail.requestId : undefined),
-        Array.isArray(value.conflicts)
-          ? (value as unknown as Conflicts)
-          : undefined,
+        value.conflicts === undefined ? undefined : decodeConflicts(value),
         uncertainStatus(response.status),
       ),
       { status: response.status },
     );
   }
-  return (business ? decode(parseLosslessJson(raw)) : JSON.parse(raw)) as T;
+  return (
+    business
+      ? validateBusinessResponse(operation, decode(parseLosslessJson(raw)))
+      : JSON.parse(raw)
+  ) as T;
 }
 /** Convert protocol metadata only; feature properties and audit detail remain exact JSON. */
 function decode(value: unknown, key = ""): unknown {
@@ -239,7 +243,7 @@ export function consoleClient(sid: string): ConsoleClient {
         coordinateDimension,
         crs,
       }),
-    trackTable: (project, name, source) =>
+    registerTable: (project, name, source) =>
       call("create_dataset", {
         project,
         name,
@@ -252,10 +256,9 @@ export function consoleClient(sid: string): ConsoleClient {
       call("workspace_summary", { project, workspace }),
     commitSummary: (project, revision) =>
       call("commit_summary", { project, revision }),
-    createWorkspace: async (project) =>
-      ({ info: await call("create_workspace", { project }) }) as Awaited<
-        ReturnType<Client["createWorkspace"]>
-      >,
+    createWorkspace: async (project) => ({
+      info: await call<WorkspaceInfo>("create_workspace", { project }),
+    }),
     features: (project, dataset, p = {}) =>
       call("features", { ...p, project, dataset }),
     save: (project, workspace, expectedWorkspaceVersion, values) =>
@@ -311,10 +314,9 @@ export function consoleClient(sid: string): ConsoleClient {
       call("history", { project, after, limit }),
     commit: (project, revision, p = {}) =>
       call("commit", { project, revision, after: p.after, limit: p.limit }),
-    restore: async (project, revision) =>
-      ({ info: await call("restore", { project, revision }) }) as Awaited<
-        ReturnType<Client["restore"]>
-      >,
+    restore: async (project, revision) => ({
+      info: await call<WorkspaceInfo>("restore", { project, revision }),
+    }),
     audit: (project, after = 0n, limit) =>
       call("audit", { project, after, limit }),
     setMember: async (project, subject, role, currentPassword) => {
