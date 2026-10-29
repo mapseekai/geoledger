@@ -275,7 +275,7 @@ async fn tls_grpc_admission_preserves_ip_rate_limits() -> TestResult {
         client_ca: None,
     };
     std::fs::write(&files.cert, &pem)?;
-    std::fs::write(&files.key, cert.key_pair.serialize_pem())?;
+    std::fs::write(&files.key, cert.signing_key.serialize_pem())?;
     let service = service(
         &dir.path().join("state.db"),
         Limits {

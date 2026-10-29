@@ -2,7 +2,7 @@
 //! listeners and mutual TLS with database API keys.
 mod common;
 use geoledger_client::{Client, ConnectOptions};
-use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+use rcgen::{BasicConstraints, CertificateParams, CertifiedIssuer, DnType, IsCa, KeyPair};
 use std::{
     net::{SocketAddr, TcpListener},
     path::Path,
@@ -70,19 +70,16 @@ fn pki() -> Result<Pki, BoxError> {
     ca_params
         .distinguished_name
         .push(DnType::CommonName, "geoledger test-only CA");
-    let ca = ca_params.self_signed(&ca_key)?;
+    let ca = CertifiedIssuer::self_signed(ca_params, ca_key)?;
     let server_key = KeyPair::generate()?;
-    let server = CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()])?.signed_by(
-        &server_key,
-        &ca,
-        &ca_key,
-    )?;
+    let server = CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()])?
+        .signed_by(&server_key, &ca)?;
     let client_key = KeyPair::generate()?;
     let mut client_params = CertificateParams::new(Vec::<String>::new())?;
     client_params
         .distinguished_name
         .push(DnType::CommonName, "operator");
-    let client = client_params.signed_by(&client_key, &ca, &ca_key)?;
+    let client = client_params.signed_by(&client_key, &ca)?;
     Ok(Pki {
         ca_pem: ca.pem(),
         server_cert: server.pem(),
