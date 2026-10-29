@@ -219,7 +219,7 @@ mod tests {
             client_ca: None,
         };
         std::fs::write(&files.cert, cert.cert.pem())?;
-        std::fs::write(&files.key, cert.key_pair.serialize_pem())?;
+        std::fs::write(&files.key, cert.signing_key.serialize_pem())?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let rx = spawn_acceptor(listener, Tls::load(files)?, false);
