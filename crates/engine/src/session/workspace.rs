@@ -99,11 +99,15 @@ impl WorkspaceRepository for SqlTransaction {
         key: &str,
         base: i64,
     ) -> Result<Row> {
-        let resolved: bool = self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4 AND resolved_head IS NOT NULL)",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?.get(0usize)?;
         let value = super::query::version_cells(FeatureRepository::feature_at(
             self, project, dataset, key, base,
         )?);
-        let draft = self.query_opt(&format!("SELECT properties,geometry_json FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?;
+        let draft = self.query_opt(&format!("SELECT properties,geometry_json,resolved_head IS NOT NULL FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?;
+        let resolved = draft
+            .as_ref()
+            .map(|r| r.get::<_, bool>(2usize))
+            .transpose()?
+            .unwrap_or(false);
         Ok(Row::new(vec![
             Cell::Bool(resolved),
             value[0].clone(),

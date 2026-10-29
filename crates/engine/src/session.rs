@@ -1034,6 +1034,32 @@ mod tests {
                 lookup_steps < 1000,
                 "stale ANALYZE caused resolution lookup scan: {lookup_steps}"
             );
+            let queries = t.0.query_count;
+            let resolved = t.edit_base("p", "w", "d", "00000001", 1)?;
+            assert!(
+                t.0.query_count - queries <= 3,
+                "redundant draft lookup per edit"
+            );
+            assert!(resolved.get::<_, bool>(0usize)?);
+            assert_eq!(resolved.get::<_, String>(1usize)?, "{}");
+            assert_eq!(resolved.get::<_, String>(3usize)?, "{}");
+            assert!(resolved.get::<_, bool>(5usize)?);
+            t.put_deltas(
+                "p",
+                "w",
+                &[crate::repository::DraftDelta {
+                    dataset: "d".into(),
+                    key: "00000001".into(),
+                    properties: None,
+                    geometry: None,
+                }],
+            )?;
+            let deletion = t.edit_base("p", "w", "d", "00000001", 1)?;
+            assert!(deletion.get::<_, bool>(0usize)?);
+            assert_eq!(deletion.get::<_, String>(1usize)?, "{}");
+            assert!(deletion.get::<_, Option<String>>(3usize)?.is_none());
+            assert!(deletion.get::<_, bool>(5usize)?);
+            t.execute("UPDATE gl_workspace_changes SET properties='{}' WHERE project='p' AND workspace='w' AND dataset='d' AND feature_id='00000001'", &[])?;
             t.batch_execute(r#"WITH RECURSIVE ids(n) AS (SELECT 2 UNION ALL SELECT n+1 FROM ids WHERE n<1000)
         INSERT INTO gl_commits(project,revision,workspace,subject,message) SELECT 'p',n,'w','alice','history' FROM ids;
         INSERT INTO gl_history(project,dataset,feature_id,valid_from,valid_to,properties)
