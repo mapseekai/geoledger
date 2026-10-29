@@ -611,6 +611,12 @@ pub(super) fn save(
     // Preserve the chosen value and its origin when subsequent edits invalidate it.
     // In particular an explicit deletion may equal an absent original base.
     t.invalidate_resolutions(&r.project, &r.workspace)?;
+    // Project, workspace and base are fixed for this save, after applying schema edits.
+    let mut schemas = t
+        .workspace_schemas(&r.project, &r.workspace)?
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    let schema_count = schemas.len();
     let mut seen = BTreeSet::new();
     let mut warnings = Vec::new();
     let mut deltas = Vec::new();
@@ -635,9 +641,14 @@ pub(super) fn save(
             })
             .transpose()?;
         let context = t.edit_base(&r.project, &r.workspace, &e.dataset, &e.feature_id, base)?;
-        let definition = effective_projection(t, &r.project, &e.dataset, base, Some(&r.workspace))?;
+        let definition = match schemas.entry(e.dataset.clone()) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(t.schema_projection(&r.project, &e.dataset, base)?)
+            }
+        };
         if let Some(value) = &mut value {
-            validate_properties(&value.properties, &definition)?;
+            validate_properties(&value.properties, definition)?;
             let previous = if definition.dropped.is_empty() {
                 None
             } else if context.get::<_, bool>(5usize)? {
@@ -677,7 +688,6 @@ pub(super) fn save(
     }
     t.put_deltas(&r.project, &r.workspace, &deltas)?;
     let count: i64 = t.count_deltas(&r.project, &r.workspace)?.get(0usize)?;
-    let schema_count = t.workspace_schemas(&r.project, &r.workspace)?.len();
     let version = bump(t, &r.project, &r.workspace, "open")?;
     audit(
         t,
