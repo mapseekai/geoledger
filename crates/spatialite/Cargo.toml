@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-parking_lot = "0.12"
+parking_lot = "0.13"
 rusqlite = { version = "0.40", features = ["bundled", "load_extension"] }
 
 # This crate is the narrow native-extension loading boundary. Business crates
