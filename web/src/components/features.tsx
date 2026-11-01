@@ -148,7 +148,7 @@ export function FeatureExplorer({
       active = false;
     };
   }, [project.id, refresh, workspace]);
-  const source = (
+  const source = (version: string | undefined) => (
     <>
       <div className="gis-title">
         <Tip label="返回数据集">
@@ -175,6 +175,7 @@ export function FeatureExplorer({
       <div className="gis-source">
         <SourcePicker
           value={workspace}
+          workspaceVersion={version}
           workspaces={workspaces.filter(
             (w) => w.status === "open" || w.id === workspace,
           )}
@@ -243,12 +244,14 @@ export function FeatureExplorer({
  */
 function SourcePicker({
   value,
+  workspaceVersion,
   workspaces,
   disabled,
   choose,
   lookup,
 }: {
   value: string;
+  workspaceVersion: string | undefined;
   workspaces: Workspace[];
   disabled: boolean;
   choose: (id: string) => void;
@@ -257,6 +260,7 @@ function SourcePicker({
   const [open, setOpen] = useState(false),
     [search, setSearch] = useState("");
   const current = workspaces.find((w) => w.id === value);
+  const currentVersion = workspaceVersion ?? current?.version;
   const typed = search.trim();
   const known = !typed || workspaces.some((w) => w.id === typed);
   const toggle = (next: boolean) => {
@@ -283,7 +287,7 @@ function SourcePicker({
           {value ? <GitBranch /> : <Database />}
           <span className="source-label">
             {value
-              ? `工作区 ${short(value)}${current ? ` · v${current.version}` : ""}`
+              ? `工作区 ${short(value)}${currentVersion !== undefined ? ` · v${currentVersion}` : ""}`
               : "已发布的数据"}
           </span>
           <ChevronsUpDown data-icon="inline-end" />
@@ -320,7 +324,12 @@ function SourcePicker({
                     <GitBranch />
                     <span className="source-item-label">
                       <span className="mono">{short(w.id)}</span>
-                      <small>v{w.version}</small>
+                      <small>
+                        v
+                        {w.id === value
+                          ? (workspaceVersion ?? w.version)
+                          : w.version}
+                      </small>
                     </span>
                     <Check
                       className={w.id === value ? undefined : "invisible"}
@@ -466,7 +475,7 @@ export function FeatureWorkspace({
   dataset: Dataset;
   workspaceId: string;
   writable: boolean;
-  source: ReactNode;
+  source: (version: string | undefined) => ReactNode;
   alert: ReactNode;
   projectChanged: () => void;
 }) {
@@ -637,7 +646,7 @@ export function FeatureWorkspace({
   return (
     <>
       <header className="gis-toolbar">
-        {source}
+        {source(version)}
         <Badge
           variant="outline"
           className="revision-tag"
