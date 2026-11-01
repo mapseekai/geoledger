@@ -4,6 +4,16 @@
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
+## [0.3.0-alpha.9] - 2026-11-01
+
+### Fixed
+
+- Web 控制台保存或刷新工作区后，同步更新数据来源选择器及其列表中的草稿版本，避免显示过期版本。
+
+### Changed
+
+- 协议仍为 geoledger/v1，存储格式仍为 19，现有格式 19 数据库可继续使用。
+
 ## [0.3.0-alpha.8] - 2026-10-30
 
 ### Changed
