@@ -15,7 +15,7 @@ RUN mkdir -p /src/build-evidence && \
     rustc -vV > /src/build-evidence/rustc.txt && \
     rm -rf /usr/local/cargo/registry /usr/local/cargo/git
 # Node 22.23.4 backports CVE-2026-111497; its bundled Brotli still reports 1.1.0.
-FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS node-runtime
+FROM node:26.13.0-alpine3.24@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS node-runtime
 RUN node -e 'require("node:assert/strict").equal(process.versions.node, "22.23.4")'
 FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS toolchain
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libstdc++
