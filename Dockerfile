@@ -17,7 +17,7 @@ RUN mkdir -p /src/build-evidence && \
 # Node 22.23.4 backports CVE-2026-111497; its bundled Brotli still reports 1.1.0.
 FROM node:22.23.4-alpine3.24@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS node-runtime
 RUN node -e 'require("node:assert/strict").equal(process.versions.node, "22.23.4")'
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS toolchain
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS toolchain
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libstdc++
 COPY --from=node-runtime /usr/local/bin/node /nodejs/bin/node
 SHELL ["/bin/sh", "-ec"]
@@ -71,7 +71,7 @@ COPY --from=console-build /app /app
 COPY --from=console-build /output /output
 # A standalone lock avoids scanner workspace-resolution gaps in build images.
 COPY Cargo.lock /usr/share/geoledger/Cargo.lock
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS runtime
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates libssl3 libcrypto3 libgcc libstdc++ libspatialite tini 'brotli-libs>=1.2.1-r0' && \
     addgroup -g 10001 geoledger && adduser -D -u 10001 -G geoledger geoledger && \
     mkdir /data && chown 10001:10001 /data
