@@ -22,6 +22,8 @@ cargo test --locked -p geoledger-engine --test public_api
 cargo test --locked -p geoledger-spatialite --lib
 cargo test --locked -p geoledger-engine --lib
 cargo test --locked --workspace
+# The Python integration test runs the normal CLI and server executables.
+cargo build --locked -p geoledger-server -p geoledger-cli --bins
 python3 crates/cli/tests/test_archive_cli.py
 ./scripts/backup-drill.sh
 if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
