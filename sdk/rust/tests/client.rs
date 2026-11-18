@@ -1210,11 +1210,52 @@ async fn conflicts_without_workspace_version_proof_preserve_unknown_until_receip
         "other_business_rejection",
         false,
     ));
-    cases.push((
-        business_status(tonic::Code::Unavailable, "workspace_version_conflict", None),
-        "workspace_version_conflict",
-        true,
-    ));
+    for code in [
+        tonic::Code::Unavailable,
+        tonic::Code::InvalidArgument,
+        tonic::Code::PermissionDenied,
+        tonic::Code::AlreadyExists,
+        tonic::Code::FailedPrecondition,
+    ] {
+        cases.push((
+            business_status(code, "workspace_version_conflict", None),
+            "workspace_version_conflict",
+            true,
+        ));
+    }
+    for (message, request_id, conflicts) in [
+        ("", "request", None),
+        ("workspace version changed", " ", None),
+        (
+            "workspace version changed",
+            "request",
+            Some(wire::ConflictsReply::default()),
+        ),
+    ] {
+        let envelope = wire::RpcStatus {
+            code: tonic::Code::Aborted as i32,
+            message: message.into(),
+            details: vec![wire::ErrorAny {
+                type_url: "type.googleapis.com/geoledger.v1.ErrorDetail".into(),
+                value: wire::ErrorDetail {
+                    code: "workspace_version_conflict".into(),
+                    message: message.into(),
+                    request_id: request_id.into(),
+                    conflicts,
+                }
+                .encode_to_vec(),
+            }],
+        };
+        cases.push((
+            Status::with_details(
+                tonic::Code::Aborted,
+                message,
+                envelope.encode_to_vec().into(),
+            ),
+            "workspace_version_conflict",
+            true,
+        ));
+    }
     let service = Service::default();
     let requests = service.requests.clone();
     {
@@ -1246,6 +1287,57 @@ async fn conflicts_without_workspace_version_proof_preserve_unknown_until_receip
     let seen = requests.lock().map_err(|_| "lock")?;
     assert_eq!(seen.len(), cases.len() + 2);
     assert!(seen.iter().all(|request| request == &seen[0]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_malformed_success_does_not_settle_a_publication() -> TestResult {
+    let service = Service::default();
+    let requests = service.requests.clone();
+    let receipt = publication_reply(5);
+    service
+        .publication_replies
+        .lock()
+        .map_err(|_| "lock")?
+        .extend([
+            Ok(wire::PublishReply::default()),
+            Ok(wire::PublishReply {
+                workspace: "another".into(),
+                ..receipt.clone()
+            }),
+            Ok(publication_reply(6)),
+            Ok(wire::PublishReply {
+                revision: 0,
+                ..receipt.clone()
+            }),
+            Ok(wire::PublishReply {
+                status: "open".into(),
+                ..receipt.clone()
+            }),
+            Ok(wire::PublishReply {
+                changes: 0,
+                ..receipt
+            }),
+        ]);
+    let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
+    let client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
+    let mut draft = client.create_workspace("project").await?;
+    for _ in 0..5 {
+        let error = draft
+            .publish("original")
+            .await
+            .err()
+            .ok_or("accepted malformed success")?;
+        assert_eq!(error.code, "invalid_response");
+        assert!(error.uncertain);
+        assert!(draft.pending_publication().is_some());
+        assert_eq!(draft.info().version, 4);
+        assert!(draft.save_batch(&[]).await.is_err());
+    }
+    assert_eq!(draft.publish("original").await?.changes, 0);
+    let seen = requests.lock().map_err(|_| "lock")?;
+    assert_eq!(seen.len(), 6);
+    assert!(seen.iter().all(|r| r == &seen[0]));
     Ok(())
 }
 

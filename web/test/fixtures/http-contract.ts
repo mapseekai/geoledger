@@ -62,7 +62,9 @@ test("lost committed response -> admission rejection -> success preserves origin
           if (attempt === 2)
             return new Response('{"error":"admission rejected"}', { status });
           assert.equal(body, committed);
-          return new Response('{"revision":2,"version":1,"changes":1}');
+          return new Response(
+            '{"revision":2,"workspace":"w","version":9007199254740994,"status":"published","changes":1}',
+          );
         };
         for (let retry = 0; retry < 2; retry++) {
           const pending = readPublication(stored)!;
@@ -86,7 +88,13 @@ test("lost committed response -> admission rejection -> success preserves origin
         }
         assert.deepEqual(
           await send("/api/console", "POST", readPublication(stored)),
-          { revision: "2", version: "1", changes: "1" },
+          {
+            revision: "2",
+            workspace: "w",
+            version: "9007199254740994",
+            status: "published",
+            changes: "1",
+          },
         );
         for (const raw of upstream) {
           assert.equal(raw, committed);
@@ -262,7 +270,9 @@ test("source rejection crosses BFF and browser without settling an earlier unkno
             }),
             { status: 400, headers: { "x-request-id": "correlation" } },
           );
-        return new Response('{"revision":2,"version":2,"changes":1}');
+        return new Response(
+          '{"revision":2,"workspace":"w","version":2,"status":"published","changes":1}',
+        );
       };
       await assert.rejects(send("/api/console", "POST", intent), (error) => {
         assert(error instanceof ApiError);
@@ -285,7 +295,13 @@ test("source rejection crosses BFF and browser without settling an earlier unkno
         reject = false; // The delayed original attempt has now committed.
         assert.deepEqual(
           await send("/api/console", "POST", readPublication(stored)),
-          { revision: "2", version: "2", changes: "1" },
+          {
+            revision: "2",
+            workspace: "w",
+            version: "2",
+            status: "published",
+            changes: "1",
+          },
         );
         assert.equal(upstream[0], upstream[1]);
       } else assert.equal(stored, null);
@@ -348,7 +364,9 @@ test("a merge rejection preserves an unknown intent until a permanent workspace 
       }
       sent.push(String(init?.body));
       return new Response(
-        JSON.stringify({ error: { code, message: "business rejection" } }),
+        JSON.stringify({
+          error: { code, message: "business rejection", request_id: "request" },
+        }),
         { status: 409 },
       );
     };
@@ -379,5 +397,101 @@ test("a merge rejection preserves an unknown intent until a permanent workspace 
     globalThis.fetch = originalFetch;
     if (originalSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
     else process.env.GL_WEB_SESSION_SECRET = originalSecret;
+  }
+});
+
+test("a wrong status, partial proof or malformed success cannot settle the same publication", async () => {
+  const saved = globalThis.fetch;
+  const secret = process.env.GL_WEB_SESSION_SECRET;
+  process.env.GL_WEB_SESSION_SECRET = "test-only-session-secret-".repeat(3);
+  const intent = publication("p", "w", "1", "original");
+  const valid = {
+    workspace: "w",
+    revision: 2,
+    version: 2,
+    changes: 0,
+    status: "published",
+  };
+  try {
+    for (const boundary of ["engine", "browser"]) {
+      const id = boundary === "engine" ? "request_id" : "requestId";
+      const proof = {
+        code: "workspace_version_conflict",
+        message: "workspace closed",
+        [id]: "correlation",
+        ...(boundary === "browser" ? { uncertain: false } : {}),
+      };
+      const receipt =
+        boundary === "engine"
+          ? valid
+          : { ...valid, revision: "2", version: "2", changes: "0" };
+      const responses = [
+        new Response(JSON.stringify({ error: proof }), { status: 403 }),
+        new Response(JSON.stringify({ error: { ...proof, [id]: " " } }), {
+          status: 409,
+          headers: { "x-request-id": "header-only" },
+        }),
+        new Response(JSON.stringify({ error: { ...proof, message: " " } }), {
+          status: 409,
+        }),
+        new Response(JSON.stringify({ error: { ...proof, conflicts: [] } }), {
+          status: 409,
+        }),
+        new Response("{}"),
+        new Response(JSON.stringify({ ...receipt, workspace: "other" })),
+        new Response(
+          JSON.stringify({
+            ...receipt,
+            version: boundary === "engine" ? 3 : "3",
+          }),
+        ),
+        new Response(JSON.stringify({ ...receipt, status: "open" })),
+        new Response(JSON.stringify(receipt)),
+      ];
+      const sent: string[] = [];
+      globalThis.fetch = async (url, init) => {
+        if (boundary === "engine" && url === "/api/console") {
+          try {
+            return reply(
+              await execute(
+                consoleClient("fixture-session"),
+                JSON.parse(String(init?.body)),
+              ),
+            );
+          } catch (e) {
+            return failure(e);
+          }
+        }
+        sent.push(String(init?.body));
+        const response = responses.shift();
+        assert(response);
+        return response;
+      };
+      for (let i = 0; i < 8; i++) {
+        await assert.rejects(send("/api/console", "POST", intent), (e) => {
+          assert(e instanceof ApiError);
+          assert.equal(e.uncertain, true);
+          assert.equal(
+            releasePublication(e.status, e.uncertain, true, e.code),
+            false,
+          );
+          if (i >= 4) assert.equal(e.code, "invalid_response");
+          return true;
+        });
+      }
+      assert.deepEqual(await send("/api/console", "POST", intent), {
+        workspace: "w",
+        revision: "2",
+        version: "2",
+        changes: "0",
+        status: "published",
+      });
+      assert.equal(sent.length, 9);
+      assert(sent.every((body) => body === sent[0]));
+    }
+  } finally {
+    globalThis.fetch = saved;
+    if (secret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
+    else process.env.GL_WEB_SESSION_SECRET = secret;
   }
 });

@@ -1,3 +1,4 @@
+import { invalidVersionProof, matchesPublicationReceipt } from "./publication";
 import { httpCode, uncertainStatus } from "./http-status";
 import type { Client, Edit, WorkspaceInfo } from "@geoledger/client";
 import { stringifyJson, GeoLedgerError } from "@geoledger/client";
@@ -86,13 +87,16 @@ async function request<T>(
   if (!response.ok) {
     let value: Record<string, unknown> = {};
     try {
-      const parsed = decode(parseLosslessJson(raw));
+      const parsed = parseLosslessJson(raw);
       if (parsed && typeof parsed === "object")
         value = parsed as Record<string, unknown>;
     } catch {
       // Proxies may reject admission with a plain-text response.
     }
     const detail = errorDetail(value.error);
+    const rawDetail = (
+      value.error && typeof value.error === "object" ? value.error : {}
+    ) as Record<string, unknown>;
     if (value.conflicts !== undefined && !detail)
       throw new GeoLedgerError(
         "invalid_response",
@@ -107,10 +111,19 @@ async function request<T>(
         detail?.message ?? "请求失败",
         response.headers.get("x-request-id") ?? detail?.requestId,
         detail && value.conflicts !== undefined
-          ? decodeConflicts(value)
+          ? decodeConflicts(decode(value))
           : undefined,
         uncertainStatus(response.status) ||
-          (response.status === 409 && !detail),
+          (response.status === 409 && !detail) ||
+          invalidVersionProof(
+            response.status,
+            rawDetail.code,
+            rawDetail.message,
+            rawDetail.request_id,
+            value.conflicts === undefined
+              ? rawDetail.conflicts
+              : value.conflicts,
+          ),
       ),
       { status: response.status },
     );
@@ -136,7 +149,9 @@ function errorDetail(
   return {
     code: row.code,
     message: row.message,
-    ...(typeof row.requestId === "string" ? { requestId: row.requestId } : {}),
+    ...(typeof row.request_id === "string"
+      ? { requestId: row.request_id }
+      : {}),
   };
 }
 /** Convert protocol metadata only; feature properties and audit detail remain exact JSON. */
@@ -216,6 +231,22 @@ export function consoleClient(sid: string): ConsoleClient {
     const value = await request<
       Record<string, unknown> | Record<string, unknown>[]
     >("api", op, snake(input), sid, true);
+    if (
+      op === "publish" &&
+      !matchesPublicationReceipt(
+        value,
+        input.workspace,
+        input.expectedWorkspaceVersion,
+      )
+    ) {
+      throw new GeoLedgerError(
+        "invalid_response",
+        "Invalid publication receipt",
+        undefined,
+        undefined,
+        true,
+      );
+    }
     if (op === "features" && !Array.isArray(value)) {
       if (value.type === "Feature") {
         const { crs, revision, workspaceVersion, ...feature } = value;

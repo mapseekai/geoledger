@@ -34,7 +34,8 @@ test("private transport sends only Session header and preserves exact business m
       "test-session",
     );
     assert.equal(requests[0].headers.has("authorization"), false);
-    response = '{"revision":9007199254740994,"version":1,"changes":1}';
+    response =
+      '{"revision":9007199254740994,"workspace":"w","version":9007199254740994,"status":"published","changes":1}';
     const publish = {
       action: "publish",
       project: "p",
@@ -528,7 +529,7 @@ test("upstream 409 needs the current error envelope to provide a definite busine
     }
     globalThis.fetch = async () =>
       new Response(
-        '{"error":{"code":"workspace_version_conflict","message":"workspace version changed"}}',
+        '{"error":{"code":"workspace_version_conflict","message":"workspace version changed","request_id":"request"}}',
         { status: 409 },
       );
     await assert.rejects(

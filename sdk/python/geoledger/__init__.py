@@ -123,7 +123,10 @@ def _error(error):
                         detail = _decode(_pb.ErrorDetail.FromString(item.value))
                         if not detail["code"]:
                             raise ValueError("missing business error code")
-                        return GeoLedgerError(detail["code"], detail["message"], request_id=detail["request_id"], conflicts=detail["conflicts"], uncertain=uncertain)
+                        business_uncertain = uncertain or (detail["code"] == "workspace_version_conflict" and
+                            (error.code() != _grpc.StatusCode.ABORTED or not detail["message"].strip() or
+                             not detail["request_id"].strip() or detail["conflicts"] is not None))
+                        return GeoLedgerError(detail["code"], detail["message"], request_id=detail["request_id"], conflicts=detail["conflicts"], uncertain=business_uncertain)
     except Exception:
         pass  # Malformed optional metadata must not hide the original failure.
     uncertain = uncertain or error.code() in (_grpc.StatusCode.ABORTED, _grpc.StatusCode.ALREADY_EXISTS, _grpc.StatusCode.FAILED_PRECONDITION)
@@ -304,7 +307,14 @@ class Client:
 
     def publish(self, publication: Publication) -> dict[str, Any]:
         """Retry a persisted publication without changing its identity or payload."""
-        return self._call("Publish", **asdict(publication))
+        intent = asdict(publication)
+        result = self._call("Publish", **intent)
+        expected = intent["expected_workspace_version"]
+        if (result["workspace"] != intent["workspace"] or result["status"] != "published" or
+            result["revision"] <= 0 or not 0 <= expected < 9223372036854775807 or
+            result["version"] != expected + 1 or result["changes"] < 0):
+            raise GeoLedgerError("invalid_response", "invalid publication receipt received from server", uncertain=True)
+        return result
 
     def restore(self, project: str, revision: int) -> Workspace:
         return Workspace(self, project, WorkspaceInfo(**self._call("Restore", project=project, revision=revision)))

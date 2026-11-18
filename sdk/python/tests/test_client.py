@@ -323,6 +323,57 @@ class ContractTests(unittest.TestCase):
                     workspace.publish("original")
                     self.assertEqual(workspace.info.status, "published")
 
+    def test_workspace_version_proof_requires_aborted_and_complete_nonmerge_details(self):
+        cases = [(grpc.StatusCode.ABORTED, {}, True)]
+        cases += [(status, {}, False) for status in (grpc.StatusCode.PERMISSION_DENIED, grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.ALREADY_EXISTS, grpc.StatusCode.FAILED_PRECONDITION, grpc.StatusCode.UNAVAILABLE)]
+        cases += [(grpc.StatusCode.ABORTED, changes, False) for changes in ({"message": ""}, {"message": " \t"}, {"request_id": ""}, {"request_id": " \t"}, {"conflicts": wire.ConflictsReply()})]
+        for target_status, changes, valid in cases:
+            with self.subTest(status=target_status, changes=changes):
+                status, metadata = grpc.StatusCode.UNAVAILABLE, []
+                class Rejected(grpc.RpcError):
+                    def code(self): return status
+                    def details(self): return "public failure"
+                    def trailing_metadata(self): return metadata
+                def publish(request, **kwargs): raise Rejected()
+                workspace = Workspace(self.client(SimpleNamespace(Publish=publish)), "project", WorkspaceInfo("draft", 1, 4, "open"))
+                with self.assertRaises(GeoLedgerError): workspace.publish("original")
+                intent = asdict(workspace.pending_publication)
+                fields = dict(code="workspace_version_conflict", message="workspace version changed", request_id="proof")
+                fields.update(changes)
+                detail = wire.ErrorDetail(**fields)
+                status = target_status
+                envelope = wire.RpcStatus(code=status.value[0], message="public failure")
+                envelope.details.add(type_url="type.googleapis.com/geoledger.v1.ErrorDetail", value=detail.SerializeToString())
+                metadata = [("grpc-status-details-bin", envelope.SerializeToString())]
+                with self.assertRaises(GeoLedgerError) as rejected: workspace.publish("original")
+                self.assertEqual(rejected.exception.code, "workspace_version_conflict")
+                self.assertEqual(rejected.exception.uncertain, not valid)
+                if valid: self.assertIsNone(workspace.pending_publication)
+                else: self.assertEqual(asdict(workspace.pending_publication), intent)
+
+    def test_invalid_publication_receipt_retains_intent_until_exact_receipt(self):
+        valid = dict(workspace="draft", status="published", revision=2, version=5, changes=0)
+        for bad in ({}, {**valid, "workspace": "other"}, {**valid, "version": 4}, {**valid, "status": "open"}, {**valid, "revision": 0}):
+            with self.subTest(receipt=bad):
+                receipt, sent = wire.PublishReply(**bad), []
+                def publish(request, **kwargs):
+                    sent.append(request)
+                    return receipt
+                workspace = Workspace(self.client(SimpleNamespace(Publish=publish)), "project", WorkspaceInfo("draft", 1, 4, "open"))
+                with self.assertRaises(GeoLedgerError) as rejected: workspace.publish("original")
+                self.assertEqual(rejected.exception.code, "invalid_response")
+                self.assertTrue(rejected.exception.uncertain)
+                intent = asdict(workspace.pending_publication)
+                self.assertEqual(workspace.info.version, 4)
+                self.assertEqual(workspace.info.status, "open")
+                with self.assertRaises(GeoLedgerError): workspace.delete("dataset", "one")
+                receipt = wire.PublishReply(**valid)
+                result = workspace.publish("original")
+                self.assertEqual(result["changes"], 0)
+                self.assertEqual(workspace.info.status, "published")
+                self.assertEqual(sent[0], sent[1])
+                self.assertEqual(asdict(workspace.pending_publication), intent)
+
 
 if __name__ == "__main__":
     unittest.main()

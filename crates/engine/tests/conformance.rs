@@ -9,6 +9,23 @@ use uuid::Uuid;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn a_future_open_workspace_version_is_not_a_permanent_publication_fence() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    let request = json!({"workspace":w,"expected_workspace_version":1,"request_id":Uuid::new_v4().to_string(),"message":"future version"});
+    let early = f.call(&f.alice, "publish", request.clone()).unwrap_err();
+    assert_eq!(early.status, 409);
+    assert_eq!(early.body["error"]["code"], "conflict");
+    f.save(&f.alice, &w, 0, json!({"value":1}), Value::Null)?;
+    let receipt = f.call(&f.alice, "publish", request.clone())?;
+    assert_eq!(receipt["version"], 2);
+    assert_eq!(receipt, f.call(&f.alice, "publish", request)?);
+    let closed = f.call(&f.alice, "publish", json!({"workspace":w,"expected_workspace_version":10,"request_id":Uuid::new_v4().to_string(),"message":"closed"})).unwrap_err();
+    assert_eq!(closed.body["error"]["code"], "workspace_version_conflict");
+    Ok(())
+}
+
+#[test]
 fn edit_context_preserves_raw_drafts_and_distinguishes_deleted_from_untouched() -> TestResult {
     let f = Fixture::new()?;
     let seed = f.ws(&f.alice);

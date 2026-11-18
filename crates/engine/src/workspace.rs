@@ -184,9 +184,15 @@ pub(super) fn workspace(
         .ok_or_else(missing)?;
     let v: i64 = r.get(1usize)?;
     let status: String = r.get(2usize)?;
-    if version.is_some_and(|x| x != v || status != "open") {
+    if let Some(expected) = version
+        && (expected != v || status != "open")
+    {
         let mut error = stale();
-        error.body["error"]["code"] = json!("workspace_version_conflict");
+        // An open workspace can still reach a future version. Only a version
+        // already passed, or a closed workspace, permanently fences a request.
+        if expected < v || status != "open" {
+            error.body["error"]["code"] = json!("workspace_version_conflict");
+        }
         return Err(error);
     }
     Ok((r.get(0usize)?, v, status))

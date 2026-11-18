@@ -77,7 +77,7 @@ uncertain = false
 | 已有原请求 | 成功回执或回执重放 | 使用该回执；不重复创建提交 |
 | 已有未知结果 | 可信业务详情中的 `workspace_version_conflict`，且 uncertain=false | 原预期工作区版本已永久失效，允许释放；随后读取当前状态 |
 
-不要仅根据最后一次异常的 `uncertain=false` 清理一个先前未知的发布。自建 HTTP 客户端和自行保存 `Publication` 的低层 SDK 调用者需要自己保留这段生命周期；工作区对象和 Web 控制台已负责它。服务端继续在项目 HEAD 锁前后查回执，保存/历史/审计/回执仍在一个事务中提交。只有真正的工作区预期版本失效或已关闭检查产生 `workspace_version_conflict`；`expected_head` 变化和合并冲突仍是普通 conflict。
+不要仅根据最后一次异常的 `uncertain=false` 清理一个先前未知的发布。自建 HTTP 客户端和自行保存 `Publication` 的低层 SDK 调用者需要自己保留这段生命周期；工作区对象和 Web 控制台已负责它。服务端继续在项目 HEAD 锁前后查回执，保存/历史/审计/回执仍在一个事务中提交。只有工作区已越过预期版本或已关闭的检查产生 `workspace_version_conflict`；开放工作区尚未到达调用者指定的未来版本、`expected_head` 变化和合并冲突仍是普通 conflict。
 
 ## 恢复未知发布
 
@@ -96,7 +96,9 @@ uncertain = false
 
 HTTP 业务错误唯一结构为 `{"error":{"code":"…","message":"…","request_id":"…"}}`，可带 `conflicts`。BFF 不再解释顶层 `code/message` 或字符串 `error` 旧形状；`forbidden`、`bad_request` 等旧别名不再当作当前业务码映射。标准码为 `permission_denied`、`invalid_argument` 等。
 
-四语言 SDK、Web 与引擎统一使用 `deadline_exceeded` 表达期限耗尽，替代部分客户端以前返回的 `timeout`。没有业务详情的 gRPC `OutOfRange` 统一为 `resource_exhausted` 且 `uncertain=true`；有效结构化业务详情仍优先保留业务码。无有效当前详情的 `Aborted`、`AlreadyExists`、`FailedPrecondition` 和 HTTP 409 也保持不确定；gRPC envelope 的 code 必须与传输状态一致，且业务 code 非空。代理的空响应、HTML 或普通文本错误继续按 HTTP 状态保守处理，错误内容不作为当前业务详情或直接回显给用户。
+四语言 SDK、Web 与引擎统一使用 `deadline_exceeded` 表达期限耗尽，替代部分客户端以前返回的 `timeout`。没有业务详情的 gRPC `OutOfRange` 统一为 `resource_exhausted` 且 `uncertain=true`；有效结构化业务详情仍优先保留业务码。无有效当前详情的 `Aborted`、`AlreadyExists`、`FailedPrecondition` 和 HTTP 409 也保持不确定；gRPC envelope 的 code 必须与传输状态一致，且业务 code 非空。 版本失效证明还要求实际状态为 HTTP 409 或 gRPC `Aborted`，详情包含非空消息、非空请求标识，且不携带合并冲突。专码与其他状态配对、字段不全或同时声明合并冲突时，仍保留原发布。
+
+发布成功也必须能确认原请求：回执的工作区标识与请求一致、状态为 `published`、revision 为正整数、version 恰为预期版本加一，changes 为非负整数（允许零次要素变更）。空的 200 响应、默认空 Protobuf 回包或属于另一个工作区的回执都是不确定结果；保留原请求并原样重试。代理的空响应、HTML 或普通文本错误继续按 HTTP 状态保守处理，错误内容不作为当前业务详情或直接回显给用户。
 
 ## Rust 服务嵌入与自定义后端
 

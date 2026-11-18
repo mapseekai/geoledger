@@ -82,7 +82,8 @@ function failure(error: ServiceError): GeoLedgerError {
           d.message,
           d.requestId,
           d.conflicts ? convert.decodeConflicts(d.conflicts) : undefined,
-          uncertain,
+          uncertain || (d.code === "workspace_version_conflict" &&
+            (error.code !== 10 || !d.message.trim() || !d.requestId.trim() || d.conflicts !== undefined)),
         );
       }
     }
@@ -570,6 +571,8 @@ export class Client {
    * Prefer Workspace.publish when the SDK should retain that retry state for you.
    */
   publish(intent: model.Publication): Promise<model.PublicationResult> {
+    const expectedVersion = intent.expectedWorkspaceVersion;
+    const workspace = intent.workspace;
     return this.#call(
       (cb) =>
         this.#rpc.publish(
@@ -579,7 +582,14 @@ export class Client {
           },
           cb,
         ),
-      convert.decodePublicationResult,
+      (reply: wire.PublishReply) => {
+        const result = convert.decodePublicationResult(reply);
+        if (result.workspace !== workspace || result.status !== "published" ||
+          result.revision <= 0n || expectedVersion < 0n || expectedVersion >= 9223372036854775807n ||
+          result.version !== expectedVersion + 1n || result.changes < 0n)
+          throw new Error("Invalid publication receipt");
+        return result;
+      },
     );
   }
   async restore(project: string, version: bigint): Promise<Workspace> {

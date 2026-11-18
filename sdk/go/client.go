@@ -87,6 +87,9 @@ func failure(err error) error {
 		result.Code = detail.Code
 		result.Message = detail.Message
 		result.RequestID = detail.RequestId
+		if detail.Code == "workspace_version_conflict" && (s.Code() != codes.Aborted || strings.TrimSpace(detail.Message) == "" || strings.TrimSpace(detail.RequestId) == "" || detail.Conflicts != nil) {
+			result.Uncertain = true
+		}
 		if detail.Conflicts != nil {
 			var conflicts Conflicts
 			if decode(detail.Conflicts, &conflicts) == nil {
@@ -533,6 +536,9 @@ func (c *Client) Audit(ctx context.Context, project string, after, n int64) (Aud
 func (c *Client) Publish(ctx context.Context, intent Publication) (PublicationResult, error) {
 	var r PublicationResult
 	e := call(c, ctx, c.rpc.Publish, &pb.PublishRequest{Project: intent.Project, Workspace: intent.Workspace, ExpectedWorkspaceVersion: intent.ExpectedWorkspaceVersion, RequestId: intent.RequestID, Message: intent.Message}, &r)
+	if e == nil && (r.Workspace != intent.Workspace || r.Status != "published" || r.Revision <= 0 || intent.ExpectedWorkspaceVersion < 0 || intent.ExpectedWorkspaceVersion == math.MaxInt64 || r.Version != intent.ExpectedWorkspaceVersion+1) {
+		return PublicationResult{}, &Error{Code: "invalid_response", Message: "invalid publication receipt received from server", Uncertain: true}
+	}
 	return r, e
 }
 func (c *Client) Restore(ctx context.Context, project string, revision int64) (*Workspace, error) {

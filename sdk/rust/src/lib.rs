@@ -141,21 +141,35 @@ impl From<Status> for Error {
         };
         // A proxy can reject a retry while an earlier publication still runs.
         // Undetailed or malformed conflict-family statuses prove no business state.
-        let uncertain = matches!(
-            status.code(),
-            tonic::Code::DeadlineExceeded
-                | tonic::Code::Cancelled
-                | tonic::Code::Unavailable
-                | tonic::Code::Unknown
-                | tonic::Code::Internal
-                | tonic::Code::DataLoss
-                | tonic::Code::ResourceExhausted
-                | tonic::Code::OutOfRange
-        ) || (detail.is_none()
-            && matches!(
+        // Only this exact server response permanently invalidates an earlier
+        // expected version. A partial detail or a mismatched transport status
+        // can describe this retry, but cannot settle a previous publication.
+        let invalid_version_proof = detail.as_ref().is_some_and(|d| {
+            d.code == "workspace_version_conflict"
+                && (status.code() != tonic::Code::Aborted
+                    || d.message.trim().is_empty()
+                    || d.request_id.trim().is_empty()
+                    || d.conflicts.is_some())
+        });
+        let uncertain = invalid_version_proof
+            || matches!(
                 status.code(),
-                tonic::Code::Aborted | tonic::Code::AlreadyExists | tonic::Code::FailedPrecondition
-            ));
+                tonic::Code::DeadlineExceeded
+                    | tonic::Code::Cancelled
+                    | tonic::Code::Unavailable
+                    | tonic::Code::Unknown
+                    | tonic::Code::Internal
+                    | tonic::Code::DataLoss
+                    | tonic::Code::ResourceExhausted
+                    | tonic::Code::OutOfRange
+            )
+            || (detail.is_none()
+                && matches!(
+                    status.code(),
+                    tonic::Code::Aborted
+                        | tonic::Code::AlreadyExists
+                        | tonic::Code::FailedPrecondition
+                ));
         let diagnostic = Some(Arc::new(Diagnostic {
             description: format!("gRPC {:?}", status.code()),
             cause: None,
@@ -582,11 +596,26 @@ impl Client {
                     .await?
                     .into_inner(),
             )?,
-            "publish" => serde_json::to_value(
-                rpc.publish(serde_json::from_value::<pb::PublishRequest>(value)?)
-                    .await?
-                    .into_inner(),
-            )?,
+            "publish" => {
+                let request: pb::PublishRequest = serde_json::from_value(value)?;
+                let workspace = request.workspace.clone();
+                let next_version = request.expected_workspace_version.checked_add(1);
+                let receipt = rpc.publish(request).await?.into_inner();
+                // A decodable protobuf can still be empty or belong to a
+                // different workspace. It does not settle this publication.
+                if workspace.is_empty()
+                    || receipt.workspace != workspace
+                    || receipt.status != "published"
+                    || receipt.revision <= 0
+                    || receipt.version <= 0
+                    || Some(receipt.version) != next_version
+                {
+                    let mut error = Error::new("invalid_response", "invalid publication receipt");
+                    error.uncertain = true;
+                    return Err(error);
+                }
+                serde_json::to_value(receipt)?
+            }
             "resolve" => serde_json::to_value(
                 rpc.resolve(serde_json::from_value::<pb::ResolveRequest>(value)?)
                     .await?

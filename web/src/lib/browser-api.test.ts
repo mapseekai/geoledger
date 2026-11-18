@@ -150,6 +150,7 @@ test("bare or invalid 409 details cannot claim a permanent workspace rejection",
           error: {
             code: "workspace_version_conflict",
             message: "workspace version changed",
+            requestId: "request",
             uncertain: false,
           },
         }),
