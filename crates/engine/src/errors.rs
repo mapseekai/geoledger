@@ -53,6 +53,34 @@ impl Error {
             ..error
         }
     }
+    /// Classify a confirmed source-data rejection during publication, before COMMIT.
+    /// Call only at source DML/conversion or explicit constraint-check boundaries.
+    /// This settles this attempt, not earlier attempts that may still be in flight.
+    pub(crate) fn publication_source_rejection(mut self) -> Self {
+        use tokio_postgres::error::SqlState;
+        let code = self
+            .source
+            .as_deref()
+            .and_then(|source| source.downcast_ref::<tokio_postgres::Error>())
+            .and_then(tokio_postgres::Error::code);
+        if code.is_some_and(|code| {
+            [
+                SqlState::CHECK_VIOLATION,
+                SqlState::NOT_NULL_VIOLATION,
+                SqlState::FOREIGN_KEY_VIOLATION,
+                SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+            ]
+            .contains(code)
+        }) {
+            // Keep the legacy uncertain transport status. Older consumers must
+            // not discard an earlier unknown publication when a retry is rejected.
+            self.status = 503;
+            self.body["error"]["code"] = json!("publication_attempt_rejected");
+            self.body["error"]["message"] =
+                json!("business table rejected this publication attempt");
+        }
+        self
+    }
     /// The request ID returned to the client in the error body.
     pub fn request_id(&self) -> Option<&str> {
         self.body["error"]["request_id"].as_str()

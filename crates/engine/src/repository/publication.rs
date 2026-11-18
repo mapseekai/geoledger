@@ -14,23 +14,19 @@ pub struct ConflictQuery<'a> {
 /// Transaction-local merge/conflict state, immutable publications and original-request receipts.
 pub trait PublicationRepository: Send {
     /// Materialize schema projections into the existing bounded merge stage.
-    fn stage_schema_merge(
-        &mut self,
-        _project: &str,
-        _workspace: &str,
-        _current: i64,
-    ) -> Result<usize> {
-        Ok(0)
-    }
+    /// Called for ordinary publications too: no schema intent is a valid `Ok(0)`.
+    /// Persist schema definitions atomically with history in `close_history`.
+    fn stage_schema_merge(&mut self, project: &str, workspace: &str, current: i64)
+    -> Result<usize>;
+    /// Restore the revision's schema changes as a new workspace intent. A backend
+    /// without schema support has no schema changes to restore and returns `Ok(())`.
     fn restore_workspace_schemas(
         &mut self,
-        _project: &str,
-        _workspace: &str,
-        _revision: i64,
-        _current: i64,
-    ) -> Result<()> {
-        Ok(())
-    }
+        project: &str,
+        workspace: &str,
+        revision: i64,
+        current: i64,
+    ) -> Result<()>;
 
     /// Transactional conflict index for exactly one workspace/version/HEAD tuple.
     /// Its rows are derived data and must not grant access without application authorization.

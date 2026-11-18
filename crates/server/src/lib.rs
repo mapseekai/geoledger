@@ -78,30 +78,15 @@ pub struct Service {
     draining: Arc<AtomicBool>,
 }
 impl Service {
+    /// Construct a running service with the default shared limits.
     pub fn new(app: Application) -> Self {
-        Self {
-            app,
-            password_capacity: Arc::new(Semaphore::new(4)),
-            auth_limiter: Arc::new(limits::Limiter::new(Rate {
-                per_second: 0.2,
-                burst: 10.0,
-            })),
-            login_peer_limiter: Arc::new(limits::Limiter::new(Rate {
-                per_second: 10.0,
-                burst: 100.0,
-            })),
-            requests: resources::ByteBudget::new(Limits::default().request_memory_bytes),
-            responses: resources::ByteBudget::new(Limits::default().response_memory_bytes),
-            capacity: Arc::new(Semaphore::new(Limits::default().max_concurrency)),
-            metrics: Arc::new(telemetry::Metrics::default()),
-            limits: Arc::new(Limits::default()),
-            subject_limiter: None,
-            ip_limiter: None,
-            draining: Arc::new(AtomicBool::new(false)),
-        }
+        Self::new_with_limits(app, Limits::default())
     }
-    /// Apply concurrency, timeout and rate limits. Call before cloning the service.
-    pub fn with_limits(mut self, limits: Limits) -> Self {
+    /// Construct all resource budgets before the service can be cloned.
+    /// Clones share these budgets, rate limiters, metrics and draining state.
+    /// To use custom limits, replace `Service::new(app).with_limits(limits)`
+    /// with `Service::new_with_limits(app, limits)`.
+    pub fn new_with_limits(app: Application, limits: Limits) -> Self {
         let limits = Limits {
             max_concurrency: limits.max_concurrency.max(1),
             request_timeout: limits.request_timeout.max(Duration::from_secs(1)),
@@ -120,15 +105,28 @@ impl Service {
                 .min(u32::MAX as usize),
             ..limits
         };
-        self.requests = resources::ByteBudget::new(limits.request_memory_bytes);
-        self.responses = resources::ByteBudget::new(limits.response_memory_bytes);
-        self.capacity = Arc::new(Semaphore::new(limits.max_concurrency));
-        self.subject_limiter = limits
-            .per_subject
-            .map(|r| Arc::new(limits::Limiter::new(r)));
-        self.ip_limiter = limits.per_ip.map(|r| Arc::new(limits::Limiter::new(r)));
-        self.limits = Arc::new(limits);
-        self
+        Self {
+            app,
+            password_capacity: Arc::new(Semaphore::new(4)),
+            auth_limiter: Arc::new(limits::Limiter::new(Rate {
+                per_second: 0.2,
+                burst: 10.0,
+            })),
+            login_peer_limiter: Arc::new(limits::Limiter::new(Rate {
+                per_second: 10.0,
+                burst: 100.0,
+            })),
+            requests: resources::ByteBudget::new(limits.request_memory_bytes),
+            responses: resources::ByteBudget::new(limits.response_memory_bytes),
+            capacity: Arc::new(Semaphore::new(limits.max_concurrency)),
+            metrics: Arc::new(telemetry::Metrics::default()),
+            subject_limiter: limits
+                .per_subject
+                .map(|r| Arc::new(limits::Limiter::new(r))),
+            ip_limiter: limits.per_ip.map(|r| Arc::new(limits::Limiter::new(r))),
+            limits: Arc::new(limits),
+            draining: Arc::new(AtomicBool::new(false)),
+        }
     }
     pub fn limits(&self) -> &Limits {
         &self.limits
@@ -340,6 +338,70 @@ mod tests {
     }
 
     #[test]
+    fn constructed_service_clones_share_limits_budgets_and_lifecycle() -> Result<()> {
+        let service = Service::new_with_limits(
+            Application::with_backend(Arc::new(CountingStorage(AtomicUsize::new(0)))),
+            Limits {
+                max_concurrency: 0,
+                max_request_bytes: 1024,
+                max_response_bytes: 1024,
+                request_memory_bytes: 0,
+                response_memory_bytes: 0,
+                request_timeout: Duration::ZERO,
+                per_subject: Rate::new(0.001, 1.0),
+                per_ip: Rate::new(0.001, 1.0),
+                ..Limits::default()
+            },
+        );
+        let clone = service.clone();
+        assert_eq!(clone.limits().max_concurrency, 1);
+        assert_eq!(clone.limits().request_timeout, Duration::from_secs(1));
+        assert_eq!(clone.limits().request_memory_bytes, 1024);
+        assert_eq!(clone.limits().response_memory_bytes, 1024);
+        let request = service.requests.reserve(1024)?;
+        let response = service.responses.reserve(1024)?;
+        assert!(clone.requests.reserve(1).is_err());
+        assert!(clone.responses.reserve(1).is_err());
+        let permit = service.capacity.try_acquire().map_err(|_| bad())?;
+        assert!(clone.capacity.try_acquire().is_err());
+        assert!(
+            service
+                .subject_limiter
+                .as_ref()
+                .ok_or_else(bad)?
+                .allow("subject")
+        );
+        assert!(
+            !clone
+                .subject_limiter
+                .as_ref()
+                .ok_or_else(bad)?
+                .allow("subject")
+        );
+        assert!(
+            service
+                .ip_limiter
+                .as_ref()
+                .ok_or_else(bad)?
+                .allow("192.0.2.1")
+        );
+        assert!(
+            !clone
+                .ip_limiter
+                .as_ref()
+                .ok_or_else(bad)?
+                .allow("192.0.2.1")
+        );
+        service.start_draining();
+        assert!(clone.is_draining());
+        drop((request, response, permit));
+        assert!(clone.requests.reserve(1024).is_ok());
+        assert!(clone.responses.reserve(1024).is_ok());
+        assert!(clone.capacity.try_acquire().is_ok());
+        Ok(())
+    }
+
+    #[test]
     fn queued_authentication_expires_before_storage_and_releases_permit()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -365,12 +427,14 @@ mod tests {
                 ),
             ] {
                 let storage = Arc::new(CountingStorage(AtomicUsize::new(0)));
-                let service =
-                    Service::new(Application::with_backend(storage.clone())).with_limits(Limits {
+                let service = Service::new_with_limits(
+                    Application::with_backend(storage.clone()),
+                    Limits {
                         max_concurrency: 1,
                         request_timeout: Duration::from_secs(1),
                         ..Limits::default()
-                    });
+                    },
+                );
                 let (entered, started) = tokio::sync::oneshot::channel();
                 let (release, wait) = std::sync::mpsc::channel();
                 let worker = tokio::task::spawn_blocking(move || {

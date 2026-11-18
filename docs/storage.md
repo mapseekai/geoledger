@@ -30,15 +30,37 @@
 
 SQLite/SpatiaLite 与 PostGIS 继续共用一个 `SqlTransaction`。各能力直接在同一类型上实现，持有同一个 Client、截止时间和 TransactionState；数据集/HEAD 缓存、merge 缓冲及响应预算不会因能力切换而复制。项目清理横跨数据集、历史和工作区，保留为 `ProjectRepository::purge_data` 一个语义操作，避免调用方自行拼装删除 SQL。事务所有者可以调用组合接口，领域函数不依赖所有者接口，也不能单独提交。
 
+`Parameter`、`Client`、`SqlTransaction` 及其原始 SQL helper 的可见范围限于 `session`。Application 通过 `SqlStorage::new(Storage, StorageOptions)` 建立内置后端，不直接组装驱动或连接池；TLS 摘要、连接池指标及备份、导入导出等语义入口保持可用。这一模块边界限制复用现成 SQL helper，数据库驱动仍是 engine 的依赖，同 crate 新代码仍可能直接建立驱动连接；业务代码必须继续遵守 Repository 合同。
+
 通过 `Application::with_backend(Arc<dyn StorageBackend>)` 注入。接口接收项目、数据集、修订、游标等业务参数，由适配器封装 SQL、数据库连接和传输细节。可接入 SQL 或其他具备必要事务能力的存储；服务端配置工厂增加后端选择即可，SDK 与业务规则保持一致。
 
 ### 扩展接口迁移
 
-Rust 存储扩展接口按能力拆分，保留服务的 HTTP/gRPC 协议、SDK 和事务语义；当前 SQL 布局见下文格式 19。已有自定义后端将原 `impl RepositoryTransaction` 的方法按上表迁入对应能力的 `impl`，在 `impl RepositoryTransaction` 中只保留 `commit`；原方法签名、默认分页行为和事务保证不变。`StorageBackend` 的 `export`、`import`、`backup` 移到 `StorageMaintenance`，仅提供生命周期的后端增加空实现 `impl StorageMaintenance for MyBackend {}` 即可。未接入业务表的后端可用空的 `impl PostgisTables` 保留明确的未支持错误。
+Rust 存储扩展接口按能力拆分，保留服务的 HTTP/gRPC 协议、SDK 和事务语义；当前 SQL 布局见下文格式 19。已有自定义后端将原 `impl RepositoryTransaction` 的方法按上表迁入对应能力的 `impl`，在 `impl RepositoryTransaction` 中只保留 `commit`。`StorageBackend` 的 `export`、`import`、`backup` 移到 `StorageMaintenance`，仅提供生命周期的后端增加空实现 `impl StorageMaintenance for MyBackend {}` 即可。未接入业务表的后端可用空的 `impl PostgisTables` 保留明确的未支持错误。
 
-调用方仍从 `repository` 导入 `Cell`、`Decode`、`Row`、`DraftDelta`、`FeatureQuery` 和 `ConflictQuery`；这些类型由领域接口自己定义，不依赖 SQL 模块。跨多个能力的实现必须借用同一个事务，禁止在能力方法中另开连接、提前提交或拆分回滚。新增能力只修改所属接口及使用它的调用方；完整后端仍需实现所有必要能力并通过同一 conformance 套件。
+调用方仍从 `repository` 导入 `Cell`、`Decode`、`Row`、`DraftDelta`、`FeatureQuery` 和 `ConflictQuery`；新增的 `EditContext`、`DraftState`、`RawFeature` 也从这里导出。这些类型由领域接口自己定义，不依赖 SQL 模块。跨多个能力的实现必须借用同一个事务，禁止在能力方法中另开连接、提前提交或拆分回滚。完整后端需实现所有必要能力并通过同一 conformance 套件。
 
 自定义后端还须实现 `WorkspaceRepository::workspace_publication_revision`：返回已发布工作区的不可变提交修订，包括空提交；未发布工作区返回 `None`。工作区基线仍独立保存，用于 Diff 和 WorkspaceSummary。
+
+本次扩展接口调整有两项 Rust 源码迁移：`edit_base` 改为返回 `Result<EditContext>`，以及九个 schema 方法移除默认实现。外部后端需要按下文补齐具名上下文和完整 schema 合同；没有网络协议、持久化格式或 SDK 请求变化。其他 Row 接口与分页保证保持原样。
+
+### Schema 能力合同
+
+下列九个方法均要求显式实现。返回 `DatasetSchema { supported: true, .. }` 的后端必须提供完整的读取、草稿替换、变更检测、暂存、发布、恢复和清理行为，不能依赖默认空值或默认成功跳过其中一环。
+
+| 方法 | 支持版本化 schema 的职责 | 未提供 schema 能力时的合法实现 |
+|---|---|---|
+| `schema_projection` | 固定修订的投影元数据，不扫描要素推断 schema | 返回 `supported=false, dynamic=true` 的空定义 |
+| `schema_at` | 固定修订的完整字段定义 | 返回 `supported=false, dynamic=true` 的空定义，应用层据此拒绝 schema 查询和非空编辑 |
+| `workspace_schemas` | 当前工作区的完整字段意图 | 空集合 |
+| `replace_workspace_schemas` | 原子替换完整字段意图，空集合表示撤销 | 空集合成功；非空集合明确返回 400 未支持错误 |
+| `published_schema_changes` | 指定修订的字段定义前后值 | 空集合 |
+| `schema_changed_since` | 判断两个修订之间是否发布过字段变化 | `false` |
+| `clear_workspace_schemas` | 清除工作区字段意图 | 成功的空操作 |
+| `stage_schema_merge` | 将受字段投影影响的要素按预算放入 merge stage | 无 schema 意图时返回 `0`；普通要素发布也会调用此方法 |
+| `restore_workspace_schemas` | 将原修订的字段变化恢复为反向工作区意图 | 没有 schema 历史，成功的空操作 |
+
+`stage_schema_merge` 负责受影响要素的投影暂存。定义本身必须与数据、历史和回执原子持久化：内置后端由 `close_history` 调用 `publish_schema_definitions`，再继续正式数据写入。自定义实现也必须在同一发布事务内完成这一步。显式实现要求让遗漏方法成为编译错误；实现内容是否遵守合同仍由共同测试验证。未提供 schema 能力的后端可以保存、发布、恢复普通要素，也可以接受显式空 `schema_edits`；不得把这些合法空操作无条件改成未支持错误。
 
 ## 必须实现的保证
 
@@ -55,7 +77,7 @@ Rust 存储扩展接口按能力拆分，保留服务的 HTTP/gRPC 协议、SDK 
 
 ## 后端无关行类型
 
-接口以 `Row::new(Vec<Cell>)` 返回固定投影，Cell 为 Text、Integer(i64)、Real、Bool、Null。`Option<Row>` 的 None 表示记录不存在；单元格 Null 表示该字段为空。数据库类型由适配器转换为统一 Cell。下面是实现必须遵守的投影顺序（`?` 表示可空）：
+大部分接口以 `Row::new(Vec<Cell>)` 返回固定投影，Cell 为 Text、Integer(i64)、Real、Bool、Null。`Option<Row>` 的 None 表示记录不存在；单元格 Null 表示该字段为空。数据库类型由适配器转换为统一 Cell。`edit_base` 使用下文的具名模型；其余接口必须遵守以下投影顺序（`?` 表示可空）：
 
 | 方法 | 返回字段顺序 |
 |---|---|
@@ -74,7 +96,6 @@ Rust 存储扩展接口按能力拆分，保留服务的 HTTP/gRPC 协议、SDK 
 | owner_summary | owner_count:i64, target_is_owner:i64（0/1） |
 | list_datasets | dataset:text, name:text, geometry_type:text, coordinate_dimension:i32, postgis_source:text?, crs:text |
 | list_workspaces | workspace:text, base_revision:i64, version:i64, status:text |
-| edit_base | resolved: bool, properties?, geometry_json? |
 | count_deltas / count_commit_changes | count:i64 |
 | diff_page | dataset:text, key:text, draft_properties:text?, draft_geometry:text?, base_properties:text?, base_geometry:text? |
 | history_page | revision:i64, subject:text, message:text, created_at:text, source_workspace:text, source_base_revision:i64 |
@@ -84,6 +105,21 @@ Rust 存储扩展接口按能力拆分，保留服务的 HTTP/gRPC 协议、SDK 
 | publication_receipt | payload:text, result:text |
 
 properties/detail/payload/result 为精确 JSON 文本，geometry 为规范化后的 GeoJSON geometry 文本，空几何使用 Null。stage 的 before/after 是序列化的 `{properties: object, geometry: string|null}`，整体 Null 表示删除。merge_page 每批最多 32 行。所有其他列表遵守传入 limit。
+
+### 编辑上下文
+
+`WorkspaceRepository::edit_base` 返回 `EditContext { resolved, base, draft }`。`base: Option<RawFeature>` 表示工作区基础修订的原始要素，`None` 表示不存在；`draft: DraftState` 明确区分 `NoDraft`（未编辑）、`Deleted`（删除草稿）和 `Value(RawFeature)`（有值草稿）。`RawFeature` 的 `properties: String` 是完整 JSON 对象文本，`geometry: Option<String>` 是规范化的 GeoJSON 文本或空几何，适配器不得经 `f64` 往返转换精确数值。
+
+`resolved` 表示草稿带有解决标记，包括后来失效的标记；`NoDraft` 时必须为 `false`。标记使后续保存保留用户显式解决的意图，即使值恰好等于原基线。草稿的原始值还必须保留待删除字段的隐藏值：读取时可以投影隐藏，保存时从现有有值草稿补回；没有草稿时才从基线补回，删除草稿不能当作未编辑而恢复基线值。
+
+此前 `edit_base` 的实际 Row 合同是六列，旧指南的三列描述不完整。迁移对应关系为：
+
+| 原 Row 列 | 新具名字段 |
+|---|---|
+| 0：resolution flag | `EditContext.resolved` |
+| 1、2：base properties / geometry | `EditContext.base` |
+| 3、4：raw draft properties / geometry | `DraftState::Value(RawFeature)`；属性为空且草稿存在时为 `Deleted` |
+| 5：draft row exists | `false` 对应 `NoDraft`，`true` 对应 `Deleted` 或 `Value` |
 
 要素属性的字符串值与对象键使用 U+0000 以外的 JSON 文本，包括嵌套对象和数组；共同应用层统一校验输入，含实际 U+0000 时返回 `invalid_argument`，保持 SQLite 与 PostGIS 的业务语义一致。普通文本中的字面反斜杠序列 `\u0000` 可以保留，它与 JSON 解码后得到的 NUL 字符不同。
 
@@ -137,6 +173,14 @@ PostGIS 可以在已有业务数据库中初始化 GeoLedger 版本表，并将�
 
 开放工作区的草稿与被覆盖或删除的旧正文存入 GeoLedger 版本表；发布或丢弃后清除草稿正文，已发布工作区的摘要与差异可从提交记录和版本读取重建。发布获取业务表写锁，将属性、几何和增删改与版本记录放在同一个事务中；全部参与表完成写入后统一校验延迟约束，可在同次发布中创建相互引用的记录；原表约束失败时整体回滚。业务触发器执行后的最终表状态也会与待发布结果核对。纳管表的普通 SQL 写入通过保护触发器要求走 GeoLedger；数据库管理员管理表结构和权限，并保留该保护。读取与发布核对绑定表身份、列结构和受影响的行，防止同库换表或越过保护后覆盖数据。
 
+### 保存时反馈与发布时约束
+
+`save` 校验请求、工作区乐观版本、应用要素结构及几何类型/维度，并依据已有版本化 schema 提供属性名、空值及部分已知类型的早期反馈。它保留原始 JSON 草稿，不预先把每条草稿写入业务源表。`save` 成功表示草稿事务已保存，不保证同一内容必然发布成功。
+
+保存使用 `schema_projection` 读取 schema 历史；首次绑定业务表且 schema 历史为空时，该投影仍为动态属性模式。`schema_at` 可查询当前源表列元数据的行为不等于保存时已执行同样的全量校验。即使存在固定 schema，当前整数类型检查也不覆盖全部 SQL 整数子类型范围，`varchar(n)`、`numeric(p,s)` 等参数化或未知类型不承诺完整的长度、精度和范围验证。字段值继续遵守既有 JSON 数值合同：精确的 i64/u64 整数与有限 binary64 小数；本次没有新增以 `i64` 或 `f64` 转换模拟 SQL 类型范围的校验。
+
+源表类型转换、NOT NULL、CHECK、外键、延迟约束及业务触发器的最终效果在发布事务中由数据库验证；这些规则可能依赖同次发布中的其他记录或当时的数据库状态。任一检查失败，源表、正式历史、HEAD、回执和本次发布的工作区状态变化一起回滚。需要保证更早反馈的产品功能必须单独定义覆盖范围，并同时处理首次绑定和已有 schema 历史两条路径。
+
 格式 19 使用事务内变更记录跟踪原表受影响的主键，正常发布仅核对涉及的行。业务触发器产生的额外修改也参与核对，延迟触发器在提交前执行并校验。检测到表结构、保护触发器或未纳入发布的源表写入变化时拒绝读取和发布，需要在隔离环境核对并恢复一致性；不会在请求中全表复制以掩盖漂移。SQLite 范围分页根据有界空间候选探测选择主键分页或 RTree 候选查询，兼顾局部和全图浏览。草稿冲突选择通过部分索引完成失效标记；单条草稿操作显式使用当前主键索引，空间候选先按 rowid 取键再按主键读取，保证数据库统计信息陈旧时仍使用索引路径。复测方法见 [增量性能测试](performance.md#已有大数据集上的增量增删改)。
 
 PostGIS 纳管表的合并版本按既有 32 键页面、数据集和修订批量读取；按 UTF-8 传输字节核算单次数据库结果预算，超出时继续分段，单条超限仍拒绝。历史 NULL 几何与缺失要素保持区分。旧正文在暂存区按数据集批量归档，起始修订取自推进前的当前版本号；源表写入、历史、HEAD、审计与原请求回执仍在同一事务内完成。
@@ -185,4 +229,4 @@ PostgreSQL 失败连接在清理确认之前继续占用池名额；明确取消
 
 格式 19 直接初始化新库，格式 18 数据库与逻辑导出由当前服务明确拒绝；不执行自动或破坏性原位升级。旧库、匹配版本的服务程序和备份应保留，在隔离环境制定并验证转换步骤。新库导出、导入及备份包含字段历史与待发布字段意图。
 
-自定义存储后端需要实现 `DatasetRepository` 的 schema 能力及 `PublicationRepository` 的 schema 暂存/恢复语义。默认 schema 能力返回明确错误；接入具体存储能力后才接纳字段操作，原有普通要素路径继续可用。SQL 后端的正常分页只查找已有 schema 元数据，不为每页扫描整个数据集推断字段。
+自定义存储后端必须显式实现 `DatasetRepository` 的七个 schema 方法及 `PublicationRepository` 的两个 schema 暂存/恢复方法，这些方法没有默认实现。未提供 schema 能力的后端应返回 `supported=false, dynamic=true` 的空定义，明确拒绝非空字段意图，并保留普通要素及空 schema 意图的合法操作；各方法的具体职责见本文前述 Schema 能力合同。SQL 后端的正常分页只查找已有 schema 元数据，不为每页扫描整个数据集推断字段。

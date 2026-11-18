@@ -197,8 +197,19 @@ func (w *Workspace) Publish(ctx context.Context, message string) (PublicationRes
 	if err == nil {
 		w.info.Version = r.Version
 		w.info.Status = r.Status
-	} else if e, ok := err.(*Error); ok && !e.Uncertain && (!wasPending || (e.Code != "unauthenticated" && e.Code != "permission_denied" && e.Code != "not_found")) {
-		w.pending = nil
+	} else if e, ok := err.(*Error); ok {
+		if e.Code == "publication_attempt_rejected" {
+			// This rejection settles only the current attempt. A prior unknown
+			// attempt may still reach the server's publication lock later.
+			if !wasPending {
+				w.pending = nil
+				classified := *e
+				classified.Uncertain = false
+				err = &classified
+			}
+		} else if !e.Uncertain && (!wasPending || (e.Code != "unauthenticated" && e.Code != "permission_denied" && e.Code != "not_found" && e.Code != "invalid_argument")) {
+			w.pending = nil
+		}
 	}
 	return r, err
 }

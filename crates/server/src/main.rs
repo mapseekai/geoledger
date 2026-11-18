@@ -332,7 +332,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
         request_memory_bytes: args.request_memory_bytes,
         response_memory_bytes: args.response_memory_bytes,
     };
-    let service = Service::new(app).with_limits(limits);
+    let service = Service::new_with_limits(app, limits);
     // Bind both before reporting readiness. A failed listener leaves no half-started service.
     let http = tokio::net::TcpListener::bind(args.http).await?;
     let grpc = tokio::net::TcpListener::bind(args.grpc).await?;

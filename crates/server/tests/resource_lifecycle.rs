@@ -26,7 +26,7 @@ fn service(
     let app = Application::new(Storage::Sqlite(path.to_owned()));
     app.migrate()?;
     common::seed(path, &[("ops", TOKEN, true)])?;
-    Ok(Service::new(app).with_limits(limits))
+    Ok(Service::new_with_limits(app, limits))
 }
 fn request(op: &str, value: Value) -> Result<Request<Body>, axum::http::Error> {
     Request::builder()

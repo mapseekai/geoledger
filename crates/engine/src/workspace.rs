@@ -577,6 +577,16 @@ fn draft_delta(
         geometry: v.and_then(|x| x.geometry.clone()),
     })
 }
+fn stored_edit(value: Option<&repository::RawFeature>) -> Result<Option<Stored>> {
+    value
+        .map(|value| {
+            Ok(Stored {
+                properties: codec::stored(&value.properties)?,
+                geometry: value.geometry.clone(),
+            })
+        })
+        .transpose()
+}
 pub(super) fn put_delta(
     t: &mut (impl DatasetRepository + WorkspaceRepository + ?Sized),
     p: &str,
@@ -651,10 +661,12 @@ pub(super) fn save(
             validate_properties(&value.properties, definition)?;
             let previous = if definition.dropped.is_empty() {
                 None
-            } else if context.get::<_, bool>(5usize)? {
-                stored_row(&context, 3, 4)?
             } else {
-                stored_row(&context, 1, 2)?
+                match &context.draft {
+                    repository::DraftState::NoDraft => stored_edit(context.base.as_ref())?,
+                    repository::DraftState::Deleted => None,
+                    repository::DraftState::Value(raw) => stored_edit(Some(raw))?,
+                }
             };
             for name in &definition.dropped {
                 if !value.properties.contains_key(name)
@@ -664,7 +676,7 @@ pub(super) fn save(
                 }
             }
         }
-        if !context.get::<_, bool>(0usize)? && value == stored_row(&context, 1, 2)? {
+        if !context.resolved && value == stored_edit(context.base.as_ref())? {
             t.remove_delta(&r.project, &r.workspace, &e.dataset, &e.feature_id)?;
         } else {
             let delta = draft_delta(t, &r.project, &e.dataset, &e.feature_id, value.as_ref())?;

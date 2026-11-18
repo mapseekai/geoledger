@@ -224,14 +224,29 @@ JSON 对象键通过递归校验，保护普通对象的编解码语义；
 
 Python / TS 捕获 `GeoLedgerError`；Rust 使用 `Error`；Go 用 `errors.As` 获取 `*geoledger.Error`。
 它们提供业务 `code`、message、request_id / requestId、可选 conflicts，以及 `uncertain` / Uncertain。
-常见业务码包括 `invalid_argument`、`unauthenticated`、`not_found`、`conflict`、`timeout` 和 `unavailable`。
+常见业务码包括 `invalid_argument`、`unauthenticated`、`not_found`、`conflict`、`timeout`、`unavailable` 和 `publication_attempt_rejected`。
 调用方通过 SDK 的业务错误类型处理结果。
 
 当 `uncertain` 为真时，写入可能已经完成。对同一工作区再次 `publish` 并使用原说明即可重试原请求；
 期间工作区对象保持原要素上下文和发布说明，以便确认原请求。成功后再次调用也返回原发布结果，包括项目归档或发布者降级为 viewer 后；当前成员身份和工作区归属仍必须有效。
-发布被明确拒绝时释放待重试请求，保留草稿版本供查询、解决冲突。
-已有待确认请求在重试遇到身份验证失败、权限拒绝或资源不可见时仍然保留；
+首次发布被明确拒绝时释放待重试请求，保留草稿版本供查询、修正和解决冲突。
+已有待确认请求在重试遇到身份验证失败、权限拒绝、资源不可见或 `invalid_argument` 时仍然保留；
 先前发布的结果通过原请求确认。恢复访问后继续使用原请求及其请求 ID。
+
+`publication_attempt_rejected` 表示发布事务在源表数据写入、转换或显式约束检查中，收到明确的 CHECK、NOT NULL、外键或数值越界拒绝；本次尝试在发送 COMMIT 前失败。公开消息脱敏，服务端保留原始错误并仅以 SQLSTATE 记录 PostgreSQL 诊断。它不表示以前未知的同一请求已经终结，也不保证错误送达前已经收到 ROLLBACK 确认。
+
+该码继续使用 **HTTP 503 / gRPC Unavailable**。旧 SDK、旧控制台及错误详情丢失的消费者继续按未知结果保留原意图，因此无需假设所有客户端已同步升级。新 SDK 的低层 `client.publish(intent)` 同样保守返回 `uncertain=true`；只有掌握首次尝试上下文的 `Workspace.publish` 和控制台发布流程，才能解除对应编辑门禁。
+
+| 发布调用上下文与结果 | 工作区发布意图 | 返回结果的解释 |
+|---|---|---|
+| 没有待确认意图的首次调用收到 `publication_attempt_rejected` | 清除；可用同一句柄保存修正，再发新请求 | 高层 SDK 返回 `uncertain=false`，草稿版本不变 |
+| 已有待确认意图的重试收到 `publication_attempt_rejected` | 无条件保留原请求 ID、版本和完整 payload | 本次拒绝不能否定迟到的旧尝试；即使某一适配器提供 `uncertain=false` 也不清除 |
+| 已有待确认意图的重试收到 `invalid_argument` 或身份、权限、可见性错误 | 保留 | 修复当前请求或恢复访问本身不能证明旧发布未提交 |
+| 超时、断链、取消、响应丢失或没有可信错误详情的 503 | 保留 | 继续以原意图确认结果 |
+| 成功或成功回执重放 | SDK 保留成功意图，更新句柄为 published | 再次调用可取回同一回执 |
+| 已有语义明确的草稿版本或合并冲突 | 沿既有冲突分支释放 | 刷新、修正或解决冲突后继续 |
+
+服务端在取得项目 HEAD 锁之前和之后都查询回执，避免等待锁时重复提交。锁内本次拒绝仍无法排除一个仍在等待取得该锁的旧尝试；该旧尝试可能在外部约束条件变化后成功。因此这里没有“自动放弃未知发布”的入口，也没有将所有 4xx、5xx 或所有 SQLSTATE 22/23 类统一改判。
 
 工作区的 `pending_publication` / `PendingPublication()` / `pendingPublication` 暴露可持久化的业务发布意图，
 可在跨进程恢复时交给 `client.publish(intent)`。Python 使用 `dataclasses.asdict`，Rust / Go 使用 JSON 序列化，
@@ -260,6 +275,8 @@ Web 控制台通过 Next.js 的 `/api/session` 管理登录和退出，通过 `/
 生成代码位于 SDK 的私有 / internal 目录，公开入口仅提供业务接口。
 HTTP 与 RPC 仍调用同一个 Application；用户身份只来自服务端验证的 API Key 或 Console 私有 Session。
 SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布流程完成。
+
+直接嵌入 Rust 服务端时，使用 `Service::new(app)` 取得默认限制，或以 `Service::new_with_limits(app, limits)` 一次构造自定义限制。运行中的 `Service` 仍可克隆；克隆共享并发槽位、请求与响应预算、速率限制、指标和 draining 状态。旧的 `Service::new(app).with_limits(limits)` 调用应迁移至 `Service::new_with_limits(app, limits)`；公开 `with_limits` 已移除，不能对单个克隆重新配置。此为服务端嵌入 API 的源码迁移，不改变 HTTP/gRPC 协议，也不是限制热更新机制。
 
 | 情况 | HTTP |
 |---|---|

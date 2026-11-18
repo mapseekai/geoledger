@@ -385,7 +385,13 @@ class Workspace:
             try:
                 return self._update(self._client.publish(self._pending))
             except GeoLedgerError as e:
-                if not e.uncertain and (not was_pending or e.code not in ("unauthenticated", "permission_denied", "not_found")):
+                if e.code == "publication_attempt_rejected":
+                    # A rejection of this attempt cannot settle an earlier
+                    # unknown attempt that may still reach the publication lock.
+                    if not was_pending:
+                        self._pending = None
+                        e.uncertain = False
+                elif not e.uncertain and (not was_pending or e.code not in ("unauthenticated", "permission_denied", "not_found", "invalid_argument")):
                     self._pending = None
                 raise
 

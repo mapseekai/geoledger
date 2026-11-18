@@ -8,6 +8,7 @@ export class ApiError extends Error {
     public status: number,
     public uncertain = false,
     public requestId?: string,
+    public code?: string,
   ) {
     super(message);
   }
@@ -63,6 +64,7 @@ export async function send<T>(
         response.status,
         detail.uncertain === true || uncertainStatus(response.status),
         typeof detail.requestId === "string" ? detail.requestId : undefined,
+        typeof detail.code === "string" ? detail.code : undefined,
       );
     }
     const raw = await response.text();

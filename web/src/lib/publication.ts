@@ -38,15 +38,19 @@ export function readPublication(raw: string | null): Publication | undefined {
   }
 }
 
-/** Authentication failures cannot settle an earlier unknown outcome; business conflicts can. */
+/** A rejection of one attempt cannot settle a previously unknown publication. */
 export function releasePublication(
   status: number,
   uncertain: boolean,
   wasPending: boolean,
+  code?: string,
 ): boolean {
+  if (code === "publication_attempt_rejected") return !wasPending;
   return (
     !uncertain &&
     (!wasPending ||
-      (!uncertainStatus(status) && ![401, 403, 404].includes(status)))
+      (!uncertainStatus(status) &&
+        ![400, 401, 403, 404].includes(status) &&
+        code !== "invalid_argument"))
   );
 }

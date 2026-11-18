@@ -98,24 +98,40 @@ impl WorkspaceRepository for SqlTransaction {
         dataset: &str,
         key: &str,
         base: i64,
-    ) -> Result<Row> {
-        let value = super::query::version_cells(FeatureRepository::feature_at(
-            self, project, dataset, key, base,
-        )?);
+    ) -> Result<EditContext> {
+        fn feature(row: &Row) -> Result<Option<RawFeature>> {
+            row.get::<_, Option<String>>(0usize)?
+                .map(|properties| {
+                    Ok(RawFeature {
+                        properties,
+                        geometry: row.get(1usize)?,
+                    })
+                })
+                .transpose()
+        }
+        let base = FeatureRepository::feature_at(self, project, dataset, key, base)?
+            .as_ref()
+            .map(feature)
+            .transpose()?
+            .flatten();
         let draft = self.query_opt(&format!("SELECT properties,geometry_json,resolved_head IS NOT NULL FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?;
         let resolved = draft
             .as_ref()
             .map(|r| r.get::<_, bool>(2usize))
             .transpose()?
             .unwrap_or(false);
-        Ok(Row::new(vec![
-            Cell::Bool(resolved),
-            value[0].clone(),
-            value[1].clone(),
-            draft.as_ref().map_or(Cell::Null, |r| r.0[0].clone()),
-            draft.as_ref().map_or(Cell::Null, |r| r.0[1].clone()),
-            Cell::Bool(draft.is_some()),
-        ]))
+        let draft = match draft {
+            None => DraftState::NoDraft,
+            Some(row) => match feature(&row)? {
+                None => DraftState::Deleted,
+                Some(value) => DraftState::Value(value),
+            },
+        };
+        Ok(EditContext {
+            resolved,
+            base,
+            draft,
+        })
     }
 
     fn remove_delta(

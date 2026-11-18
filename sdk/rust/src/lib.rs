@@ -127,7 +127,10 @@ impl From<Status> for Error {
             tonic::Code::Aborted | tonic::Code::AlreadyExists | tonic::Code::FailedPrecondition => {
                 "conflict"
             }
-            tonic::Code::InvalidArgument | tonic::Code::OutOfRange => "invalid_argument",
+            tonic::Code::InvalidArgument => "invalid_argument",
+            // Tonic uses an undetailed OutOfRange for both encoding and decoding
+            // message limits. It does not identify which peer rejected the message.
+            tonic::Code::OutOfRange => "resource_exhausted",
             tonic::Code::DeadlineExceeded => "timeout",
             tonic::Code::Cancelled => "cancelled",
             tonic::Code::ResourceExhausted => "resource_exhausted",
@@ -142,6 +145,7 @@ impl From<Status> for Error {
                 | tonic::Code::Internal
                 | tonic::Code::DataLoss
                 | tonic::Code::ResourceExhausted
+                | tonic::Code::OutOfRange
         );
         let diagnostic = Some(Arc::new(Diagnostic {
             description: format!("gRPC {:?}", status.code()),
@@ -267,6 +271,66 @@ impl Default for ConnectOptions {
         }
     }
 }
+
+/// Per-message Protobuf byte limits for one client and its clones.
+///
+/// Both limits must be in `1..=usize::MAX`. They count serialized message bytes,
+/// excluding the gRPC frame header; this client does not enable compression.
+/// [`MessageLimits::default`] uses `usize::MAX` for both directions, preserving
+/// the behavior of the existing connection methods. gRPC framing limits and the
+/// server's own limits still apply. These are not process-memory limits: encoding,
+/// JSON conversion, and concurrent requests may allocate additional memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageLimits {
+    max_encoding_bytes: usize,
+    max_decoding_bytes: usize,
+}
+impl MessageLimits {
+    /// Set the largest outbound and inbound message sizes, respectively, in bytes.
+    /// Returns `invalid_argument` if either limit is zero.
+    ///
+    /// ```
+    /// use geoledger_client::MessageLimits;
+    /// let limits = MessageLimits::new(16 * 1024 * 1024, 64 * 1024 * 1024)?;
+    /// assert_eq!(limits.max_decoding_bytes(), 64 * 1024 * 1024);
+    /// # Ok::<(), geoledger_client::Error>(())
+    /// ```
+    pub fn new(max_encoding_bytes: usize, max_decoding_bytes: usize) -> Result<Self, Error> {
+        if max_encoding_bytes == 0 || max_decoding_bytes == 0 {
+            return Err(Error::invalid(
+                "message limits must be positive byte counts",
+            ));
+        }
+        Ok(Self {
+            max_encoding_bytes,
+            max_decoding_bytes,
+        })
+    }
+    pub fn max_encoding_bytes(self) -> usize {
+        self.max_encoding_bytes
+    }
+    pub fn max_decoding_bytes(self) -> usize {
+        self.max_decoding_bytes
+    }
+}
+impl Default for MessageLimits {
+    fn default() -> Self {
+        Self {
+            max_encoding_bytes: usize::MAX,
+            max_decoding_bytes: usize::MAX,
+        }
+    }
+}
+
+// Business input must retain the caller's explicit archive/reactivate intent
+// before conversion to the generated proto3 request and its defaulted fields.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArchiveProjectInput {
+    project: String,
+    archived: bool,
+}
+
 /// True for `localhost` and loopback IP literals.
 pub fn is_loopback_host(host: &str) -> bool {
     let host = host.trim_matches(['[', ']']);
@@ -313,6 +377,21 @@ impl Client {
         endpoint: impl Into<String>,
         api_key: &str,
         options: ConnectOptions,
+    ) -> Result<Self, Error> {
+        Self::connect_with_message_limits(endpoint, api_key, options, MessageLimits::default())
+            .await
+    }
+    /// Connect using explicit TLS, timeout, and per-message byte limits.
+    ///
+    /// The limits are retained by every client clone. A rejected response can
+    /// arrive after a write commits, so message-limit errors remain uncertain.
+    /// Retry an identical pending publication, using a new client with a larger
+    /// decoding limit if needed. This does not raise the server's own limits.
+    pub async fn connect_with_message_limits(
+        endpoint: impl Into<String>,
+        api_key: &str,
+        options: ConnectOptions,
+        message_limits: MessageLimits,
     ) -> Result<Self, Error> {
         let timeout = options.timeout;
         let endpoint = endpoint.into();
@@ -374,11 +453,13 @@ impl Client {
         })?;
         Ok(Self {
             rpc: pb::geo_ledger_client::GeoLedgerClient::with_interceptor(channel, auth)
-                .max_decoding_message_size(usize::MAX)
-                .max_encoding_message_size(usize::MAX),
+                .max_decoding_message_size(message_limits.max_decoding_bytes)
+                .max_encoding_message_size(message_limits.max_encoding_bytes),
         })
     }
     /// Advanced business-JSON entry point, also used by the CLI. GeoJSON is a plain object.
+    /// `archive_project` requires `project` and an explicit boolean `archived`,
+    /// and rejects unknown fields before sending the RPC.
     pub async fn execute(&self, operation: &str, mut value: Value) -> Result<Value, Error> {
         for key in ["edits", "resolutions"] {
             if let Some(edits) = value.get_mut(key).and_then(Value::as_array_mut) {
@@ -559,11 +640,17 @@ impl Client {
                     .await?
                     .into_inner(),
             )?,
-            "archive_project" => serde_json::to_value(
-                rpc.archive_project(serde_json::from_value::<pb::ArchiveProjectRequest>(value)?)
+            "archive_project" => {
+                let input: ArchiveProjectInput = serde_json::from_value(value)?;
+                serde_json::to_value(
+                    rpc.archive_project(pb::ArchiveProjectRequest {
+                        project: input.project,
+                        archived: input.archived,
+                    })
                     .await?
                     .into_inner(),
-            )?,
+                )?
+            }
             "delete_project" => serde_json::to_value(
                 rpc.delete_project(serde_json::from_value::<pb::DeleteProjectRequest>(value)?)
                     .await?
@@ -1032,8 +1119,10 @@ impl Workspace {
     /// After cancellation or an uncertain error, retry with the identical message
     /// or recover the intent through [`Workspace::pending_publication`]. Pending
     /// publication blocks edits. A successful retry replays the committed receipt.
-    /// Definitive failures can clear the pending intent; authorization failures
-    /// during a retry preserve it for later recovery.
+    /// A first `publication_attempt_rejected` permits correcting this workspace;
+    /// the same error during a retry preserves the prior uncertain intent. Other
+    /// definitive failures can clear pending intent, but authorization and input
+    /// failures during a retry preserve it for later recovery.
     pub async fn publish(&mut self, message: &str) -> Result<PublicationResult, Error> {
         let was_pending = self.pending.is_some();
         if let Some(p) = &self.pending {
@@ -1062,12 +1151,25 @@ impl Workspace {
                 self.info.status = result.status.clone();
                 Ok(result)
             }
-            Err(e) => {
+            Err(mut e) => {
+                // This code proves only that this attempt was rejected before
+                // commit. An earlier in-flight attempt may still commit, so a
+                // retry must retain its original intent regardless of the flag.
+                if e.code == "publication_attempt_rejected" {
+                    if !was_pending {
+                        e.uncertain = false;
+                        self.pending = None;
+                    }
+                    return Err(e);
+                }
                 if !e.uncertain
                     && (!was_pending
                         || !matches!(
                             e.code.as_str(),
-                            "unauthenticated" | "permission_denied" | "not_found"
+                            "unauthenticated"
+                                | "permission_denied"
+                                | "not_found"
+                                | "invalid_argument"
                         ))
                 {
                     self.pending = None
@@ -1213,6 +1315,36 @@ mod tests {
         assert!(converted.source().is_some());
         assert!(!format!("{converted:?}").contains("private stored"));
         Ok(())
+    }
+    #[test]
+    fn out_of_range_preserves_uncertainty_and_structured_business_code() {
+        use prost::Message;
+        let error = Error::from(Status::out_of_range("range rejected"));
+        assert_eq!(error.code, "resource_exhausted");
+        assert!(error.uncertain);
+        let detail = pb::ErrorDetail {
+            code: "business_range".into(),
+            message: "business range rejected".into(),
+            request_id: "request".into(),
+            conflicts: None,
+        };
+        let envelope = pb::RpcStatus {
+            code: tonic::Code::OutOfRange as i32,
+            message: detail.message.clone(),
+            details: vec![pb::ErrorAny {
+                type_url: "type.googleapis.com/geoledger.v1.ErrorDetail".into(),
+                value: detail.encode_to_vec(),
+            }],
+        };
+        let error = Error::from(Status::with_details(
+            tonic::Code::OutOfRange,
+            "range rejected",
+            envelope.encode_to_vec().into(),
+        ));
+        assert_eq!(error.code, "business_range");
+        assert_eq!(error.message, "business range rejected");
+        assert_eq!(error.request_id.as_deref(), Some("request"));
+        assert!(error.uncertain);
     }
     #[test]
     fn response_conversion_preserves_opaque_properties_and_numbers() -> Result<(), Error> {

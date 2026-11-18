@@ -7,6 +7,35 @@ pub struct DraftDelta {
     pub properties: Option<String>,
     pub geometry: Option<String>,
 }
+
+/// A stored feature's exact JSON text, before any pending schema projection.
+/// `properties` is a JSON object; `geometry` is normalized GeoJSON or `None`.
+/// Adapters must retain numeric precision and fields hidden by schema intents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawFeature {
+    pub properties: String,
+    pub geometry: Option<String>,
+}
+
+/// Distinguishes an untouched feature from an explicit draft deletion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DraftState {
+    NoDraft,
+    Deleted,
+    Value(RawFeature),
+}
+
+/// The original base and unprojected draft used when replacing one edit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditContext {
+    /// A draft resolution is pinned, including a pin invalidated by a later edit.
+    /// This is false when `draft` is `NoDraft`.
+    pub resolved: bool,
+    /// The feature at the workspace base; `None` means it did not exist.
+    pub base: Option<RawFeature>,
+    pub draft: DraftState,
+}
+
 /// Workspace ownership, optimistic versions and draft edits in the current transaction.
 pub trait WorkspaceRepository: Send {
     fn workspace_state(
@@ -47,8 +76,7 @@ pub trait WorkspaceRepository: Send {
 
     fn invalidate_resolutions(&mut self, project: &str, workspace: &str) -> Result<()>;
 
-    /// Row columns: resolution flag, base properties/geometry, raw draft properties/geometry,
-    /// and whether a draft row exists. Absent features have null fields.
+    /// Read the base feature, resolution pin and raw draft in this transaction's snapshot.
     /// The raw draft preserves fields temporarily hidden by a pending schema intent.
     fn edit_base(
         &mut self,
@@ -57,7 +85,7 @@ pub trait WorkspaceRepository: Send {
         dataset: &str,
         key: &str,
         base: i64,
-    ) -> Result<Row>;
+    ) -> Result<EditContext>;
 
     fn remove_delta(
         &mut self,

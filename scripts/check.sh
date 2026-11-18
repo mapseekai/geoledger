@@ -22,6 +22,7 @@ cargo test --locked -p geoledger-engine --test public_api
 cargo test --locked -p geoledger-spatialite --lib
 cargo test --locked -p geoledger-engine --lib
 cargo test --locked --workspace
+python3 crates/cli/tests/test_archive_cli.py
 ./scripts/backup-drill.sh
 if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
   cargo test --locked -p geoledger-engine --test review_postgis -- --ignored --test-threads=1
@@ -37,6 +38,7 @@ if [[ -n "${GL_TEST_DATABASE_URL:-}" ]]; then
   cargo test --locked -p geoledger-engine --test multi_instance -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --lib postgis_capabilities_share_commit_error_and_drop_rollback -- --ignored --test-threads=1
   cargo test --locked -p geoledger-engine --lib postgis_dataset_tables -- --ignored --test-threads=1
+  cargo test --locked -p geoledger-server --test rpc_errors postgis_ -- --ignored --test-threads=1
 else
   printf '%s\n' 'PostGIS integration tests not run: GL_TEST_DATABASE_URL is unset.'
 fi

@@ -5,7 +5,7 @@ mod dataset;
 mod history;
 pub(crate) mod pgtls;
 pub(crate) mod portable;
-pub(crate) mod postgres;
+mod postgres;
 mod project;
 mod publication;
 mod query;
@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) trait Parameter {
+trait Parameter {
     fn value(&self) -> Cell;
 }
 impl Parameter for str {
@@ -72,7 +72,7 @@ enum Backend {
     Sqlite(geoledger_spatialite::Connection),
     Postgis(postgres::Client),
 }
-pub(crate) struct Client {
+struct Client {
     backend: Backend,
     deadline: Instant,
     transaction: bool,
@@ -83,7 +83,7 @@ pub(crate) struct Client {
     query_count: usize,
 }
 impl Client {
-    pub fn open(storage: &Storage, pool: &Arc<postgres::Pool>, timeout: Duration) -> Result<Self> {
+    fn open(storage: &Storage, pool: &Arc<postgres::Pool>, timeout: Duration) -> Result<Self> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or_else(|| Error::new(400, "invalid deadline"))?;
@@ -188,7 +188,7 @@ impl Client {
             Ok(())
         }
     }
-    pub fn query(&mut self, sql: &str, params: &[&dyn Parameter]) -> Result<Vec<Row>> {
+    fn query(&mut self, sql: &str, params: &[&dyn Parameter]) -> Result<Vec<Row>> {
         self.check()?;
         #[cfg(test)]
         {
@@ -298,24 +298,24 @@ impl Client {
             }
         }
     }
-    pub fn query_one(&mut self, sql: &str, p: &[&dyn Parameter]) -> Result<Row> {
+    fn query_one(&mut self, sql: &str, p: &[&dyn Parameter]) -> Result<Row> {
         let mut rows = self.query(sql, p)?;
         if rows.len() != 1 {
             return Err(Error::new(500, "unexpected storage result"));
         }
         Ok(rows.remove(0))
     }
-    pub fn query_opt(&mut self, sql: &str, p: &[&dyn Parameter]) -> Result<Option<Row>> {
+    fn query_opt(&mut self, sql: &str, p: &[&dyn Parameter]) -> Result<Option<Row>> {
         let mut rows = self.query(sql, p)?;
         if rows.len() > 1 {
             return Err(Error::new(500, "unexpected storage result"));
         }
         Ok(rows.pop())
     }
-    pub fn execute(&mut self, sql: &str, p: &[&dyn Parameter]) -> Result<()> {
+    fn execute(&mut self, sql: &str, p: &[&dyn Parameter]) -> Result<()> {
         self.query(sql, p).map(|_| ())
     }
-    pub fn batch_execute(&mut self, sql: &str) -> Result<()> {
+    fn batch_execute(&mut self, sql: &str) -> Result<()> {
         self.check()?;
         match &mut self.backend {
             Backend::Sqlite(c) => {
@@ -370,7 +370,7 @@ impl Client {
         }
         Ok(())
     }
-    pub fn transaction(mut self, read_only: bool) -> Result<SqlTransaction> {
+    fn transaction(mut self, read_only: bool) -> Result<SqlTransaction> {
         if read_only && matches!(self.backend, Backend::Sqlite(_)) {
             self.batch_execute("PRAGMA query_only=ON")?;
         }
@@ -388,7 +388,7 @@ impl Client {
         Ok(SqlTransaction(self, TransactionState::default()))
     }
     /// Initialize a fresh current-format database or validate an existing one.
-    pub fn migrate(self) -> Result<()> {
+    fn migrate(self) -> Result<()> {
         let sqlite = matches!(self.backend, Backend::Sqlite(_));
         if let Backend::Sqlite(connection) = &self.backend {
             self.sqlite_admission(connection, "PRAGMA journal_mode=WAL")?;
@@ -508,38 +508,38 @@ struct TransactionState {
     stage_bytes: usize,
     custom_spatial_plan: bool,
 }
-pub(crate) struct SqlTransaction(Client, TransactionState);
+struct SqlTransaction(Client, TransactionState);
 impl SqlTransaction {
-    pub(crate) fn query(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<Vec<Row>> {
+    fn query(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<Vec<Row>> {
         self.0.query(s, p)
     }
-    pub(crate) fn query_one(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<Row> {
+    fn query_one(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<Row> {
         self.0.query_one(s, p)
     }
-    pub(crate) fn query_opt(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<Option<Row>> {
+    fn query_opt(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<Option<Row>> {
         self.0.query_opt(s, p)
     }
-    pub(crate) fn execute(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<()> {
+    fn execute(&mut self, s: &str, p: &[&dyn Parameter]) -> Result<()> {
         self.0.execute(s, p)
     }
-    pub(crate) fn batch_execute(&mut self, s: &str) -> Result<()> {
+    fn batch_execute(&mut self, s: &str) -> Result<()> {
         self.0.batch_execute(s)
     }
-    pub(crate) fn lock_sql(&self, sql: &str, lock: &str) -> String {
+    fn lock_sql(&self, sql: &str, lock: &str) -> String {
         match self.0.backend {
             Backend::Sqlite(_) => sql.to_owned(),
             Backend::Postgis(_) => format!("{sql} {lock}"),
         }
     }
     /// Native columns are populated on every write; raw JSON remains the immutable snapshot.
-    pub(crate) fn geometry_columns(&self) -> &'static str {
+    fn geometry_columns(&self) -> &'static str {
         match self.0.backend {
             Backend::Sqlite(_) => "geom,geom_z",
             Backend::Postgis(_) => "geom",
         }
     }
     // Dataset CRS owns interpretation; derived indexes compare only native XY coordinates.
-    pub(crate) fn geometry_values(&self, source: &str) -> String {
+    fn geometry_values(&self, source: &str) -> String {
         match self.0.backend {
             Backend::Postgis(_) => format!("ST_SetSRID(ST_GeomFromGeoJSON({source}),0)"),
             Backend::Sqlite(_) => {
@@ -552,7 +552,7 @@ impl SqlTransaction {
             }
         }
     }
-    pub(crate) fn commit(mut self) -> Result<()> {
+    fn commit(mut self) -> Result<()> {
         self.0.batch_execute("COMMIT")?;
         self.0.transaction = false;
         Ok(())
@@ -699,11 +699,9 @@ mod tests {
 
     fn capability_atomicity(storage: Storage) -> Result<()> {
         let timeout = Duration::from_secs(30);
-        let backend = SqlStorage {
-            storage,
-            pool: Arc::new(postgres::Pool::default()),
-        };
+        let backend = SqlStorage::new(storage.clone(), crate::StorageOptions::default());
         backend.initialize(timeout)?;
+        let monitor_pool = Arc::new(postgres::Pool::default());
         let project = uuid::Uuid::new_v4().to_string();
         let dataset = uuid::Uuid::new_v4().to_string();
         let workspace = uuid::Uuid::new_v4().to_string();
@@ -812,7 +810,7 @@ mod tests {
                 committed.then(|| "published".to_owned())
             );
             reader.commit()?;
-            let mut monitor = Client::open(&backend.storage, &backend.pool, timeout)?;
+            let mut monitor = Client::open(&storage, &monitor_pool, timeout)?;
             assert_eq!(
                 monitor
                     .query_one(
@@ -1102,10 +1100,10 @@ mod tests {
                 )
                 .map_err(sqlite_error)?;
             }
-            assert!(
-                !t.edit_base("p", "w", "d", "absent", 1)?
-                    .get::<_, bool>(0usize)?
-            );
+            let absent = t.edit_base("p", "w", "d", "absent", 1)?;
+            assert!(!absent.resolved);
+            assert_eq!(absent.base, None);
+            assert_eq!(absent.draft, DraftState::NoDraft);
             let lookup_steps = steps.swap(0, Ordering::Relaxed);
             assert!(
                 lookup_steps < 1000,
@@ -1117,10 +1115,18 @@ mod tests {
                 t.0.query_count - queries <= 3,
                 "redundant draft lookup per edit"
             );
-            assert!(resolved.get::<_, bool>(0usize)?);
-            assert_eq!(resolved.get::<_, String>(1usize)?, "{}");
-            assert_eq!(resolved.get::<_, String>(3usize)?, "{}");
-            assert!(resolved.get::<_, bool>(5usize)?);
+            assert!(resolved.resolved);
+            assert_eq!(
+                resolved.base.as_ref().map(|v| v.properties.as_str()),
+                Some("{}")
+            );
+            assert_eq!(
+                resolved.draft,
+                DraftState::Value(RawFeature {
+                    properties: "{}".into(),
+                    geometry: None,
+                })
+            );
             t.put_deltas(
                 "p",
                 "w",
@@ -1132,10 +1138,12 @@ mod tests {
                 }],
             )?;
             let deletion = t.edit_base("p", "w", "d", "00000001", 1)?;
-            assert!(deletion.get::<_, bool>(0usize)?);
-            assert_eq!(deletion.get::<_, String>(1usize)?, "{}");
-            assert!(deletion.get::<_, Option<String>>(3usize)?.is_none());
-            assert!(deletion.get::<_, bool>(5usize)?);
+            assert!(deletion.resolved);
+            assert_eq!(
+                deletion.base.as_ref().map(|v| v.properties.as_str()),
+                Some("{}")
+            );
+            assert_eq!(deletion.draft, DraftState::Deleted);
             t.execute("UPDATE gl_workspace_changes SET properties='{}' WHERE project='p' AND workspace='w' AND dataset='d' AND feature_id='00000001'", &[])?;
             t.batch_execute(r#"WITH RECURSIVE ids(n) AS (SELECT 2 UNION ALL SELECT n+1 FROM ids WHERE n<1000)
         INSERT INTO gl_commits(project,revision,workspace,subject,message) SELECT 'p',n,'w','alice','history' FROM ids;
@@ -1144,7 +1152,11 @@ mod tests {
         FROM gl_commits WHERE project='p';"#)?;
             steps.store(0, Ordering::Relaxed);
             let historical = t.edit_base("p", "w", "d", "versions", 500)?;
-            assert_eq!(historical.get::<_, String>(1usize)?, r#"{"v":500}"#);
+            assert_eq!(
+                historical.base.as_ref().map(|v| v.properties.as_str()),
+                Some(r#"{"v":500}"#)
+            );
+            assert_eq!(historical.draft, DraftState::NoDraft);
             assert!(
                 steps.swap(0, Ordering::Relaxed) < 1000,
                 "base lookup scanned earlier versions"

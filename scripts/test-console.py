@@ -117,6 +117,42 @@ with sync_playwright() as p:
     page.get_by_label('GeoJSON',exact=True).fill(feature)
     page.get_by_role('button',name='保存到工作区',exact=True).click()
     expect(inspector).to_contain_text('Point')
+    # Browser response fault injection only: the rejected attempt is not forwarded.
+    # Real PostgreSQL source rejection is covered by the server integration suite.
+    rejected=[]
+    def reject_first_publication(route):
+        body=route.request.post_data_json
+        if body.get('action')=='publish':
+            rejected.append(body)
+            route.fulfill(status=503,content_type='application/json',body=json.dumps({'error':{'code':'publication_attempt_rejected','message':'测试首次源表拒绝','uncertain':True}}))
+            return
+        route.continue_()
+    page.route('**/api/console',reject_first_publication)
+    page.get_by_role('button',name='发布版本',exact=True).click()
+    page.get_by_label('版本说明',exact=True).fill('首次拒绝验证')
+    page.get_by_role('button',name='确认发布',exact=True).click()
+    expect(page.get_by_role('dialog').get_by_role('alert')).to_contain_text('测试首次源表拒绝')
+    expect(page.get_by_role('button',name='确认发布',exact=True)).to_be_enabled()
+    expect(page.get_by_role('button',name='重试原发布',exact=True)).to_have_count(0)
+    expect(page.get_by_label('版本说明',exact=True)).to_be_editable()
+    assert len(rejected)==1
+    assert page.evaluate('sessionStorage.getItem("gl.publication")') is None
+    assert command({'action':'project','project':project})['head']=='0'
+    assert command({'action':'workspace','project':project,'workspace':rejected[0]['workspace']})['version']==rejected[0]['version']
+    page.screenshot(path=str(shots/'next-publication-rejected.png'),full_page=True)
+    page.get_by_role('button',name='关闭',exact=True).click()
+    page.unroute('**/api/console',reject_first_publication)
+    expect(page.get_by_role('button',name='添加要素',exact=True)).to_be_enabled()
+    # Correct through the real editor in the same workspace, then publish below.
+    page.get_by_role('button',name='编辑',exact=True).click()
+    corrected=json.loads(feature)
+    corrected['properties']['recovery']='corrected after rejected attempt'
+    page.get_by_label('GeoJSON',exact=True).fill(json.dumps(corrected))
+    page.get_by_role('button',name='保存到工作区',exact=True).click()
+    expect(page.get_by_role('dialog')).to_have_count(0)
+    corrected_version=str(int(rejected[0]['version'])+1)
+    expect(source).to_contain_text('v'+corrected_version)
+    assert command({'action':'workspace','project':project,'workspace':rejected[0]['workspace']})['version']==corrected_version
     captured=[]
     def interrupted(route):
         body=route.request.post_data_json
@@ -128,6 +164,11 @@ with sync_playwright() as p:
                 route.abort('failed')
                 return
             if len(captured)==2:
+                # The earlier request really committed, but the browser cannot yet
+                # confirm it. A synthetic source-rejection response must retain it.
+                route.fulfill(status=503,content_type='application/json',body=json.dumps({'error':{'code':'publication_attempt_rejected','message':'测试重试源表拒绝','uncertain':True}}))
+                return
+            if len(captured)==3:
                 route.fulfill(status=401,content_type='application/json',body=json.dumps({'error':{'message':'expired test session','uncertain':False}}))
                 return
         route.continue_()
@@ -142,6 +183,17 @@ with sync_playwright() as p:
     page.goto(origin+'/workspaces?project='+project)
     page.get_by_role('button',name='重试原发布',exact=True).click()
     page.get_by_role('dialog').get_by_role('button',name='重试原发布',exact=True).click()
+    expect(page.get_by_role('dialog').get_by_role('alert')).to_contain_text('测试重试源表拒绝')
+    expect(page.get_by_role('dialog').get_by_role('button',name='重试原发布',exact=True)).to_be_enabled()
+    expect(page.get_by_label('版本说明',exact=True)).not_to_be_editable()
+    retained=page.evaluate('sessionStorage.getItem("gl.publication")')
+    assert retained is not None
+    assert json.loads(retained)==captured[0]==captured[1]
+    assert captured[0]['workspace']==rejected[0]['workspace']
+    assert captured[0]['version']==corrected_version
+    assert captured[0]['requestId']!=rejected[0]['requestId']
+    page.screenshot(path=str(shots/'next-publication-pending-rejection.png'),full_page=True)
+    page.get_by_role('dialog').get_by_role('button',name='重试原发布',exact=True).click()
     page.wait_for_url('**/login?expired=1')
     assert page.evaluate('sessionStorage.getItem("gl.publication")') is not None
     page.get_by_role('tab', name='API Key 登录', exact=True).click()
@@ -152,13 +204,15 @@ with sync_playwright() as p:
     page.get_by_role('button',name='重试原发布',exact=True).click()
     page.get_by_role('dialog').get_by_role('button',name='重试原发布',exact=True).click()
     expect(page.get_by_text('版本 r1 已发布',exact=True)).to_be_visible()
-    assert captured[0]==captured[1]==captured[2]
+    assert len(captured)==4 and captured[0]==captured[1]==captured[2]==captured[3]
     page.get_by_role('button',name='完成',exact=True).click()
     assert page.evaluate('sessionStorage.getItem("gl.publication")') is None
+    page.unroute('**/api/console',interrupted)
     assert command({'action':'project','project':project})['head']=='1'
     datasets=command({'action':'datasets','project':project})
     data=command({'action':'features','project':project,'dataset':datasets[0]['id']})
     assert data['type']=='FeatureCollection' and data['features'][0]['properties']['exact']==18446744073709551615
+    assert data['features'][0]['properties']['recovery']=='corrected after rejected attempt'
     for index in range(21):
         command({'action':'createDataset','geometryType':'point','project':project,'name':f'分页数据集 {index:02}'})
     page.goto(origin+'/datasets?project='+project)
@@ -349,4 +403,4 @@ with sync_playwright() as p:
     assert response.status==401
     assert not errors, errors
     browser.close()
-print('Console passed: session/CSRF, exact JSON, interrupted publication + expired-login retry, 101 workspaces, long IDs, concurrent draft/published paging, history/undo, conflict/update/publish dialogs, access/audit, logout (server-side revocation) and mobile layout.')
+print('Console passed: session/CSRF, exact JSON, injected first publication rejection + same-workspace correction, lost committed response + injected retry rejection + expired-login retry with original intent, 101 workspaces, long IDs, concurrent draft/published paging, history/undo, conflict/update/publish dialogs, access/audit, logout (server-side revocation) and mobile layout.')

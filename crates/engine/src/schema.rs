@@ -998,13 +998,13 @@ mod tests {
                 );
                 if with_feature {
                     let mut t = app.storage.begin(true, Duration::from_secs(30)).unwrap();
-                    let raw = t
-                        .edit_base(&p, &w, &d, "a", 1)
-                        .unwrap()
-                        .get::<_, String>(3usize)
-                        .unwrap();
+                    let repository::DraftState::Value(raw) =
+                        t.edit_base(&p, &w, &d, "a", 1).unwrap().draft
+                    else {
+                        panic!("saved feature must have a raw draft");
+                    };
                     assert_eq!(
-                        crate::codec::stored::<Map<String, Value>>(&raw)
+                        crate::codec::stored::<Map<String, Value>>(&raw.properties)
                             .unwrap()
                             .len(),
                         count + 1

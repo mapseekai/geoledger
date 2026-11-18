@@ -23,7 +23,7 @@ pub use publication::{ConflictQuery, PublicationRepository};
 pub use query::{FeatureQuery, FeatureRepository};
 pub use row::{Cell, Decode, Row};
 pub use tables::PostgisTables;
-pub use workspace::{DraftDelta, WorkspaceRepository};
+pub use workspace::{DraftDelta, DraftState, EditContext, RawFeature, WorkspaceRepository};
 
 /// Encoded response budget shared by every capability of a transaction.
 pub trait ResponseBudget: Send {

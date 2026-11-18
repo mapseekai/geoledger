@@ -513,7 +513,7 @@ impl SqlTransaction {
             let table = relation(&source.table);
             let id = quote(&source.table.id_column);
             let geom = quote(&source.table.geometry_column);
-            if self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM gl_merge_stage WHERE dataset=$1 AND (jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,feature_id))).{id}::text IS DISTINCT FROM feature_id)"), &[&dataset,&source.table.id_column])?.get::<_,bool>(0usize)? {
+            if self.query_one(&format!("SELECT EXISTS(SELECT 1 FROM gl_merge_stage WHERE dataset=$1 AND (jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,feature_id))).{id}::text IS DISTINCT FROM feature_id)"), &[&dataset,&source.table.id_column]).map_err(Error::publication_source_rejection)?.get::<_,bool>(0usize)? {
                 return Err(Error::new(400,"feature identifiers must use the business primary key's canonical text"));
             }
             self.query_one(
@@ -564,9 +564,9 @@ impl SqlTransaction {
                         )];
                         assignments.extend(names.iter().map(|c| format!("{c}=r.{c}")));
                         // The source lock makes update-then-insert atomic, including deferred primary keys.
-                        let updated = self.query_opt(&format!("UPDATE {table} t SET {} FROM jsonb_populate_record(NULL::{table},$2::text::jsonb || jsonb_build_object($4::text,$1::text)) r WHERE t.{id}=r.{id} RETURNING 1",assignments.join(",")), &[&key,&props,&stored.geometry,&source.table.id_column])?;
+                        let updated = self.query_opt(&format!("UPDATE {table} t SET {} FROM jsonb_populate_record(NULL::{table},$2::text::jsonb || jsonb_build_object($4::text,$1::text)) r WHERE t.{id}=r.{id} RETURNING 1",assignments.join(",")), &[&key,&props,&stored.geometry,&source.table.id_column]).map_err(Error::publication_source_rejection)?;
                         if updated.is_none() {
-                            self.execute(&format!("INSERT INTO {table} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM jsonb_populate_record(NULL::{table},$2::text::jsonb || jsonb_build_object($4::text,$1::text)) r",columns.join(","),values.join(",")), &[&key,&props,&stored.geometry,&source.table.id_column])?;
+                            self.execute(&format!("INSERT INTO {table} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM jsonb_populate_record(NULL::{table},$2::text::jsonb || jsonb_build_object($4::text,$1::text)) r",columns.join(","),values.join(",")), &[&key,&props,&stored.geometry,&source.table.id_column]).map_err(Error::publication_source_rejection)?;
                         }
                         let properties_sql = source_properties("$2", "$3");
                         let check = self.query_opt(&format!("SELECT {properties_sql}::text,ST_AsGeoJSON(t.{geom},17,0),t.{id}::text FROM {table} t WHERE t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,$1::text))).{id}"), &[&key,&source.table.id_column,&source.table.geometry_column])?.ok_or_else(drift)?;
@@ -598,7 +598,7 @@ impl SqlTransaction {
                             after = key;
                             continue;
                         }
-                        self.execute(&format!("DELETE FROM {table} WHERE {id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,$1::text))).{id}"), &[&key,&source.table.id_column])?;
+                        self.execute(&format!("DELETE FROM {table} WHERE {id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,$1::text))).{id}"), &[&key,&source.table.id_column]).map_err(Error::publication_source_rejection)?;
                         if self
                             .query_opt(
                                 &format!("SELECT 1 FROM {table} WHERE {id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,$1::text))).{id}"),
@@ -627,9 +627,9 @@ impl SqlTransaction {
                 let records = format!(
                     "gl_merge_stage s CROSS JOIN LATERAL jsonb_populate_record(NULL::{table},gl_json_field(s.after_value,'properties')::jsonb || jsonb_build_object($2::text,s.feature_id)) r"
                 );
-                self.execute(&format!("UPDATE {table} t SET {} FROM {records} WHERE s.dataset=$1 AND s.after_value IS NOT NULL AND t.{id}=r.{id}",assignments.join(",")), &[&dataset,&source.table.id_column])?;
-                self.execute(&format!("INSERT INTO {table} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM {records} WHERE s.dataset=$1 AND s.after_value IS NOT NULL AND NOT EXISTS(SELECT 1 FROM {table} t WHERE t.{id}=r.{id}) ORDER BY s.feature_id COLLATE \"C\"",columns.join(","),values.join(",")), &[&dataset,&source.table.id_column])?;
-                self.execute(&format!("DELETE FROM {table} t USING gl_merge_stage s WHERE s.dataset=$1 AND s.after_value IS NULL AND t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,s.feature_id))).{id}"), &[&dataset,&source.table.id_column])?;
+                self.execute(&format!("UPDATE {table} t SET {} FROM {records} WHERE s.dataset=$1 AND s.after_value IS NOT NULL AND t.{id}=r.{id}",assignments.join(",")), &[&dataset,&source.table.id_column]).map_err(Error::publication_source_rejection)?;
+                self.execute(&format!("INSERT INTO {table} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM {records} WHERE s.dataset=$1 AND s.after_value IS NOT NULL AND NOT EXISTS(SELECT 1 FROM {table} t WHERE t.{id}=r.{id}) ORDER BY s.feature_id COLLATE \"C\"",columns.join(","),values.join(",")), &[&dataset,&source.table.id_column]).map_err(Error::publication_source_rejection)?;
+                self.execute(&format!("DELETE FROM {table} t USING gl_merge_stage s WHERE s.dataset=$1 AND s.after_value IS NULL AND t.{id}=(jsonb_populate_record(NULL::{table},jsonb_build_object($2::text,s.feature_id))).{id}"), &[&dataset,&source.table.id_column]).map_err(Error::publication_source_rejection)?;
             }
         }
         // Resolve cross-table constraints only after every source has its final requested rows.
@@ -637,7 +637,8 @@ impl SqlTransaction {
             "SELECT set_config('geoledger.publication_table',$1,true)",
             &[&publication_tables.join(",")],
         )?;
-        self.batch_execute("SET CONSTRAINTS ALL IMMEDIATE")?;
+        self.batch_execute("SET CONSTRAINTS ALL IMMEDIATE")
+            .map_err(Error::publication_source_rejection)?;
         // Validate the final table image too: a business trigger may affect another row.
         for row in &sources {
             let dataset: String = row.get(0usize)?;

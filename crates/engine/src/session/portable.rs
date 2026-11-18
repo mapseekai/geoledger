@@ -355,7 +355,7 @@ fn current_page(t: &mut SqlTransaction, last: Option<&[Cell]>) -> Result<Vec<Row
 }
 /// Stream every table inside one consistent read transaction. Returns the
 /// summary that the trailer and table_end lines carry.
-pub(crate) fn export(
+pub(super) fn export(
     t: &mut SqlTransaction,
     backend: &str,
     out: &mut dyn Write,
@@ -587,7 +587,7 @@ fn import_current_batch(t: &mut SqlTransaction, rows: Vec<Vec<Cell>>) -> Result<
 
 /// Import into an initialized, empty database inside one write transaction;
 /// nothing is committed unless the whole file validates.
-pub(crate) fn import(client: Client, input: &mut dyn BufRead) -> Result<DataSummary> {
+pub(super) fn import(client: Client, input: &mut dyn BufRead) -> Result<DataSummary> {
     let postgis = matches!(client.backend, Backend::Postgis(_));
     let mut t = client.transaction(false)?;
     for table in TABLES {

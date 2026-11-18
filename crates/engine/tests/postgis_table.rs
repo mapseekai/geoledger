@@ -700,7 +700,15 @@ fn existing_table_publication_is_atomic() -> TestResult {
             json!({"workspace":w,"expected_workspace_version":0,"edits":[{"dataset":d,"feature_id":"1","feature":feature("1","edited")},{"dataset":d,"feature_id":"2","feature":feature("2","invalid")}]}),
         )?;
         let req = json!({"workspace":w,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"atomic"});
-        assert!(run("publish", req).is_err());
+        let error = run("publish", req).err().ok_or("CHECK accepted")?;
+        assert_eq!(error.status, 503);
+        assert_eq!(error.body["error"]["code"], "publication_attempt_rejected");
+        assert_eq!(
+            error.diagnostic().as_deref(),
+            Some("postgres sqlstate=23514")
+        );
+        assert!(std::error::Error::source(&error).is_some());
+        assert!(!error.to_string().contains("invalid"));
         assert_eq!(
             db.query_one("SELECT label FROM business.points WHERE id=1", &[])?
                 .get::<_, String>(0),
@@ -1037,10 +1045,16 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
             0
         );
         let head = run("get_project", json!({}))?["head"].clone();
-        assert!(publish(json!([
+        let error = publish(json!([
             {"dataset":parent,"feature_id":"1","feature":feature("1",json!({"label":"must rollback"}))},
             {"dataset":child,"feature_id":"2","feature":feature("2",json!({"parent_id":999}))}
-        ])).is_err());
+        ])).err().ok_or("deferred FK accepted")?;
+        assert_eq!(error.status, 503);
+        assert_eq!(error.body["error"]["code"], "publication_attempt_rejected");
+        assert_eq!(
+            error.diagnostic().as_deref(),
+            Some("postgres sqlstate=23503")
+        );
         assert_eq!(run("get_project", json!({}))?["head"], head);
         assert_eq!(
             db.query_one("SELECT label FROM business.zz_parent WHERE id=1", &[])?
@@ -1112,5 +1126,126 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
             source = error.source();
         }
     }
+    result
+}
+
+#[test]
+#[ignore = "requires isolated geoledger_test PostGIS database"]
+fn publication_source_rejections_are_local_and_atomic() -> TestResult {
+    let dsn = std::env::var("GL_TEST_DATABASE_URL")?;
+    let mut db = postgres::Client::connect(&dsn, postgres::NoTls)?;
+    support::reset_database(&mut db)?;
+    let result = (|| -> TestResult {
+        db.batch_execute(
+            "CREATE SCHEMA business;
+             CREATE TABLE business.parent(id bigint PRIMARY KEY);
+             INSERT INTO business.parent VALUES(1);
+             CREATE TABLE business.batch_source(id bigint PRIMARY KEY,label text NOT NULL CHECK(label<>'reject-secret'),n smallint,parent_id bigint REFERENCES business.parent(id) DEFERRABLE INITIALLY DEFERRED,geom geometry(Point,4326));
+             CREATE TABLE business.row_source(LIKE business.batch_source INCLUDING ALL);
+             ALTER TABLE business.row_source ADD FOREIGN KEY(parent_id) REFERENCES business.parent(id) DEFERRABLE INITIALLY DEFERRED;
+             CREATE FUNCTION business.keep_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+             CREATE TRIGGER keep_row BEFORE INSERT OR UPDATE ON business.row_source FOR EACH ROW EXECUTE FUNCTION business.keep_row();
+             INSERT INTO business.batch_source VALUES(1,'original',1,1,NULL);
+             INSERT INTO business.row_source VALUES(1,'original',1,1,NULL);",
+        )?;
+        let app = Application::new(Storage::Postgis(dsn));
+        app.migrate()?;
+        app.bootstrap_admin("alice", "initial-test-password")?;
+        let login = app.auth_operation(
+            None,
+            "login_password",
+            json!({"username":"alice","password":"initial-test-password"}),
+        )?;
+        let alice = login["user"]["id"].as_str().ok_or("admin id")?;
+        let project =
+            app.execute(alice, "create_project", json!({"name":"source rejection"}))?["project"]
+                .clone();
+        let run = |op: &str, mut value: Value| {
+            value["project"] = project.clone();
+            app.execute(alice, op, value)
+        };
+        let snapshot =
+            |db: &mut postgres::Client| -> std::result::Result<Vec<String>, postgres::Error> {
+                ["gl_projects", "gl_workspaces", "gl_workspace_changes", "gl_workspace_sizes",
+             "gl_commits", "gl_commit_changes", "gl_history", "gl_schema_history",
+             "gl_workspace_schemas", "gl_idempotency", "gl_audit_events", "gl_source_state",
+             "gl_source_changes", "gl_source_versions", "business.batch_source", "business.row_source"]
+                .into_iter()
+                .map(|table| {
+                    db.query_one(&format!("SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb)::text FROM {table} t"), &[])
+                        .map(|row| row.get(0))
+                })
+                .collect()
+            };
+        for table in ["batch_source", "row_source"] {
+            let dataset = run("create_dataset", json!({"name":table,"postgis_table":{"schema":"business","table":table,"id_column":"id","geometry_column":"geom"}}))?["dataset"].clone();
+            // All failures run before a successful publication creates schema history.
+            // Thus NULL and PostgreSQL scalar conversion reach the source boundary.
+            for (label, n, parent, sqlstate, classified) in [
+                (json!("reject-secret"), json!(2), json!(1), "23514", true),
+                (Value::Null, json!(2), json!(1), "23502", true),
+                (json!("valid"), json!(32768), json!(1), "22003", true),
+                (json!("valid"), json!(-32769), json!(1), "22003", true),
+                (json!("valid"), json!(2), json!(999), "23503", true),
+                (
+                    json!("valid"),
+                    json!("invalid-integer-secret"),
+                    json!(1),
+                    "22P02",
+                    false,
+                ),
+            ] {
+                let workspace = run("create_workspace", json!({}))?["workspace"].clone();
+                let feature = |id: &str, properties: Value| json!({"type":"Feature","id":id,"geometry":null,"properties":properties});
+                run(
+                    "save",
+                    json!({"workspace":workspace,"expected_workspace_version":0,"edits":[
+                        {"dataset":dataset,"feature_id":"1","feature":feature("1",json!({"label":"must rollback","n":2,"parent_id":1}))},
+                        {"dataset":dataset,"feature_id":"2","feature":feature("2",json!({"label":label,"n":n,"parent_id":parent}))}
+                    ]}),
+                )?;
+                let before = snapshot(&mut db)?;
+                let request = json!({"workspace":workspace,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"rejected"});
+                let error = run("publish", request)
+                    .err()
+                    .ok_or("invalid source accepted")?;
+                assert_eq!(error.status, 503, "{table} {sqlstate}");
+                assert_eq!(
+                    error.body["error"]["code"],
+                    if classified {
+                        "publication_attempt_rejected"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                assert_eq!(
+                    error.diagnostic(),
+                    Some(format!("postgres sqlstate={sqlstate}"))
+                );
+                assert!(std::error::Error::source(&error).is_some());
+                assert!(!error.to_string().contains("secret"));
+                assert_eq!(
+                    snapshot(&mut db)?,
+                    before,
+                    "{table} {sqlstate} changed publication state"
+                );
+            }
+        }
+        // The same SQLSTATE outside source publication keeps its original mapping.
+        for sqlstate in ["23514", "23502", "23503", "22003"] {
+            let source = db.batch_execute(&format!("DO $$ BEGIN RAISE EXCEPTION USING ERRCODE='{sqlstate}', MESSAGE='private-secret'; END $$"))
+                .err().ok_or("expected database error")?;
+            let error = geoledger_engine::Error::from(source);
+            assert_eq!(error.status, 503);
+            assert_eq!(error.body["error"]["code"], "unavailable");
+            assert_eq!(
+                error.diagnostic(),
+                Some(format!("postgres sqlstate={sqlstate}"))
+            );
+            assert!(!error.to_string().contains("private-secret"));
+        }
+        Ok(())
+    })();
+    support::reset_database(&mut db)?;
     result
 }

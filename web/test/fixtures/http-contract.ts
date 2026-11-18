@@ -70,7 +70,14 @@ test("lost committed response -> admission rejection -> success preserves origin
             send("/api/console", "POST", pending),
             (error) => {
               assert(error instanceof ApiError);
-              if (releasePublication(error.status, error.uncertain, true))
+              if (
+                releasePublication(
+                  error.status,
+                  error.uncertain,
+                  true,
+                  error.code,
+                )
+              )
                 stored = null;
               return true;
             },
@@ -160,7 +167,7 @@ test("non-JSON browser errors retain status, redirect and publication semantics"
           assert(error instanceof ApiError);
           assert.equal(error.status, status);
           assert.equal(
-            releasePublication(error.status, error.uncertain, true),
+            releasePublication(error.status, error.uncertain, true, error.code),
             status === 409,
           );
           return true;
@@ -215,4 +222,73 @@ test("BFF rejects invalid UTF-8 and preserves valid multibyte chunk boundaries",
     ),
     value,
   );
+});
+
+test("source rejection crosses BFF and browser without settling an earlier unknown intent", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSecret = process.env.GL_WEB_SESSION_SECRET;
+  process.env.GL_WEB_SESSION_SECRET = "test-only-session-secret-".repeat(3);
+  try {
+    for (const wasPending of [false, true]) {
+      const intent = publication("p", "w", "1", "original");
+      let stored: string | null = JSON.stringify(intent);
+      let reject = true;
+      const upstream: string[] = [];
+      globalThis.fetch = async (url, init) => {
+        if (url === "/api/console") {
+          try {
+            return reply(
+              await execute(
+                consoleClient("fixture-session"),
+                JSON.parse(String(init?.body)),
+              ),
+            );
+          } catch (error) {
+            return failure(error);
+          }
+        }
+        upstream.push(String(init?.body));
+        if (reject)
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: "publication_attempt_rejected",
+                message: "source rejected",
+              },
+            }),
+            { status: 503, headers: { "x-request-id": "correlation" } },
+          );
+        return new Response('{"revision":2,"version":2,"changes":1}');
+      };
+      await assert.rejects(send("/api/console", "POST", intent), (error) => {
+        assert(error instanceof ApiError);
+        assert.equal(error.code, "publication_attempt_rejected");
+        assert.equal(error.requestId, "correlation");
+        assert.equal(error.uncertain, true);
+        if (
+          releasePublication(
+            error.status,
+            error.uncertain,
+            wasPending,
+            error.code,
+          )
+        )
+          stored = null;
+        return true;
+      });
+      if (wasPending) {
+        assert.deepEqual(readPublication(stored), intent);
+        reject = false; // The delayed original attempt has now committed.
+        assert.deepEqual(
+          await send("/api/console", "POST", readPublication(stored)),
+          { revision: "2", version: "2", changes: "1" },
+        );
+        assert.equal(upstream[0], upstream[1]);
+      } else assert.equal(stored, null);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
+    else process.env.GL_WEB_SESSION_SECRET = originalSecret;
+  }
 });

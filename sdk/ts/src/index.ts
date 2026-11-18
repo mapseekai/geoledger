@@ -881,15 +881,32 @@ export class Workspace {
       try {
         return this.#update(await this.client.publish(this.#pending));
       } catch (e) {
-        if (
-          e instanceof GeoLedgerError &&
-          !e.uncertain &&
-          (!wasPending ||
-            !["unauthenticated", "permission_denied", "not_found"].includes(
-              e.code,
-            ))
-        )
-          this.#pending = undefined;
+        if (e instanceof GeoLedgerError) {
+          if (e.code === "publication_attempt_rejected") {
+            // This attempt cannot settle an earlier unknown attempt that may
+            // still reach the publication lock after this rejection.
+            if (!wasPending) {
+              this.#pending = undefined;
+              throw new GeoLedgerError(
+                e.code,
+                e.message,
+                e.requestId,
+                e.conflicts,
+                false,
+              );
+            }
+          } else if (
+            !e.uncertain &&
+            (!wasPending ||
+              ![
+                "unauthenticated",
+                "permission_denied",
+                "not_found",
+                "invalid_argument",
+              ].includes(e.code))
+          )
+            this.#pending = undefined;
+        }
         throw e;
       }
     });

@@ -71,6 +71,34 @@ test("timeout remains an uncertain transport failure and is combined with caller
   }
 });
 
+test("source-rejection details preserve their code and uncertain transport status", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "publication_attempt_rejected",
+            message: "source rejected",
+            requestId: "correlation",
+            uncertain: false,
+          },
+        }),
+        { status: 503 },
+      );
+    await assert.rejects(send("/api/console", "POST", {}), (error) => {
+      assert(error instanceof ApiError);
+      assert.equal(error.code, "publication_attempt_rejected");
+      assert.equal(error.requestId, "correlation");
+      assert.equal(error.status, 503);
+      assert.equal(error.uncertain, true);
+      return true;
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("browser uses GET FeatureCollection while keeping original integer values for editors", async () => {
   const original = globalThis.fetch;
   try {

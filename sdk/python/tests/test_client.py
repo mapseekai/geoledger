@@ -3,6 +3,7 @@ from dataclasses import FrozenInstanceError, asdict
 from types import SimpleNamespace
 import json
 import unittest
+import grpc
 
 import geoledger
 from geoledger import Client, Edit, GeoLedgerError, Workspace, WorkspaceInfo
@@ -142,8 +143,8 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(workspace.info.version, 5)
         self.assertEqual(workspace.info.status, "published")
 
-    def test_retry_access_failures_preserve_original_intent(self):
-        for code in ("unauthenticated", "permission_denied", "not_found"):
+    def test_retry_access_and_input_failures_preserve_original_intent(self):
+        for code in ("unauthenticated", "permission_denied", "not_found", "invalid_argument"):
             with self.subTest(code=code):
                 sent = []
                 def publish(intent):
@@ -165,7 +166,7 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(sent, [sent[0]] * 3)
 
     def test_first_access_failure_releases_intent(self):
-        for code in ("unauthenticated", "permission_denied", "not_found"):
+        for code in ("unauthenticated", "permission_denied", "not_found", "invalid_argument"):
             def publish(intent):
                 raise GeoLedgerError(code, "access denied")
             workspace = Workspace(SimpleNamespace(publish=publish), "project",
@@ -173,6 +174,64 @@ class ContractTests(unittest.TestCase):
             with self.assertRaises(GeoLedgerError):
                 workspace.publish("original")
             self.assertIsNone(workspace.pending_publication)
+
+    def test_first_source_rejection_is_recoverable_but_transport_stays_uncertain(self):
+        detail = wire.ErrorDetail(code="publication_attempt_rejected", message="source rejected", request_id="request")
+        envelope = wire.RpcStatus(code=14, message="source rejected")
+        envelope.details.add(type_url="type.googleapis.com/geoledger.v1.ErrorDetail", value=detail.SerializeToString())
+        class Rejected(grpc.RpcError):
+            def code(self): return grpc.StatusCode.UNAVAILABLE
+            def details(self): return "source rejected"
+            def trailing_metadata(self): return [("grpc-status-details-bin", envelope.SerializeToString())]
+        sent, saved = [], []
+        def publish(request, **kwargs):
+            sent.append(request)
+            if len(sent) <= 2:
+                raise Rejected()
+            return wire.PublishReply(revision=2, workspace="draft", version=request.expected_workspace_version+1,
+                                     status="published", changes=1)
+        def save(request, **kwargs):
+            saved.append(request)
+            return wire.SaveReply(version=request.expected_workspace_version+1, changes=1)
+        client = self.client(SimpleNamespace(Publish=publish, Save=save))
+        intent = geoledger.Publication("project", "draft", 4, "request", "original")
+        with self.assertRaises(GeoLedgerError) as low:
+            client.publish(intent)
+        self.assertEqual(low.exception.code, "publication_attempt_rejected")
+        self.assertTrue(low.exception.uncertain)
+        workspace = Workspace(client, "project", WorkspaceInfo("draft", 1, 4, "open"))
+        with self.assertRaises(GeoLedgerError) as first:
+            workspace.publish("original")
+        self.assertFalse(first.exception.uncertain)
+        self.assertEqual(first.exception.request_id, "request")
+        self.assertIsNone(workspace.pending_publication)
+        self.assertEqual(workspace.info.version, 4)
+        workspace.delete("dataset", "one")
+        workspace.publish("corrected")
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(sent[2].expected_workspace_version, 5)
+        self.assertNotEqual(sent[1].request_id, sent[2].request_id)
+
+    def test_source_rejection_cannot_settle_an_earlier_unknown_attempt(self):
+        for uncertain in (False, True):
+            with self.subTest(uncertain=uncertain):
+                sent = []
+                def publish(intent):
+                    sent.append(asdict(intent))
+                    if len(sent) == 1:
+                        raise GeoLedgerError("unavailable", "old attempt still queued", uncertain=True)
+                    if len(sent) == 2:
+                        raise GeoLedgerError("publication_attempt_rejected", "retry rejected", uncertain=uncertain)
+                    return {"revision": 2, "version": 5, "status": "published"}
+                workspace = Workspace(SimpleNamespace(publish=publish), "project", WorkspaceInfo("draft", 1, 4, "open"))
+                for _ in range(2):
+                    with self.assertRaises(GeoLedgerError):
+                        workspace.publish("original")
+                self.assertEqual(asdict(workspace.pending_publication), sent[0])
+                with self.assertRaises(GeoLedgerError):
+                    workspace.delete("dataset", "one")
+                workspace.publish("original")
+                self.assertEqual(sent, [sent[0]] * 3)
 
     def test_definite_conflict_releases_publication_intent(self):
         attempts = 0

@@ -21,7 +21,7 @@ fn service(
     let app = Application::new(Storage::Sqlite(dir.join("ops.sqlite3")));
     app.migrate()?;
     common::seed(&dir.join("ops.sqlite3"), &[("ops", TOKEN, true)])?;
-    Ok(Service::new(app).with_limits(limits))
+    Ok(Service::new_with_limits(app, limits))
 }
 async fn send(
     router: &axum::Router,

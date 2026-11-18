@@ -140,8 +140,8 @@ func TestBusinessConflictDetailsAndDefiniteFailure(t *testing.T) {
 	}
 }
 
-func TestRetryAccessFailuresPreserveOriginalIntent(t *testing.T) {
-	for _, code := range []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.NotFound} {
+func TestRetryAccessAndInputFailuresPreserveOriginalIntent(t *testing.T) {
+	for _, code := range []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.NotFound, codes.InvalidArgument} {
 		t.Run(code.String(), func(t *testing.T) {
 			rpc := &contractRPC{publishError: status.Error(codes.Unavailable, "lost")}
 			w := draftWith(rpc)
@@ -196,7 +196,7 @@ func TestTypedRequestsPreserveExactGeoJSONAndRejectInvalidInput(t *testing.T) {
 }
 
 func TestFirstAccessFailureAndRetryConflictReleaseIntent(t *testing.T) {
-	for _, code := range []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.NotFound, codes.Aborted} {
+	for _, code := range []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.NotFound, codes.InvalidArgument, codes.Aborted} {
 		rpc := &contractRPC{publishError: status.Error(code, "rejected")}
 		w := draftWith(rpc)
 		if code == codes.Aborted {
@@ -209,6 +209,62 @@ func TestFirstAccessFailureAndRetryConflictReleaseIntent(t *testing.T) {
 		}
 		if w.PendingPublication() != nil {
 			t.Fatalf("%s did not release intent", code)
+		}
+	}
+}
+
+func TestPublicationAttemptRejectionReleasesOnlyTheFirstAttempt(t *testing.T) {
+	s, err := status.New(codes.Unavailable, "source rejected").WithDetails(&pb.ErrorDetail{
+		Code: "publication_attempt_rejected", Message: "source rejected", RequestId: "request",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// The transport remains uncertain for low-level and older consumers.
+	rpc := &contractRPC{publishError: s.Err()}
+	w := draftWith(rpc)
+	_, err = w.client.Publish(ctx, Publication{Project: "project", Workspace: "draft", ExpectedWorkspaceVersion: 4, RequestID: "request", Message: "original"})
+	requireBusinessError(t, err, "publication_attempt_rejected", true)
+	rpc.publishError = s.Err()
+	_, err = w.Publish(ctx, "original")
+	requireBusinessError(t, err, "publication_attempt_rejected", false)
+	if w.PendingPublication() != nil || w.Info().Version != 4 {
+		t.Fatal("first rejection must release intent without changing the draft")
+	}
+	if _, err = w.Delete(ctx, "dataset", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.Publish(ctx, "corrected"); err != nil {
+		t.Fatal(err)
+	}
+	if rpc.publications[1].RequestId == rpc.publications[2].RequestId || rpc.publications[2].ExpectedWorkspaceVersion != 5 {
+		t.Fatal("corrected publication did not use the new draft version and identity")
+	}
+	for _, uncertain := range []bool{false, true} {
+		rpc := &contractRPC{publishError: status.Error(codes.Unavailable, "old attempt is still queued")}
+		w := draftWith(rpc)
+		if _, err := w.Publish(ctx, "original"); err == nil {
+			t.Fatal("expected unknown outcome")
+		}
+		original := *w.PendingPublication()
+		rpc.publishError = &Error{Code: "publication_attempt_rejected", Message: "retry rejected", Uncertain: uncertain}
+		if _, err := w.Publish(ctx, "original"); err == nil {
+			t.Fatal("expected source rejection")
+		}
+		if pending := w.PendingPublication(); pending == nil || *pending != original {
+			t.Fatal("retry rejection discarded the earlier unknown intent")
+		}
+		if _, err := w.Delete(ctx, "dataset", "one"); err == nil || len(rpc.saves) != 0 {
+			t.Fatal("unknown publication allowed edits")
+		}
+		if _, err := w.Publish(ctx, "original"); err != nil {
+			t.Fatal(err)
+		}
+		for _, request := range rpc.publications {
+			if !proto.Equal(request, rpc.publications[0]) {
+				t.Fatal("retry or receipt replay changed the original payload")
+			}
 		}
 	}
 }

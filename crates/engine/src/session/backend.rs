@@ -1,8 +1,19 @@
 use super::*;
 
 pub(crate) struct SqlStorage {
-    pub(crate) storage: Storage,
-    pub(crate) pool: std::sync::Arc<postgres::Pool>,
+    storage: Storage,
+    pool: std::sync::Arc<postgres::Pool>,
+}
+impl SqlStorage {
+    pub(crate) fn new(storage: Storage, options: crate::StorageOptions) -> Self {
+        Self {
+            storage,
+            pool: Arc::new(postgres::Pool::new(crate::StorageOptions {
+                pool_size: options.pool_size.max(1),
+                ..options
+            })),
+        }
+    }
 }
 impl StorageBackend for SqlStorage {
     fn name(&self) -> &'static str {
