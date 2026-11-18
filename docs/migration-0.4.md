@@ -77,7 +77,7 @@ uncertain = false
 | 已有原请求 | 成功回执或回执重放 | 使用该回执；不重复创建提交 |
 | 已有未知结果 | 可信业务详情中的 `workspace_version_conflict`，且 uncertain=false | 原预期工作区版本已永久失效，允许释放；随后读取当前状态 |
 
-不要仅根据最后一次异常的 `uncertain=false` 清理一个先前未知的发布。自建 HTTP 客户端和自行保存 `Publication` 的低层 SDK 调用者需要自己保留这段生命周期；工作区对象和 Web 控制台已负责它。服务端继续在项目 HEAD 锁前后查回执，保存/历史/审计/回执仍在一个事务中提交。只有工作区已越过预期版本或已关闭的检查产生 `workspace_version_conflict`；开放工作区尚未到达调用者指定的未来版本、`expected_head` 变化和合并冲突仍是普通 conflict。
+不要仅根据最后一次异常的 `uncertain=false` 清理一个先前未知的发布。自建 HTTP 客户端和自行保存 `Publication` 的低层 SDK 调用者需要自己保留这段生命周期；工作区对象和 Web 控制台已负责它。服务端继续在项目 HEAD 锁前后查回执，保存/历史/审计/回执仍在一个事务中提交。工作区当前版本高于预期版本，或工作区已经关闭时，服务端返回 `workspace_version_conflict`。预期版本高于开放工作区的当前版本、`expected_head` 变化和合并冲突都返回普通 `conflict`。
 
 ## 恢复未知发布
 
