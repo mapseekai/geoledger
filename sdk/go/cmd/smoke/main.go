@@ -114,7 +114,7 @@ func run() error {
 		return fmt.Errorf("wrong error: %v", err)
 	}
 	_, err = client.CreateDatasetWithCRS(ctx, project.ID, "places", "point", 3, "EPSG:3857")
-	if !errors.As(err, &own) || own.Code != "conflict" {
+	if !errors.As(err, &own) || own.Code != "workspace_version_conflict" {
 		return fmt.Errorf("wrong duplicate error: %v", err)
 	}
 	edit, err := client.CreateWorkspace(ctx, project.ID)

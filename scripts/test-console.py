@@ -124,7 +124,7 @@ with sync_playwright() as p:
         body=route.request.post_data_json
         if body.get('action')=='publish':
             rejected.append(body)
-            route.fulfill(status=503,content_type='application/json',body=json.dumps({'error':{'code':'publication_attempt_rejected','message':'测试首次源表拒绝','uncertain':True}}))
+            route.fulfill(status=400,content_type='application/json',body=json.dumps({'error':{'code':'publication_attempt_rejected','message':'测试首次源表拒绝','uncertain':False}}))
             return
         route.continue_()
     page.route('**/api/console',reject_first_publication)
@@ -166,7 +166,7 @@ with sync_playwright() as p:
             if len(captured)==2:
                 # The earlier request really committed, but the browser cannot yet
                 # confirm it. A synthetic source-rejection response must retain it.
-                route.fulfill(status=503,content_type='application/json',body=json.dumps({'error':{'code':'publication_attempt_rejected','message':'测试重试源表拒绝','uncertain':True}}))
+                route.fulfill(status=400,content_type='application/json',body=json.dumps({'error':{'code':'publication_attempt_rejected','message':'测试重试源表拒绝','uncertain':False}}))
                 return
             if len(captured)==3:
                 route.fulfill(status=401,content_type='application/json',body=json.dumps({'error':{'message':'expired test session','uncertain':False}}))

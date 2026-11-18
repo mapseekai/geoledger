@@ -32,7 +32,7 @@ SQLite/SpatiaLite 与 PostGIS 继续共用一个 `SqlTransaction`。各能力直
 
 `Parameter`、`Client`、`SqlTransaction` 及其原始 SQL helper 的可见范围限于 `session`。Application 通过 `SqlStorage::new(Storage, StorageOptions)` 建立内置后端，不直接组装驱动或连接池；TLS 摘要、连接池指标及备份、导入导出等语义入口保持可用。这一模块边界限制复用现成 SQL helper，数据库驱动仍是 engine 的依赖，同 crate 新代码仍可能直接建立驱动连接；业务代码必须继续遵守 Repository 合同。
 
-通过 `Application::with_backend(Arc<dyn StorageBackend>)` 注入。接口接收项目、数据集、修订、游标等业务参数，由适配器封装 SQL、数据库连接和传输细节。可接入 SQL 或其他具备必要事务能力的存储；服务端配置工厂增加后端选择即可，SDK 与业务规则保持一致。
+通过 `Application::with_backend(Arc<dyn StorageBackend>)` 注入。`Application::initialize` 创建当前格式的新库或校验已有库，通过 `StorageBackend::initialize` 调用后端；不执行旧格式升级。原 `Application::migrate` 名称已移除，调用方直接改用 `initialize`。接口接收项目、数据集、修订、游标等业务参数，由适配器封装 SQL、数据库连接和传输细节。可接入 SQL 或其他具备必要事务能力的存储；服务端配置工厂增加后端选择即可，SDK 与业务规则保持一致。
 
 ### 扩展接口迁移
 
@@ -42,7 +42,7 @@ Rust 存储扩展接口按能力拆分，保留服务的 HTTP/gRPC 协议、SDK 
 
 自定义后端还须实现 `WorkspaceRepository::workspace_publication_revision`：返回已发布工作区的不可变提交修订，包括空提交；未发布工作区返回 `None`。工作区基线仍独立保存，用于 Diff 和 WorkspaceSummary。
 
-本次扩展接口调整有两项 Rust 源码迁移：`edit_base` 改为返回 `Result<EditContext>`，以及九个 schema 方法移除默认实现。外部后端需要按下文补齐具名上下文和完整 schema 合同；没有网络协议、持久化格式或 SDK 请求变化。其他 Row 接口与分页保证保持原样。
+当前扩展接口的 Rust 源码迁移包括：`edit_base` 返回 `Result<EditContext>`、九个 schema 方法移除默认实现、`feature_exists` 必须显式实现，以及初始化入口改为 `Application::initialize`。外部后端需要按下文补齐具名上下文、schema 合同和键探测。完整版本迁移见 [0.4 迁移说明](migration-0.4.md)；其他 Row 接口保持原有含义。
 
 ### Schema 能力合同
 
@@ -73,7 +73,7 @@ Rust 存储扩展接口按能力拆分，保留服务的 HTTP/gRPC 协议、SDK 
 7. `begin_merge` 清空事务私有暂存区；stage 仅存放已验证的候选。append 方法原子消费同一份暂存区。候选在发布提交后形成公开历史。
 8. 所有等待、连接、查询和提交服从传入期限。结果未知时返回错误，保留客户端确认路径；后端准确报告结果确定性，并保持指定存储配置。
 9. 同项目 `append_audit` 必须按提交顺序分配 ID，保证 audit 游标按已提交事件的顺序前进；PostGIS 在分配 ID 前获取独立的项目级事务 advisory lock，以独立审计锁协调顺序，其他项目仍可独立提交。
-10. 返回页受条数与内存限制约束；新后端必须提供能定位游标的索引，通过索引按页读取数据。 `diff_has_after`、`commit_has_after`、`history_has_after`、`audit_has_after` 在同一事务快照内按相同筛选条件仅探测后续键，不读取未返回的属性、几何或审计正文；整页终页也必须准确判定。新增后端须实现这四个分页语义操作并通过相同 conformance 套件。
+10. 返回页受条数与内存限制约束；新后端必须提供能定位游标的索引，通过索引按页读取数据。 `feature_exists`、`diff_has_after`、`commit_has_after`、`history_has_after`、`audit_has_after` 在同一事务快照内按相同筛选条件仅探测后续键，不读取未返回的属性、几何或审计正文；整页终页也必须准确判定。新增后端须实现这五个分页语义操作并通过相同 conformance 套件。
 
 ## 后端无关行类型
 
@@ -129,7 +129,7 @@ SQLite 使用 WAL、FULL synchronous、外键、写事务 BEGIN IMMEDIATE，读�
 
 PostGIS 使用连接池、读事务 REPEATABLE READ、发布项目行锁、工作区行锁与 deadline-aware 数据库驱动。`geom` 使用原生 `geometry` 类型（派生索引 SRID 0，兼容 XY/XYZ；原坐标系保存在数据集 `crs`），直接创建 GiST 索引；bbox 直接查询几何列，不在查询时解析 GeoJSON。几何结构在共同应用层校验，自相交等拓扑问题仍作为警告，保持原始坐标。
 
-当前格式为 19。每次创建数据集都立即创建一张独立的正式数据表及空间索引，即使数据集为空。一个数据库可包含多张点、线、面业务数据表，同类型的多个数据集也各有独立表。当前版本读取对应正式表或纳管原表；`gl_history` 只保存被修改或删除的旧正文，历史查询按有效期合并旧正文与当前行。工作区草稿仍与正式数据隔离。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageMaintenance::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护旧版历史记录。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
+当前格式为 19。每次创建数据集都立即创建一张独立的正式数据表及空间索引，即使数据集为空。一个数据库可包含多张点、线、面业务数据表，同类型的多个数据集也各有独立表。当前版本读取对应正式表或纳管原表；`gl_history` 只保存被修改或删除的旧正文，历史查询按有效期合并旧正文与当前行。工作区草稿仍与正式数据隔离。新库直接执行当前结构；已有库启动时校验当前格式。新后端通过 `StorageBackend::initialize` 创建当前结构。逻辑导出与导入由 `StorageMaintenance::export`/`import` 提供（SQL 后端共用 [portable](../crates/engine/src/session/portable.rs) 实现，导出格式与后端无关），新后端可实现这两个方法以支持跨后端迁移。成员移除为软删除（`removed` 标记），历史、审计与收据仍引用原成员行；`ensure_identity` 为管理员操作创建不授予权限的成员行以满足审计外键。两个后端均有不可变 commit/change/audit/receipt 约束，并保护已关闭有效期的历史记录。各后端使用独立文件或数据库，跨后端迁移使用 `geoledger-server export`、`import` 与 `verify`，见 [备份与恢复](production.md#备份与恢复)。
 
 SQLite 必须加载 SpatiaLite 5 扩展，使用注册的 `geom`（XY）和 `geom_z`（XYZ）几何 BLOB 列与各自的标准 RTree 索引；两个维度共用业务表，单个要素按维度写入对应列。数据集创建时声明不可变的 `coordinate_dimension`（2 或 3，默认 2），所有要素坐标必须匹配，混合维度返回明确的参数错误。嵌套集合和集合中的多部件几何仅在派生的空间表示中展平，快照保持原样。扩展加载失败时启动失败。默认加载 `mod_spatialite`，可通过 `GL_SPATIALITE_EXTENSION` 指定管理员安装的可信库路径。扩展加载后立即关闭动态加载权限。加载器只提供读取进程配置的入口，不接受调用方传入扩展路径；原生库及其依赖、搜索路径属于可信部署配置，加载器不认证库文件；进程配置必须来自可信管理员。
 

@@ -252,7 +252,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("purge.db");
             let app = Application::new(Storage::Sqlite(path.clone()));
-            app.migrate().unwrap();
+            app.initialize().unwrap();
             let project = app
                 .execute("alice", "create_project", json!({"name":"schema purge"}))
                 .unwrap()["project"]

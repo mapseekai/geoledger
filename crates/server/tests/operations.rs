@@ -19,7 +19,7 @@ fn service(
     limits: Limits,
 ) -> Result<Service, Box<dyn std::error::Error + Send + Sync>> {
     let app = Application::new(Storage::Sqlite(dir.join("ops.sqlite3")));
-    app.migrate()?;
+    app.initialize()?;
     common::seed(&dir.join("ops.sqlite3"), &[("ops", TOKEN, true)])?;
     Ok(Service::new_with_limits(app, limits))
 }
@@ -296,5 +296,22 @@ async fn probe_grpc_health_and_bounded_shutdown() -> TestResult {
         child.kill()?;
         child.wait()?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn info_requires_an_empty_current_json_request() -> TestResult {
+    let dir = common::tempdir()?;
+    let router = geoledger_server::router(service(dir.path(), Limits::default())?);
+    for body in ["null", "[]", "true", "7", "\"info\"", r#"{"extra":true}"#] {
+        let (status, _, response) = send(&router, "POST", "/api/v1/info", &[AUTH], body).await?;
+        assert_eq!(status, 400, "{body}");
+        let error: Value = serde_json::from_str(&response)?;
+        assert_eq!(error["error"]["code"], "invalid_argument");
+    }
+    let (status, _, body) = send(&router, "POST", "/api/v1/info", &[AUTH], "{}").await?;
+    assert_eq!(status, 200);
+    let info: Value = serde_json::from_str(&body)?;
+    assert_eq!(info["backend"], "sqlite");
     Ok(())
 }

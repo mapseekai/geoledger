@@ -197,6 +197,9 @@ async fn handle(
     };
     let input = geoledger_engine::parse_json(&body)?;
     if op == "info" {
+        if !input.as_object().is_some_and(serde_json::Map::is_empty) {
+            return Err(Error::new(400, "info requires an empty JSON object"));
+        }
         return Ok(
             json!({"version":env!("CARGO_PKG_VERSION"),"backend":s.app.backend(),"format_version":geoledger_engine::FORMAT_VERSION,"platform_admin":call.identity.as_ref().is_some_and(|v|v.user.is_admin),"max_request_bytes":s.limits.max_request_bytes,"max_feature_bytes":0}),
         );

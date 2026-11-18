@@ -70,7 +70,7 @@ const client = new Client(
     );
     await assert.rejects(
       client.createDataset(project.id, "places", "point", 3, "EPSG:3857"),
-      (e) => e.code === "conflict",
+      (e) => e.code === "workspace_version_conflict",
     );
     const updated = { ...feature, properties: { exact: 9007199254740993n }, geometry: { type: "Point", coordinates: [4, 5, 6] } };
     const edit = await client.createWorkspace(project.id);

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestRegisterTablePreservesCreateDatasetWireContract(t *testing.T) {
@@ -165,5 +166,76 @@ func TestSchemaCollectionsMarshalAsEmptyArrays(t *testing.T) {
 	raw, err = json.Marshal(diff)
 	if err != nil || !strings.Contains(string(raw), `"before":[]`) || !strings.Contains(string(raw), `"after":[]`) {
 		t.Fatalf("schema change arrays became null: %s %v", raw, err)
+	}
+}
+
+func TestTransportDeadlineAndRangeErrorsKeepCanonicalCodesAndUncertainty(t *testing.T) {
+	for _, test := range []struct {
+		status codes.Code
+		code   string
+	}{
+		{codes.DeadlineExceeded, "deadline_exceeded"},
+		{codes.OutOfRange, "resource_exhausted"},
+	} {
+		requireBusinessError(t, failure(status.Error(test.status, "transport failure")), test.code, true)
+		detailed, err := status.New(test.status, "transport failure").WithDetails(&pb.ErrorDetail{
+			Code: "business_range", Message: "business rejection", RequestId: "request",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireBusinessError(t, failure(detailed.Err()), "business_range", true)
+	}
+}
+
+func TestUndetailedConflictFamilyCannotClaimWorkspaceVersionProof(t *testing.T) {
+	for _, code := range []codes.Code{codes.Aborted, codes.AlreadyExists, codes.FailedPrecondition} {
+		for _, kind := range []string{"absent", "malformed", "empty code", "wrong type"} {
+			t.Run(code.String()+"/"+kind, func(t *testing.T) {
+				envelope := status.New(code, "proxy rejection").Proto()
+				if kind != "absent" {
+					detail := &pb.ErrorDetail{Code: "workspace_version_conflict", Message: "not a trusted detail", RequestId: "request"}
+					if kind == "empty code" {
+						detail.Code = ""
+					}
+					value, err := proto.Marshal(detail)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if kind == "malformed" {
+						value = []byte{255}
+					}
+					typeURL := "type.googleapis.com/geoledger.v1.ErrorDetail"
+					if kind == "wrong type" {
+						typeURL = "type.invalid/geoledger.v1.ErrorDetail"
+					}
+					envelope.Details = []*anypb.Any{{TypeUrl: typeURL, Value: value}}
+				}
+				rpc := &contractRPC{publishError: status.Error(codes.Unavailable, "original request is queued")}
+				w := draftWith(rpc)
+				ctx := context.Background()
+				if _, err := w.Publish(ctx, "original"); err == nil {
+					t.Fatal("expected unknown")
+				}
+				original := *w.PendingPublication()
+				rpc.publishError = status.FromProto(envelope).Err()
+				_, err := w.Publish(ctx, "original")
+				requireBusinessError(t, err, "conflict", true)
+				if pending := w.PendingPublication(); pending == nil || *pending != original {
+					t.Fatal("proxy error lost original intent")
+				}
+				if _, err = w.Delete(ctx, "dataset", "one"); err == nil {
+					t.Fatal("proxy error enabled edits")
+				}
+				if _, err = w.Publish(ctx, "original"); err != nil {
+					t.Fatal(err)
+				}
+				for _, request := range rpc.publications {
+					if !proto.Equal(request, rpc.publications[0]) {
+						t.Fatal("recovery changed intent")
+					}
+				}
+			})
+		}
 	}
 }

@@ -2,6 +2,10 @@
 
 本记录验证 #36、#37、#38 合并后的同一份源码，基线为 `d1022007be7fef1963412ed490a9d653ff8a528e`，分支为 `integration/issues-36-38`。整合提交依次为 `e4105fc`、`50b8073`、`d3215b5`，并包含 `7a51e85` 中的两处回归调用适配。下述本机结果针对该整合提交，后续 CI 配置修复见末节。独立任务分支先前的验证不作为本记录的通过依据。
 
+## 2026-11-18 当前契约变更
+
+当前 API 已删除下文历史基线中 `feature_exists` 的 `limit=1` 默认实现。所有 `FeatureRepository` 后端必须显式实现此方法，在同一快照和过滤条件下只探测后续键，禁止物化未返回的属性或几何。下文记录仍描述当时实际实现与格式 16；它不是当前存储格式或本次 breaking change 的验收证据。当前合同见 [存储扩展接口](storage.md)。
+
 ## 行为与兼容性
 
 - #36：四语言 SDK 与 Web 的表注册接口统一为 `register_table`／`RegisterTable`／`registerTable`，不保留旧 `track` 别名。数据库外部写入跟踪仍使用原 tracking 术语；底层 `CreateDataset` 协议不变。

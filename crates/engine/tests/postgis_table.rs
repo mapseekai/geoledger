@@ -30,7 +30,7 @@ fn million_row_enrollment_keeps_only_source_rows() -> TestResult {
             },
         )
         .with_timeout(std::time::Duration::from_secs(300));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("alice", "initial-test-password")?;
         let login = app.auth_operation(
             None,
@@ -127,7 +127,7 @@ fn registration_pages_native_primary_keys_without_losing_rows() -> TestResult {
     let result = (|| -> TestResult {
         db.batch_execute("CREATE SCHEMA business")?;
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("alice", "initial-test-password")?;
         let login = app.auth_operation(
             None,
@@ -223,7 +223,7 @@ fn registration_rejects_invalid_source_geometries_atomically() -> TestResult {
     let result = (|| -> TestResult {
         db.batch_execute("CREATE SCHEMA business")?;
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         let password = uuid::Uuid::new_v4().to_string();
         app.bootstrap_admin("alice", &password)?;
         let login = app.auth_operation(
@@ -326,7 +326,7 @@ fn incremental_fixture_seeding_keeps_source_readable_and_other_drift() -> TestRe
     let result = (|| -> TestResult {
         db.batch_execute("CREATE SCHEMA business; CREATE TABLE business.source(id text PRIMARY KEY,attributes jsonb,geom geometry(Point,4326)); CREATE TABLE business.other(LIKE business.source INCLUDING ALL)")?;
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         let password = uuid::Uuid::new_v4().to_string();
         app.bootstrap_admin("alice", &password)?;
         let login = app.auth_operation(
@@ -392,7 +392,7 @@ fn registration_rejects_invalid_feature_ids_atomically() -> TestResult {
     let result = (|| -> TestResult {
         db.batch_execute("CREATE SCHEMA business; CREATE TABLE business.text_keys(id text COLLATE \"POSIX\" PRIMARY KEY,label text NOT NULL,geom geometry(Point,4326))")?;
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("alice", "initial-test-password")?;
         let login = app.auth_operation(
             None,
@@ -503,7 +503,7 @@ fn registration_rejects_invalid_property_columns_atomically() -> TestResult {
             ))?;
         }
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("alice", "initial-test-password")?;
         let login = app.auth_operation(
             None,
@@ -592,7 +592,7 @@ fn existing_table_publication_is_atomic() -> TestResult {
         let (dsn, mut db) = support::connect_isolated(&dsn, &name)?;
         db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis; CREATE SCHEMA business; CREATE TABLE business.points(id bigint PRIMARY KEY,label text NOT NULL CHECK(label <> 'invalid'), n numeric(20,0), geom geometry(PointZ,3857)); INSERT INTO business.points VALUES(1,'original',18446744073709551615,ST_SetSRID(ST_MakePoint(500000,3500000,3),3857))")?;
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("alice", "initial-test-password")?;
         let login = app.auth_operation(
             None,
@@ -896,7 +896,7 @@ fn same_database_source_replacement_is_rejected() -> TestResult {
     let result = (|| -> TestResult {
         db.batch_execute("CREATE SCHEMA business; CREATE TABLE business.points(id text COLLATE \"C\" PRIMARY KEY,geom geometry(Point,4326)); INSERT INTO business.points VALUES('one',ST_SetSRID(ST_MakePoint(1,2),4326)); CREATE UNLOGGED TABLE business.volatile(id text PRIMARY KEY,geom geometry(Point,4326))")?;
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("alice", "initial-test-password")?;
         let login = app.auth_operation(
             None,
@@ -989,7 +989,7 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
         let (dsn, mut db) = support::connect_isolated(&dsn, &name)?;
         db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis; CREATE SCHEMA business; CREATE TABLE business.zz_parent(id bigint PRIMARY KEY,label text,geom geometry(Point,3857)); CREATE TABLE business.aa_child(id bigint PRIMARY KEY,parent_id bigint REFERENCES business.zz_parent(id) DEFERRABLE INITIALLY DEFERRED,geom geometry(Point,3857)); CREATE TABLE business.deferred_key(id bigint PRIMARY KEY DEFERRABLE INITIALLY DEFERRED,label text,geom geometry(Point,3857))")?;
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("alice", "initial-test-password")?;
         let login = app.auth_operation(
             None,
@@ -1149,7 +1149,7 @@ fn publication_source_rejections_are_local_and_atomic() -> TestResult {
              INSERT INTO business.row_source VALUES(1,'original',1,1,NULL);",
         )?;
         let app = Application::new(Storage::Postgis(dsn));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("alice", "initial-test-password")?;
         let login = app.auth_operation(
             None,

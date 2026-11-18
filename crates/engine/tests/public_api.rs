@@ -24,7 +24,7 @@ fn default_build_has_no_subject_execution_entry() -> Result<(), Box<dyn std::err
     };
     std::fs::write(
         &source,
-        "fn main() { let _ = geoledger_engine::Application::new(geoledger_engine::Storage::Sqlite(\"unused.db\".into())); }",
+        "fn main() { let app = geoledger_engine::Application::new(geoledger_engine::Storage::Sqlite(\"unused.db\".into())); let _ = app.initialize(); }",
     )?;
     let positive = check()?;
     assert!(
@@ -43,11 +43,22 @@ fn default_build_has_no_subject_execution_entry() -> Result<(), Box<dyn std::err
         diagnostic.contains("E0599") && diagnostic.contains("no method named `execute`"),
         "{diagnostic}"
     );
+    std::fs::write(
+        &source,
+        "fn main() { let app = geoledger_engine::Application::new(geoledger_engine::Storage::Sqlite(\"unused.db\".into())); let _ = app.migrate(); }",
+    )?;
+    let removed = check()?;
+    let diagnostic = String::from_utf8_lossy(&removed.stderr);
+    assert!(!removed.status.success());
+    assert!(
+        diagnostic.contains("E0599") && diagnostic.contains("no method named `migrate`"),
+        "{diagnostic}"
+    );
     Ok(())
 }
 
 #[test]
-fn downstream_backend_must_implement_the_complete_schema_contract()
+fn downstream_backend_must_implement_schema_and_key_only_feature_probes()
 -> Result<(), Box<dyn std::error::Error>> {
     let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = engine.join("../../target/test-fixtures/engine-api");
@@ -84,6 +95,7 @@ fn downstream_backend_must_implement_the_complete_schema_contract()
     );
 
     let required = [
+        "feature_exists",
         "schema_projection",
         "schema_at",
         "workspace_schemas",

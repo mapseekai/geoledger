@@ -92,21 +92,25 @@ async function request<T>(
     } catch {
       // Proxies may reject admission with a plain-text response.
     }
-    const detail =
-      value.error && typeof value.error === "object"
-        ? (value.error as Record<string, unknown>)
-        : value;
+    const detail = errorDetail(value.error);
+    if (value.conflicts !== undefined && !detail)
+      throw new GeoLedgerError(
+        "invalid_response",
+        "Invalid business response",
+        undefined,
+        undefined,
+        true,
+      );
     throw Object.assign(
       new GeoLedgerError(
-        String(detail.code ?? httpCode(response.status)),
-        String(
-          detail.message ??
-            (typeof value.error === "string" ? value.error : "请求失败"),
-        ),
-        response.headers.get("x-request-id") ??
-          (typeof detail.requestId === "string" ? detail.requestId : undefined),
-        value.conflicts === undefined ? undefined : decodeConflicts(value),
-        uncertainStatus(response.status),
+        detail?.code ?? httpCode(response.status),
+        detail?.message ?? "请求失败",
+        response.headers.get("x-request-id") ?? detail?.requestId,
+        detail && value.conflicts !== undefined
+          ? decodeConflicts(value)
+          : undefined,
+        uncertainStatus(response.status) ||
+          (response.status === 409 && !detail),
       ),
       { status: response.status },
     );
@@ -116,6 +120,24 @@ async function request<T>(
       ? validateBusinessResponse(operation, decode(parseLosslessJson(raw)))
       : JSON.parse(raw)
   ) as T;
+}
+/** Recognize the current engine envelope; unrelated HTTP bodies stay transport errors. */
+function errorDetail(
+  value: unknown,
+): { code: string; message: string; requestId?: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const row = value as Record<string, unknown>;
+  if (
+    typeof row.code !== "string" ||
+    row.code.length === 0 ||
+    typeof row.message !== "string"
+  )
+    return;
+  return {
+    code: row.code,
+    message: row.message,
+    ...(typeof row.requestId === "string" ? { requestId: row.requestId } : {}),
+  };
 }
 /** Convert protocol metadata only; feature properties and audit detail remain exact JSON. */
 function decode(value: unknown, key = ""): unknown {

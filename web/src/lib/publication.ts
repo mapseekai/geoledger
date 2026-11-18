@@ -45,12 +45,9 @@ export function releasePublication(
   wasPending: boolean,
   code?: string,
 ): boolean {
-  if (code === "publication_attempt_rejected") return !wasPending;
   return (
     !uncertain &&
     (!wasPending ||
-      (!uncertainStatus(status) &&
-        ![400, 401, 403, 404].includes(status) &&
-        code !== "invalid_argument"))
+      (!uncertainStatus(status) && code === "workspace_version_conflict"))
   );
 }

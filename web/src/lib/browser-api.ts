@@ -52,17 +52,37 @@ export async function send<T>(
         window.location.replace("/login?expired=1");
       }
       let detail: Record<string, unknown> = {};
+      let currentDetail = false;
       try {
-        const value = JSON.parse(await response.text());
-        if (value?.error && typeof value.error === "object")
-          detail = value.error;
+        const value: unknown = JSON.parse(await response.text());
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          const candidate = (value as Record<string, unknown>).error;
+          if (
+            candidate &&
+            typeof candidate === "object" &&
+            !Array.isArray(candidate)
+          ) {
+            const row = candidate as Record<string, unknown>;
+            if (
+              typeof row.code === "string" &&
+              row.code.length > 0 &&
+              typeof row.message === "string" &&
+              typeof row.uncertain === "boolean"
+            ) {
+              detail = row;
+              currentDetail = true;
+            }
+          }
+        }
       } catch {
         // Gateway bodies may be empty, non-JSON or interrupted; the HTTP status is still known.
       }
       throw new ApiError(
         typeof detail.message === "string" ? detail.message : "请求失败",
         response.status,
-        detail.uncertain === true || uncertainStatus(response.status),
+        detail.uncertain === true ||
+          uncertainStatus(response.status) ||
+          (response.status === 409 && !currentDetail),
         typeof detail.requestId === "string" ? detail.requestId : undefined,
         typeof detail.code === "string" ? detail.code : undefined,
       );

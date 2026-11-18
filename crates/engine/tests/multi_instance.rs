@@ -37,9 +37,9 @@ fn feature(dataset: &str, id: &str, value: usize) -> Value {
 
 fn scenario(instances: &[Application]) -> TestResult {
     let first = instances.first().ok_or("instances")?;
-    first.migrate()?;
+    first.initialize()?;
     for app in instances {
-        app.migrate()?; // concurrent migrate on an already-current schema is a no-op
+        app.initialize()?; // concurrent initialize on an already-current schema is a no-op
     }
     let project = text(
         &execute(first, "create_project", json!({"name":"multi"}))?,

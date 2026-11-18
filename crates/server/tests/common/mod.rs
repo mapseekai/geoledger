@@ -29,6 +29,6 @@ pub fn seed(
 }
 pub fn database(path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     geoledger_engine::Application::new(geoledger_engine::Storage::Sqlite(path.to_owned()))
-        .migrate()?;
+        .initialize()?;
     seed(path, &[("ops", KEY, true)])
 }

@@ -126,6 +126,7 @@ export function failure(error: unknown) {
         error: {
           message: "参数格式不正确，请检查名称、版本与输入内容。",
           code: "invalid_argument",
+          uncertain: false,
         },
       },
       400,
@@ -134,13 +135,17 @@ export function failure(error: unknown) {
     const statuses: Record<string, number> = {
       unauthenticated: 401,
       permission_denied: 403,
-      forbidden: 403,
       not_found: 404,
       conflict: 409,
+      workspace_version_conflict: 409,
       invalid_argument: 400,
-      bad_request: 400,
       resource_exhausted: 429,
-      timeout: 504,
+      publication_attempt_rejected: 400,
+      deadline_exceeded: 504,
+      cancelled: 499,
+      busy: 429,
+      internal: 500,
+      unavailable: 503,
     };
     const status =
       "status" in error && typeof error.status === "number"
@@ -166,6 +171,7 @@ export function failure(error: unknown) {
   return reply(
     {
       error: {
+        code: "unavailable",
         message: "控制台服务暂时不可用，请检查服务配置。",
         uncertain: true,
       },

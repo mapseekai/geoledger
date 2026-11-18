@@ -72,9 +72,9 @@ impl Error {
             ]
             .contains(code)
         }) {
-            // Keep the legacy uncertain transport status. Older consumers must
-            // not discard an earlier unknown publication when a retry is rejected.
-            self.status = 503;
+            // This status settles this attempt only; clients must retain any
+            // earlier publication whose outcome is still unknown.
+            self.status = 400;
             self.body["error"]["code"] = json!("publication_attempt_rejected");
             self.body["error"]["message"] =
                 json!("business table rejected this publication attempt");

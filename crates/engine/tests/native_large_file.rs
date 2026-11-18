@@ -41,7 +41,7 @@ fn original_geometries_survive_native_storage() -> Result<(), Box<dyn std::error
     let path = dir.path().join("native.db");
     let app = Application::new(Storage::Sqlite(path.clone()))
         .with_timeout(std::time::Duration::from_secs(600));
-    app.migrate()?;
+    app.initialize()?;
     let p =
         app.execute("native", "create_project", json!({"name":"native test"}))?["project"].clone();
     let d = app.execute(

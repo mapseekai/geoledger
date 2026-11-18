@@ -15,7 +15,7 @@ test("lost committed response -> admission rejection -> success preserves origin
   const originalSecret = process.env.GL_WEB_SESSION_SECRET;
   process.env.GL_WEB_SESSION_SECRET = "test-only-session-secret-".repeat(3);
   try {
-    for (const status of [429, 413, 408, 504]) {
+    for (const status of [409, 429, 413, 408, 504]) {
       for (const source of ["upstream", "local", "fallback"]) {
         const intent = publication(
           "p",
@@ -102,10 +102,14 @@ test("lost committed response -> admission rejection -> success preserves origin
       assert.equal(body.error.uncertain, true);
       assert.equal(
         body.error.code,
-        status === 408 ? "timeout" : "resource_exhausted",
+        status === 408 ? "deadline_exceeded" : "resource_exhausted",
       );
     }
-    assert.equal(releasePublication(409, false, true), true);
+    assert.equal(releasePublication(409, false, true), false);
+    assert.equal(
+      releasePublication(409, false, true, "workspace_version_conflict"),
+      true,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     if (originalSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
@@ -160,7 +164,7 @@ test("non-JSON browser errors retain status, redirect and publication semantics"
   });
   try {
     for (const raw of ["<html>gateway error</html>", "", "null"]) {
-      for (const status of [401, 409, 429, 413, 408, 504]) {
+      for (const status of [401, 409, 422, 429, 413, 408, 504]) {
         redirects.length = 0;
         globalThis.fetch = async () => new Response(raw, { status });
         await assert.rejects(send("/api/console", "POST", {}), (error) => {
@@ -168,7 +172,7 @@ test("non-JSON browser errors retain status, redirect and publication semantics"
           assert.equal(error.status, status);
           assert.equal(
             releasePublication(error.status, error.uncertain, true, error.code),
-            status === 409,
+            false,
           );
           return true;
         });
@@ -256,7 +260,7 @@ test("source rejection crosses BFF and browser without settling an earlier unkno
                 message: "source rejected",
               },
             }),
-            { status: 503, headers: { "x-request-id": "correlation" } },
+            { status: 400, headers: { "x-request-id": "correlation" } },
           );
         return new Response('{"revision":2,"version":2,"changes":1}');
       };
@@ -264,7 +268,7 @@ test("source rejection crosses BFF and browser without settling an earlier unkno
         assert(error instanceof ApiError);
         assert.equal(error.code, "publication_attempt_rejected");
         assert.equal(error.requestId, "correlation");
-        assert.equal(error.uncertain, true);
+        assert.equal(error.uncertain, false);
         if (
           releasePublication(
             error.status,
@@ -286,6 +290,91 @@ test("source rejection crosses BFF and browser without settling an earlier unkno
         assert.equal(upstream[0], upstream[1]);
       } else assert.equal(stored, null);
     }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
+    else process.env.GL_WEB_SESSION_SECRET = originalSecret;
+  }
+});
+
+test("canonical SDK error codes retain their HTTP meaning through the BFF", async () => {
+  const { GeoLedgerError } = await import("@geoledger/client");
+  for (const [code, status] of [
+    ["publication_attempt_rejected", 400],
+    ["workspace_version_conflict", 409],
+    ["deadline_exceeded", 504],
+    ["cancelled", 499],
+    ["busy", 429],
+    ["internal", 500],
+    ["unavailable", 503],
+  ] as const) {
+    const error = new GeoLedgerError(
+      code,
+      "public failure",
+      "correlation",
+      undefined,
+      status >= 429,
+    );
+    const response = failure(error);
+    assert.equal(response.status, status);
+    const body = await response.json();
+    assert.equal(body.error.code, code);
+    assert.equal(body.error.requestId, "correlation");
+    assert.equal(body.error.uncertain, error.uncertain);
+  }
+});
+
+test("a merge rejection preserves an unknown intent until a permanent workspace version proof", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSecret = process.env.GL_WEB_SESSION_SECRET;
+  process.env.GL_WEB_SESSION_SECRET = "test-only-session-secret-".repeat(3);
+  const intent = publication("p", "w", "1", "original");
+  const sent: string[] = [];
+  let stored: string | null = JSON.stringify(intent);
+  let code = "conflict";
+  try {
+    globalThis.fetch = async (url, init) => {
+      if (url === "/api/console") {
+        try {
+          return reply(
+            await execute(
+              consoleClient("fixture-session"),
+              JSON.parse(String(init?.body)),
+            ),
+          );
+        } catch (error) {
+          return failure(error);
+        }
+      }
+      sent.push(String(init?.body));
+      return new Response(
+        JSON.stringify({ error: { code, message: "business rejection" } }),
+        { status: 409 },
+      );
+    };
+    for (const next of [
+      "conflict",
+      "unknown_business_error",
+      "workspace_version_conflict",
+    ]) {
+      code = next;
+      await assert.rejects(
+        send("/api/console", "POST", readPublication(stored)),
+        (error) => {
+          assert(error instanceof ApiError);
+          assert.equal(error.uncertain, false);
+          if (
+            releasePublication(error.status, error.uncertain, true, error.code)
+          )
+            stored = null;
+          return true;
+        },
+      );
+      if (code === "workspace_version_conflict") assert.equal(stored, null);
+      else assert.deepEqual(readPublication(stored), intent);
+    }
+    assert.equal(sent[0], sent[1]);
+    assert.equal(sent[1], sent[2]);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;

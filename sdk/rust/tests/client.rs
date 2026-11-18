@@ -340,6 +340,7 @@ async fn unknown_outcome_preserves_original_publication()
     let client = Client::connect(
         format!("http://{address}"),
         "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        Default::default(),
     )
     .await?;
     let mut draft = client.create_workspace("project").await?;
@@ -376,12 +377,12 @@ async fn unknown_outcome_preserves_original_publication()
     assert_eq!(draft.info().version, 5);
     let mut rejected = client.create_workspace("project").await?;
     assert!(rejected.publish("original").await.is_err());
-    assert!(rejected.pending_publication().is_some());
-    for code in [
-        "conflict",
-        "unauthenticated",
-        "permission_denied",
-        "not_found",
+    let rejected_intent = rejected.pending_publication().ok_or("lost intent")?.clone();
+    for (code, uncertain) in [
+        ("conflict", true),
+        ("unauthenticated", false),
+        ("permission_denied", false),
+        ("not_found", false),
     ] {
         let error = rejected
             .publish("original")
@@ -389,8 +390,15 @@ async fn unknown_outcome_preserves_original_publication()
             .err()
             .ok_or("expected rejection")?;
         assert_eq!(error.code, code);
-        assert!(rejected.pending_publication().is_none());
+        assert_eq!(error.uncertain, uncertain);
+        assert_eq!(rejected.pending_publication(), Some(&rejected_intent));
         assert_eq!(rejected.info().version, 4);
+    }
+    assert_eq!(rejected.publish("original").await?.revision, 2);
+    {
+        let seen = requests.lock().map_err(|_| "lock")?;
+        assert_eq!(seen.len(), 11);
+        assert!(seen[5..].iter().all(|request| request == &seen[5]));
     }
     server.abort();
     Ok(())
@@ -401,6 +409,7 @@ async fn plaintext_to_remote_hosts_requires_explicit_opt_in() {
     let refused = geoledger_client::Client::connect(
         "http://geoledger.example:7882",
         "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        Default::default(),
     )
     .await
     .err()
@@ -428,6 +437,7 @@ async fn register_table_preserves_create_dataset_wire_contract()
     let client = Client::connect(
         format!("http://{address}"),
         "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        Default::default(),
     )
     .await?;
     let source = PostgisTable {
@@ -493,6 +503,7 @@ async fn schema_queries_and_save_intent_preserve_presence()
     let client = Client::connect(
         format!("http://{address}"),
         "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        Default::default(),
     )
     .await?;
     let schema = client
@@ -602,12 +613,20 @@ fn publication_reply(version: i64) -> wire::PublishReply {
 }
 
 fn publication_attempt_rejected(code: tonic::Code) -> Status {
-    let message = "publication source data was rejected";
+    business_status(code, "publication_attempt_rejected", None)
+}
+
+fn business_status(
+    code: tonic::Code,
+    business_code: &str,
+    conflicts: Option<wire::ConflictsReply>,
+) -> Status {
+    let message = "publication attempt rejected";
     let detail = wire::ErrorDetail {
-        code: "publication_attempt_rejected".into(),
+        code: business_code.into(),
         message: message.into(),
         request_id: "request".into(),
-        conflicts: None,
+        conflicts,
     };
     let envelope = wire::RpcStatus {
         code: code as i32,
@@ -626,7 +645,7 @@ async fn archive_json_requires_explicit_boolean_before_rpc() -> TestResult {
     let service = Service::default();
     let archives = service.archives.clone();
     let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
-    let client = Client::connect(&server.endpoint, API_KEY).await?;
+    let client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
     for input in [
         json!({"project":"project"}),
         json!({"project":"project","archive":true}),
@@ -684,8 +703,14 @@ fn message_limits_require_positive_byte_counts() -> TestResult {
     let limits = MessageLimits::new(1, usize::MAX)?;
     assert_eq!(limits.max_encoding_bytes(), 1);
     assert_eq!(limits.max_decoding_bytes(), usize::MAX);
-    assert_eq!(MessageLimits::default().max_encoding_bytes(), usize::MAX);
-    assert_eq!(MessageLimits::default().max_decoding_bytes(), usize::MAX);
+    assert_eq!(
+        MessageLimits::default().max_encoding_bytes(),
+        64 * 1024 * 1024
+    );
+    assert_eq!(
+        MessageLimits::default().max_decoding_bytes(),
+        64 * 1024 * 1024
+    );
     Ok(())
 }
 
@@ -697,17 +722,20 @@ async fn message_limits_enforce_exact_protobuf_boundaries_and_survive_clone() ->
     let name = "roads";
     let request_bytes = wire::NameRequest { name: name.into() }.encoded_len();
     let response_bytes = project_reply(name.into()).encoded_len();
-    // Preserve source compatibility for existing callers using a complete literal.
+    // Complete literals name every field in the current connection contract.
     let options = ConnectOptions {
         timeout: Duration::from_secs(30),
         allow_insecure: false,
         ca_pem: None,
+        message_limits: MessageLimits::default(),
     };
-    let outbound = Client::connect_with_message_limits(
+    let outbound = Client::connect(
         &server.endpoint,
         API_KEY,
-        options.clone(),
-        MessageLimits::new(request_bytes - 1, response_bytes)?,
+        ConnectOptions {
+            message_limits: MessageLimits::new(request_bytes - 1, response_bytes)?,
+            ..options.clone()
+        },
     )
     .await?;
     let smaller_name = "road";
@@ -752,11 +780,13 @@ async fn message_limits_enforce_exact_protobuf_boundaries_and_survive_clone() ->
         assert!(seen.iter().all(|request| request.name == smaller_name));
     }
 
-    let inbound = Client::connect_with_message_limits(
+    let inbound = Client::connect(
         &server.endpoint,
         API_KEY,
-        options.clone(),
-        MessageLimits::new(request_bytes, response_bytes - 1)?,
+        ConnectOptions {
+            message_limits: MessageLimits::new(request_bytes, response_bytes - 1)?,
+            ..options.clone()
+        },
     )
     .await?;
     for client in [&inbound, &inbound.clone()] {
@@ -770,11 +800,13 @@ async fn message_limits_enforce_exact_protobuf_boundaries_and_survive_clone() ->
     }
     assert_eq!(projects.lock().map_err(|_| "lock")?.len(), 4);
 
-    let exact = Client::connect_with_message_limits(
+    let exact = Client::connect(
         &server.endpoint,
         API_KEY,
-        options,
-        MessageLimits::new(request_bytes, response_bytes)?,
+        ConnectOptions {
+            message_limits: MessageLimits::new(request_bytes, response_bytes)?,
+            ..options
+        },
     )
     .await?;
     assert_eq!(exact.create_project(name).await?.name, name);
@@ -784,7 +816,7 @@ async fn message_limits_enforce_exact_protobuf_boundaries_and_survive_clone() ->
 }
 
 #[tokio::test]
-async fn raised_limits_and_legacy_connections_accept_large_feature_pages() -> TestResult {
+async fn raised_and_default_limits_accept_large_feature_pages() -> TestResult {
     use serde_json::json;
     let features: Vec<_> = (0..12)
         .map(|id| {
@@ -814,11 +846,13 @@ async fn raised_limits_and_legacy_connections_accept_large_feature_pages() -> Te
         ..Service::default()
     };
     let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
-    let low = Client::connect_with_message_limits(
+    let low = Client::connect(
         &server.endpoint,
         API_KEY,
-        ConnectOptions::default(),
-        MessageLimits::new(1024, response_bytes - 1)?,
+        ConnectOptions {
+            message_limits: MessageLimits::new(1024, response_bytes - 1)?,
+            ..ConnectOptions::default()
+        },
     )
     .await?;
     let error = low
@@ -827,15 +861,17 @@ async fn raised_limits_and_legacy_connections_accept_large_feature_pages() -> Te
         .err()
         .ok_or("large page bypassed limit")?;
     assert_eq!(error.code, "resource_exhausted");
-    let raised = Client::connect_with_message_limits(
+    let raised = Client::connect(
         &server.endpoint,
         API_KEY,
-        ConnectOptions::default(),
-        MessageLimits::new(1024, response_bytes)?,
+        ConnectOptions {
+            message_limits: MessageLimits::new(1024, response_bytes)?,
+            ..ConnectOptions::default()
+        },
     )
     .await?;
-    let legacy = Client::connect(&server.endpoint, API_KEY).await?;
-    for client in [&raised, &legacy] {
+    let default_client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
+    for client in [&raised, &default_client] {
         let page = client
             .features("project", "dataset", FeatureQuery::default())
             .await?;
@@ -847,17 +883,77 @@ async fn raised_limits_and_legacy_connections_accept_large_feature_pages() -> Te
 }
 
 #[tokio::test]
+async fn default_message_ceiling_rejects_oversized_pages_and_explicit_limits_recover() -> TestResult
+{
+    let payload_bytes = 64 * 1024 * 1024;
+    let feature = serde_json::json!({"type":"Feature","id":"one","geometry":null,
+        "properties":{"note":"x".repeat(payload_bytes)}});
+    let reply = wire::FeaturesReply {
+        features: vec![wire::Feature {
+            geojson: feature.to_string(),
+        }],
+        revision: 1,
+        workspace_version: None,
+        next_after: None,
+        crs: "EPSG:4326".into(),
+    };
+    drop(feature);
+    let response_bytes = reply.encoded_len();
+    assert!(response_bytes > MessageLimits::default().max_decoding_bytes());
+    let server = TestServer::start(
+        Service {
+            feature_reply: Some(reply),
+            ..Service::default()
+        },
+        usize::MAX,
+        usize::MAX,
+    )
+    .await?;
+    let default_client =
+        Client::connect(&server.endpoint, API_KEY, ConnectOptions::default()).await?;
+    let error = default_client
+        .features("project", "dataset", FeatureQuery::default())
+        .await
+        .err()
+        .ok_or("default ceiling was bypassed")?;
+    assert_eq!(error.code, "resource_exhausted");
+    assert!(error.uncertain);
+    let raised = Client::connect(
+        &server.endpoint,
+        API_KEY,
+        ConnectOptions {
+            message_limits: MessageLimits::new(1024, response_bytes)?,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let page = raised
+        .features("project", "dataset", FeatureQuery::default())
+        .await?;
+    assert_eq!(page.features.len(), 1);
+    assert_eq!(
+        page.features[0]["properties"]["note"]
+            .as_str()
+            .map(str::len),
+        Some(payload_bytes)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn client_limits_do_not_override_server_message_limits() -> TestResult {
     let service = Service::default();
     let projects = service.projects.clone();
     let name = "roads";
     let request_bytes = wire::NameRequest { name: name.into() }.encoded_len();
     let server = TestServer::start(service, request_bytes - 1, usize::MAX).await?;
-    let client = Client::connect_with_message_limits(
+    let client = Client::connect(
         &server.endpoint,
         API_KEY,
-        ConnectOptions::default(),
-        MessageLimits::new(1024, 1024)?,
+        ConnectOptions {
+            message_limits: MessageLimits::new(1024, 1024)?,
+            ..ConnectOptions::default()
+        },
     )
     .await?;
     let error = client
@@ -883,11 +979,13 @@ async fn publication_reply_over_decoding_limit_preserves_recovery_intent() -> Te
         .map_err(|_| "lock")?
         .extend([Ok(reply.clone()), Ok(reply.clone()), Ok(reply)]);
     let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
-    let client = Client::connect_with_message_limits(
+    let client = Client::connect(
         &server.endpoint,
         API_KEY,
-        ConnectOptions::default(),
-        MessageLimits::new(1024, response_bytes - 1)?,
+        ConnectOptions {
+            message_limits: MessageLimits::new(1024, response_bytes - 1)?,
+            ..ConnectOptions::default()
+        },
     )
     .await?;
     let mut draft = client.create_workspace("project").await?;
@@ -915,11 +1013,13 @@ async fn publication_reply_over_decoding_limit_preserves_recovery_intent() -> Te
     assert!(clone_error.uncertain);
     assert_eq!(draft.pending_publication(), Some(&original));
 
-    let recovery = Client::connect_with_message_limits(
+    let recovery = Client::connect(
         &server.endpoint,
         API_KEY,
-        ConnectOptions::default(),
-        MessageLimits::new(1024, response_bytes)?,
+        ConnectOptions {
+            message_limits: MessageLimits::new(1024, response_bytes)?,
+            ..ConnectOptions::default()
+        },
     )
     .await?;
     let result = recovery.publish(&original).await?;
@@ -941,11 +1041,11 @@ async fn first_publication_attempt_rejection_allows_workspace_correction() -> Te
         .lock()
         .map_err(|_| "lock")?
         .extend([
-            Err(publication_attempt_rejected(tonic::Code::Unavailable)),
+            Err(publication_attempt_rejected(tonic::Code::InvalidArgument)),
             Ok(publication_reply(6)),
         ]);
     let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
-    let client = Client::connect(&server.endpoint, API_KEY).await?;
+    let client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
     let mut draft = client.create_workspace("project").await?;
     let error = draft
         .publish("rejected input")
@@ -977,33 +1077,32 @@ async fn retry_rejections_preserve_prior_unknown_publication() -> TestResult {
         .map_err(|_| "lock")?
         .extend([
             Err(Status::unavailable("response lost")),
-            Err(publication_attempt_rejected(tonic::Code::Unavailable)),
-            Err(publication_attempt_rejected(tonic::Code::Unavailable)),
-            // The stage code cannot release a retry even if a peer changes status.
+            Err(publication_attempt_rejected(tonic::Code::InvalidArgument)),
             Err(publication_attempt_rejected(tonic::Code::InvalidArgument)),
             Err(Status::invalid_argument("input rejected")),
+            Err(Status::unauthenticated("access expired")),
             Ok(publication_reply(5)),
         ]);
     let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
-    let client = Client::connect(&server.endpoint, API_KEY).await?;
+    let client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
     let mut draft = client.create_workspace("project").await?;
     assert!(draft.publish("original").await.is_err());
     let original = draft
         .pending_publication()
         .ok_or("lost publication")?
         .clone();
-    // The lower-level API has no first-attempt context and stays conservative.
+    // The current source-rejection status settles this lower-level attempt.
     let raw_error = client
         .publish(&original)
         .await
         .err()
         .ok_or("expected rejection")?;
     assert_eq!(raw_error.code, "publication_attempt_rejected");
-    assert!(raw_error.uncertain);
+    assert!(!raw_error.uncertain);
     for (code, uncertain) in [
-        ("publication_attempt_rejected", true),
         ("publication_attempt_rejected", false),
         ("invalid_argument", false),
+        ("unauthenticated", false),
     ] {
         let error = draft
             .publish("original")
@@ -1025,6 +1124,199 @@ async fn retry_rejections_preserve_prior_unknown_publication() -> TestResult {
 }
 
 #[tokio::test]
+async fn conflicts_without_workspace_version_proof_preserve_unknown_until_receipt() -> TestResult {
+    let mut cases = Vec::new();
+    for code in [
+        tonic::Code::Aborted,
+        tonic::Code::AlreadyExists,
+        tonic::Code::FailedPrecondition,
+    ] {
+        cases.push((Status::new(code, "proxy rejected retry"), "conflict", true));
+        cases.push((
+            Status::with_details(code, "malformed detail", vec![0xff].into()),
+            "conflict",
+            true,
+        ));
+        let empty_detail = wire::RpcStatus {
+            code: code as i32,
+            details: vec![wire::ErrorAny {
+                type_url: "type.googleapis.com/geoledger.v1.ErrorDetail".into(),
+                value: wire::ErrorDetail::default().encode_to_vec(),
+            }],
+            ..Default::default()
+        };
+        cases.push((
+            Status::with_details(
+                code,
+                "empty business code",
+                empty_detail.encode_to_vec().into(),
+            ),
+            "conflict",
+            true,
+        ));
+    }
+    let mismatched_envelope = wire::RpcStatus {
+        code: tonic::Code::Unavailable as i32,
+        details: vec![wire::ErrorAny {
+            type_url: "type.googleapis.com/geoledger.v1.ErrorDetail".into(),
+            value: wire::ErrorDetail {
+                code: "workspace_version_conflict".into(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        }],
+        ..Default::default()
+    };
+    cases.push((
+        Status::with_details(
+            tonic::Code::Aborted,
+            "mismatched envelope code",
+            mismatched_envelope.encode_to_vec().into(),
+        ),
+        "conflict",
+        true,
+    ));
+    cases.push((
+        Status::with_details(
+            tonic::Code::Aborted,
+            "empty protobuf envelope",
+            wire::RpcStatus::default().encode_to_vec().into(),
+        ),
+        "conflict",
+        true,
+    ));
+    cases.push((
+        business_status(tonic::Code::Aborted, "conflict", None),
+        "conflict",
+        false,
+    ));
+    cases.push((
+        business_status(
+            tonic::Code::Aborted,
+            "conflict",
+            Some(wire::ConflictsReply {
+                head: 9,
+                version: 4,
+                total: 1,
+                truncated: true,
+                ..Default::default()
+            }),
+        ),
+        "conflict",
+        false,
+    ));
+    cases.push((
+        business_status(tonic::Code::Aborted, "other_business_rejection", None),
+        "other_business_rejection",
+        false,
+    ));
+    cases.push((
+        business_status(tonic::Code::Unavailable, "workspace_version_conflict", None),
+        "workspace_version_conflict",
+        true,
+    ));
+    let service = Service::default();
+    let requests = service.requests.clone();
+    {
+        let mut replies = service.publication_replies.lock().map_err(|_| "lock")?;
+        replies.push_back(Err(Status::unavailable("original response lost")));
+        replies.extend(cases.iter().map(|(status, _, _)| Err(status.clone())));
+        replies.push_back(Ok(publication_reply(5)));
+    }
+    let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
+    let client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
+    let mut draft = client.create_workspace("project").await?;
+    assert!(draft.publish("original").await.is_err());
+    let original = draft.pending_publication().ok_or("lost intent")?.clone();
+    for (_, code, uncertain) in &cases {
+        let error = draft
+            .publish("original")
+            .await
+            .err()
+            .ok_or("expected retry rejection")?;
+        assert_eq!(error.code, *code);
+        assert_eq!(error.uncertain, *uncertain);
+        assert_eq!(draft.pending_publication(), Some(&original));
+        assert!(draft.save_batch(&[]).await.is_err());
+        assert!(draft.publish("changed").await.is_err());
+        assert_eq!(draft.info().version, 4);
+    }
+    assert_eq!(draft.publish("original").await?.revision, 2);
+    assert_eq!(draft.pending_publication(), Some(&original));
+    let seen = requests.lock().map_err(|_| "lock")?;
+    assert_eq!(seen.len(), cases.len() + 2);
+    assert!(seen.iter().all(|request| request == &seen[0]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn canonical_workspace_version_conflict_releases_prior_unknown_publication() -> TestResult {
+    let service = Service::default();
+    let requests = service.requests.clone();
+    service
+        .publication_replies
+        .lock()
+        .map_err(|_| "lock")?
+        .extend([
+            Err(Status::unavailable("original response lost")),
+            Err(business_status(
+                tonic::Code::Aborted,
+                "workspace_version_conflict",
+                None,
+            )),
+        ]);
+    let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
+    let client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
+    let mut draft = client.create_workspace("project").await?;
+    assert!(draft.publish("original").await.is_err());
+    assert!(draft.pending_publication().is_some());
+    let error = draft
+        .publish("original")
+        .await
+        .err()
+        .ok_or("expected stale workspace")?;
+    assert_eq!(error.code, "workspace_version_conflict");
+    assert!(!error.uncertain);
+    assert!(draft.pending_publication().is_none());
+    let seen = requests.lock().map_err(|_| "lock")?;
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0], seen[1]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn first_canonical_merge_conflict_releases_publication() -> TestResult {
+    let service = Service::default();
+    service
+        .publication_replies
+        .lock()
+        .map_err(|_| "lock")?
+        .push_back(Err(business_status(
+            tonic::Code::Aborted,
+            "conflict",
+            Some(wire::ConflictsReply {
+                head: 9,
+                version: 4,
+                total: 1,
+                truncated: true,
+                ..Default::default()
+            }),
+        )));
+    let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
+    let client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
+    let mut draft = client.create_workspace("project").await?;
+    let error = draft
+        .publish("original")
+        .await
+        .err()
+        .ok_or("expected conflict")?;
+    assert_eq!(error.code, "conflict");
+    assert!(!error.uncertain);
+    assert!(draft.pending_publication().is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn first_invalid_argument_still_releases_publication() -> TestResult {
     let service = Service::default();
     service
@@ -1033,7 +1325,7 @@ async fn first_invalid_argument_still_releases_publication() -> TestResult {
         .map_err(|_| "lock")?
         .push_back(Err(Status::invalid_argument("input rejected")));
     let server = TestServer::start(service, usize::MAX, usize::MAX).await?;
-    let client = Client::connect(&server.endpoint, API_KEY).await?;
+    let client = Client::connect(&server.endpoint, API_KEY, Default::default()).await?;
     let mut draft = client.create_workspace("project").await?;
     let error = draft
         .publish("original")

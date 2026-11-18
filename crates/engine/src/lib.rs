@@ -194,7 +194,9 @@ impl Application {
     pub fn backend(&self) -> &'static str {
         self.storage.name()
     }
-    pub fn migrate(&self) -> Result<()> {
+    /// Initialize a fresh current-format database or validate an existing one.
+    /// Other storage formats are rejected; initialization never upgrades them.
+    pub fn initialize(&self) -> Result<()> {
         self.storage.initialize(self.timeout)
     }
     pub fn check_schema(&self) -> Result<()> {

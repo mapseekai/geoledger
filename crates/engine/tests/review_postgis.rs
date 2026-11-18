@@ -35,7 +35,7 @@ impl Fixture {
             }
         );
         let app = Application::with_options(Storage::Postgis(target), options);
-        app.migrate()?;
+        app.initialize()?;
         let owner = Uuid::new_v4().to_string();
         let project = app.execute(&owner, "create_project", json!({"name":"review"}))?["project"]
             .as_str()

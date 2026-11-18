@@ -8,12 +8,13 @@ export function httpCode(status: number): string {
     401: "unauthenticated",
     403: "permission_denied",
     404: "not_found",
-    408: "timeout",
+    408: "deadline_exceeded",
     409: "conflict",
     413: "resource_exhausted",
+    422: "invalid_argument",
     429: "resource_exhausted",
     499: "cancelled",
-    504: "timeout",
+    504: "deadline_exceeded",
   };
   return codes[status] ?? "unavailable";
 }

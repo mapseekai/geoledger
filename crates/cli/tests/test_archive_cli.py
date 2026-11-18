@@ -98,23 +98,24 @@ class ArchiveCliTests(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=5) as response:
             return json.load(response)
 
-    def archive(self, body: dict, *, from_file: bool = False):
-        arguments = [str(self.cli_binary), "--endpoint", self.endpoint,
-                     "--api-key-file", str(self.key_file), "call", "archive_project"]
+    def call(self, operation: str, body: dict, *, from_file: bool = False,
+             flags: tuple[str, ...] = (), environment: dict | None = None):
+        arguments = [str(self.cli_binary), *flags, "--endpoint", self.endpoint,
+                     "--api-key-file", str(self.key_file), "call", operation]
         payload = json.dumps(body)
         if from_file:
-            path = self.directory / "archive.json"
+            path = self.directory / "request.json"
             path.write_text(payload)
             arguments += ["--file", str(path)]
             payload = None
         return subprocess.run(
             arguments, input=payload, capture_output=True, text=True,
-            cwd=ROOT, env=self.environment, timeout=10,
+            cwd=ROOT, env=self.environment if environment is None else environment, timeout=10,
         )
 
     def test_invalid_archive_intent_preserves_archived_project_and_false_reactivates(self):
         project = self.api("create_project", {"name": "CLI archive regression"})["project"]
-        archived = self.archive({"project": project, "archived": True})
+        archived = self.call("archive_project", {"project": project, "archived": True})
         self.assertEqual(archived.returncode, 0, archived.stderr)
         self.assertEqual(json.loads(archived.stdout)["state"], "archived")
         before = self.api("audit", {"project": project, "limit": 100})
@@ -125,7 +126,7 @@ class ArchiveCliTests(unittest.TestCase):
             {"project": project, "archived": False, "archive": True},
         ]:
             with self.subTest(body=body):
-                rejected = self.archive(body)
+                rejected = self.call("archive_project", body)
                 self.assertEqual(rejected.returncode, 1, rejected.stderr)
                 self.assertEqual(rejected.stdout, "")
                 error = json.loads(rejected.stderr)
@@ -135,13 +136,69 @@ class ArchiveCliTests(unittest.TestCase):
                 self.assertEqual(self.api("get_project", {"project": project})["state"], "archived")
                 self.assertEqual(self.api("audit", {"project": project, "limit": 100}), before)
 
-        reactivated = self.archive({"project": project, "archived": False}, from_file=True)
+        reactivated = self.call("archive_project", {"project": project, "archived": False}, from_file=True)
         self.assertEqual(reactivated.returncode, 0, reactivated.stderr)
         self.assertEqual(json.loads(reactivated.stdout)["state"], "active")
         self.assertEqual(self.api("get_project", {"project": project})["state"], "active")
         after = self.api("audit", {"project": project, "limit": 100})
         self.assertEqual(len(after["events"]), len(before["events"]) + 1)
         self.assertEqual(after["events"][-1]["action"], "unarchive_project")
+
+
+    def test_call_rejects_current_shape_errors_before_mutating_workspace(self):
+        project = self.api("create_project", {"name": "CLI shape regression"})["project"]
+        workspace = self.api("create_workspace", {"project": project})["workspace"]
+        before_workspace = self.api("get_workspace", {"project": project, "workspace": workspace})
+        before_audit = self.api("audit", {"project": project, "limit": 100})
+        for operation, body in [
+            ("info", {"project": project}),
+            ("create_project", {}),
+            ("create_project", {"name": "unwanted", "obsolete": True}),
+            ("save", {"project": project, "workspace": workspace, "edits": []}),
+            ("save", {"project": project, "workspace": workspace,
+                      "expected_workspace_version": "0", "edits": []}),
+            ("resolve", {"project": project, "workspace": workspace,
+                         "expected_workspace_version": 0, "expected_head": 0}),
+        ]:
+            with self.subTest(operation=operation, body=body):
+                rejected = self.call(operation, body)
+                self.assertEqual(rejected.returncode, 1, rejected.stderr)
+                self.assertEqual(rejected.stdout, "")
+                error = json.loads(rejected.stderr)
+                self.assertEqual(error["code"], "invalid_argument")
+                self.assertIs(error["uncertain"], False)
+                self.assertIsNone(error["request_id"])
+        self.assertEqual(self.api("get_workspace", {"project": project, "workspace": workspace}),
+                         before_workspace)
+        self.assertEqual(self.api("audit", {"project": project, "limit": 100}), before_audit)
+        current_defaults = self.call("list_projects", {"limit": None})
+        self.assertEqual(current_defaults.returncode, 0, current_defaults.stderr)
+        self.assertIn(project, [item["project"] for item in json.loads(current_defaults.stdout)["projects"]])
+
+    def test_client_message_limit_flags_and_environment_are_explicit(self):
+        for option in ["--max-encoding-bytes", "--max-decoding-bytes"]:
+            with self.subTest(option=option):
+                rejected = self.call("info", {}, flags=(option, "0"))
+                self.assertEqual(rejected.returncode, 1, rejected.stderr)
+                error = json.loads(rejected.stderr)
+                self.assertEqual(error["code"], "invalid_argument")
+                self.assertIs(error["uncertain"], False)
+                self.assertIsNone(error["request_id"])
+        explicit = self.call("info", {}, flags=("--max-encoding-bytes", "1024",
+                                                "--max-decoding-bytes", "1024"))
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        self.assertIn("version", json.loads(explicit.stdout))
+        environment = dict(self.environment, GL_CLIENT_MAX_ENCODING_BYTES="1024",
+                           GL_CLIENT_MAX_DECODING_BYTES="1024")
+        configured = self.call("info", {}, environment=environment)
+        self.assertEqual(configured.returncode, 0, configured.stderr)
+        self.assertIn("version", json.loads(configured.stdout))
+        rejected = self.call("create_project", {"name": "encoding limit"},
+                             flags=("--max-encoding-bytes", "1"))
+        self.assertEqual(rejected.returncode, 1, rejected.stderr)
+        error = json.loads(rejected.stderr)
+        self.assertIn(error["code"], ["resource_exhausted", "unavailable"])
+        self.assertIs(error["uncertain"], True)
 
 
 if __name__ == "__main__":

@@ -263,6 +263,9 @@ mod tests {
         fn feature_page(&mut self, _: &FeatureQuery) -> Result<Vec<Row>> {
             Err(Error::new(500, "unexpected page read"))
         }
+        fn feature_exists(&mut self, _: &FeatureQuery) -> Result<bool> {
+            Err(Error::new(500, "unexpected continuation probe"))
+        }
         fn feature_at(
             &mut self,
             p: &str,

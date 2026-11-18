@@ -7,7 +7,7 @@ on:
         type: string
         required: true
       release_tag:
-        description: New prerelease tag, e.g. v0.3.0-alpha.4
+        description: New prerelease tag matching the candidate package version
         type: string
         required: true
 permissions:

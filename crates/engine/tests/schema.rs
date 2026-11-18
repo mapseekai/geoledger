@@ -18,7 +18,7 @@ fn postgis_schema_publication_is_atomic_historical_and_restorable() {
     let table = format!("{schema_name}.schema_points");
     db.batch_execute(&format!("CREATE SCHEMA {schema_name}; CREATE TABLE {table}(fid bigint PRIMARY KEY,title text,remove text,amount bigint,protected text NOT NULL,indexed text,geom geometry(PointZ,3857)); CREATE INDEX schema_points_indexed ON {table}(indexed); INSERT INTO {table} VALUES(1,'first','original',9007199254740993,'keep','index',ST_SetSRID(ST_MakePoint(10.123456789,20.987654321,30.75),3857)),(2,'second',NULL,12,'keep','other',NULL);")).unwrap();
     let app = Application::new(Storage::Postgis(dsn));
-    app.migrate().unwrap();
+    app.initialize().unwrap();
     let password = Uuid::new_v4().to_string();
     app.bootstrap_admin("schema-fixture", &password).unwrap();
     let login = app
@@ -146,7 +146,7 @@ fn postgis_schema_publication_is_atomic_historical_and_restorable() {
     let mut archive = Vec::new();
     app.export_data(&mut archive).unwrap();
     let imported = Application::new(Storage::Sqlite(dir.path().join("schema.db")));
-    imported.migrate().unwrap();
+    imported.initialize().unwrap();
     imported
         .import_data(&mut std::io::Cursor::new(archive))
         .unwrap();
@@ -181,7 +181,7 @@ fn postgis_schema_saves_share_project_lock_and_preserve_workspace_cas() {
     let (dsn, mut db) = support::connect_isolated(&dsn, "schema-concurrency").unwrap();
     support::reset_database(&mut db).unwrap();
     let app = Application::new(Storage::Postgis(dsn));
-    app.migrate().unwrap();
+    app.initialize().unwrap();
     let password = Uuid::new_v4().to_string();
     app.bootstrap_admin("schema-fixture", &password).unwrap();
     let actor = app
@@ -338,7 +338,7 @@ fn postgis_schema_purge_preserves_cross_dataset_drafts_history_and_receipts() {
     let (dsn, mut db) = support::connect_isolated(&dsn, "schema-purge").unwrap();
     support::reset_database(&mut db).unwrap();
     let app = Application::new(Storage::Postgis(dsn));
-    app.migrate().unwrap();
+    app.initialize().unwrap();
     let password = Uuid::new_v4().to_string();
     app.bootstrap_admin("schema-fixture", &password).unwrap();
     let login = app

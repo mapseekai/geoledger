@@ -19,8 +19,8 @@ def needs(job: str) -> set[str]:
 
 
 def check(files: dict[str, str]) -> None:
+    check_tag_release(files)
     check_source_release(files)
-    check_source_recovery(files)
     release, hub, images, ci = (jobs(files[n]) for n in ('release.yml', 'dockerhub.yml', 'secure-images.yml', 'ci.yml'))
     # A declared dependency is not a gate when the dependent job overrides
     # failure propagation, or a required quality job is allowed to be skipped.
@@ -226,30 +226,17 @@ def check_signature_identity(text: str) -> None:
         raise ValueError('signature must use the exact reusable signer identity and GitHub issuer')
 
 
-def check_source_recovery(files: dict[str, str]) -> None:
-    text = files['source-release-recovery.yml']
-    check_signature_identity(text)
+def check_tag_release(files: dict[str, str]) -> None:
+    text = files['release.yml']
+    triggers = text.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
+    if triggers.strip() != "push:\n    tags: ['v[0-9]+.[0-9]+.[0-9]+*']":
+        raise ValueError('complete releases must be triggered by version tags')
     graph = jobs(text)
-    if set(graph) != {'validate', 'acceptance', 'complete'}:
-        raise ValueError('unexpected recovery jobs')
-    for name, prerequisites in (('validate', set()), ('acceptance', {'validate'}), ('complete', {'validate', 'acceptance'})):
-        if needs(graph[name]) != prerequisites or re.search(r'^\s+(?:- )?(if|continue-on-error):', graph[name], re.M):
-            raise ValueError('recovery gate must not be bypassed')
-        if 'ref: ${{ github.sha }}' not in graph[name] or 'ref: 6dccccd5ebc655f520a08c374823cc1389651f81' not in graph[name]:
-            raise ValueError('recovery must distinguish immutable tooling and original candidate')
-    for required in ('workflow_dispatch:', 'group: release-refs/tags/v0.3.0-alpha.4',
-                     'SOURCE_SHA: 6dccccd5ebc655f520a08c374823cc1389651f81', 'RELEASE_TAG: v0.3.0-alpha.4',
-                     'recover-source-release.py prepare', 'recover-source-release.py verify',
-                     'source-release.py preflight', 'source-release.py complete',
-                     'arch: amd64', 'runner: ubuntu-24.04', 'arch: arm64', 'runner: ubuntu-24.04-arm',
-                     'scripts/smoke-release-image.py', 'DOCKER_CONFIG=$RUNNER_TEMP/anonymous-docker',
-                     'pattern: image-acceptance-*', 'name: recovered-source-evidence'):
-        if required not in text:
-            raise ValueError('missing recovery protection: ' + required)
-    if re.search(r'build-push-action|docker/login-action|secure-images.yml\n|npm publish|pypi-publish|secrets\.|id-token: write', text):
-        raise ValueError('recovery must not rebuild, sign, push or publish SDKs')
-    if re.search(r'^  (push|pull_request):', text, re.M):
-        raise ValueError('recovery must be dispatched explicitly')
+    if set(graph) != {'quality', 'credentials', 'verify', 'binaries', 'images', 'github-release', 'sdks', 'complete'}:
+        raise ValueError('unexpected tag release jobs')
+    for name in ('quality', 'credentials', 'verify'):
+        if needs(graph[name]):
+            raise ValueError('tag release preflight must run directly')
 
 
 def main() -> None:

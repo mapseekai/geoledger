@@ -1,6 +1,6 @@
 {
   "name": "@geoledger/client",
-  "version": "0.3.0-alpha.9",
+  "version": "0.4.0-alpha.1",
   "description": "GeoLedger business client for Node.js",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -14,6 +14,14 @@ struct Args {
     /// Extra PEM CA bundle for https:// endpoints signed by a private CA.
     #[arg(long, env = "GL_CA_FILE")]
     ca_file: Option<PathBuf>,
+    /// Maximum outbound Protobuf message bytes, excluding the gRPC frame header.
+    /// Independent of server limits; must be positive.
+    #[arg(long, env = "GL_CLIENT_MAX_ENCODING_BYTES", default_value_t = 64 * 1024 * 1024)]
+    max_encoding_bytes: usize,
+    /// Maximum inbound Protobuf message bytes, excluding the gRPC frame header.
+    /// Independent of server limits; must be positive.
+    #[arg(long, env = "GL_CLIENT_MAX_DECODING_BYTES", default_value_t = 64 * 1024 * 1024)]
+    max_decoding_bytes: usize,
     #[command(subcommand)]
     command: Command,
 }
@@ -54,6 +62,8 @@ async fn main() {
 }
 async fn run(a: Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let api_key = read_api_key(std::env::var("GL_API_KEY").ok(), a.api_key_file)?;
+    let message_limits =
+        geoledger_client::MessageLimits::new(a.max_encoding_bytes, a.max_decoding_bytes)?;
     let (op, input) = match a.command {
         Command::Info => ("info".into(), serde_json::json!({})),
         Command::Projects => ("list_projects".into(), serde_json::json!({"limit":100})),
@@ -79,9 +89,10 @@ async fn run(a: Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let options = geoledger_client::ConnectOptions {
         allow_insecure: a.allow_insecure,
         ca_pem: a.ca_file.map(std::fs::read).transpose()?,
+        message_limits,
         ..Default::default()
     };
-    let client = geoledger_client::Client::connect_with(a.endpoint, &api_key, options).await?;
+    let client = geoledger_client::Client::connect(a.endpoint, &api_key, options).await?;
     let result = client.execute(&op, input).await?;
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())

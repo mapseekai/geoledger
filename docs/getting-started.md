@@ -10,7 +10,7 @@
 
 ## 环境准备
 
-Rust 最低版本由 [Cargo.toml](../Cargo.toml) 定义为 1.88；主 CI 使用 1.92，Dockerfile 的构建工具链固定为 1.98。通过已安装的 rustup 配置一致的工具链：
+Rust 最低版本由 [Cargo.toml](../Cargo.toml) 定义为 1.89；主 CI 使用 1.92，Dockerfile 的构建工具链固定为 1.98。通过已安装的 rustup 配置一致的工具链：
 
 ```sh
 rustup toolchain install 1.92.0 --profile minimal --component rustfmt,clippy

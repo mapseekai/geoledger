@@ -71,7 +71,7 @@ test("timeout remains an uncertain transport failure and is combined with caller
   }
 });
 
-test("source-rejection details preserve their code and uncertain transport status", async () => {
+test("source-rejection details preserve the definite current-attempt contract", async () => {
   const original = globalThis.fetch;
   try {
     globalThis.fetch = async () =>
@@ -84,14 +84,14 @@ test("source-rejection details preserve their code and uncertain transport statu
             uncertain: false,
           },
         }),
-        { status: 503 },
+        { status: 400 },
       );
     await assert.rejects(send("/api/console", "POST", {}), (error) => {
       assert(error instanceof ApiError);
       assert.equal(error.code, "publication_attempt_rejected");
       assert.equal(error.requestId, "correlation");
-      assert.equal(error.status, 503);
-      assert.equal(error.uncertain, true);
+      assert.equal(error.status, 400);
+      assert.equal(error.uncertain, false);
       return true;
     });
   } finally {
@@ -117,6 +117,50 @@ test("browser uses GET FeatureCollection while keeping original integer values f
     });
     assert.match(result.features[0].geojson, /18446744073709551615/);
     assert.match(result.features[0].geojson, /"__proto__":/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("bare or invalid 409 details cannot claim a permanent workspace rejection", async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const raw of [
+      "",
+      "proxy conflict",
+      "null",
+      '{"code":"workspace_version_conflict","message":"old shape"}',
+      '{"error":"old shape"}',
+      '{"error":{"code":"workspace_version_conflict","message":"missing certainty"}}',
+      '{"error":{"code":"workspace_version_conflict","message":"wrong certainty","uncertain":"false"}}',
+      '{"error":{"code":"","message":"missing code","uncertain":false}}',
+    ]) {
+      globalThis.fetch = async () => new Response(raw, { status: 409 });
+      await assert.rejects(send("/api/console", "POST", {}), (error) => {
+        assert(error instanceof ApiError);
+        assert.equal(error.status, 409);
+        assert.equal(error.uncertain, true);
+        assert.equal(error.code, undefined);
+        return true;
+      });
+    }
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "workspace_version_conflict",
+            message: "workspace version changed",
+            uncertain: false,
+          },
+        }),
+        { status: 409 },
+      );
+    await assert.rejects(send("/api/console", "POST", {}), (error) => {
+      assert(error instanceof ApiError);
+      assert.equal(error.code, "workspace_version_conflict");
+      assert.equal(error.uncertain, false);
+      return true;
+    });
   } finally {
     globalThis.fetch = original;
   }

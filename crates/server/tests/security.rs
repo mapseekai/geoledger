@@ -158,7 +158,7 @@ async fn tls_listeners_and_mutual_tls() -> TestResult {
     let mut connected = None;
     let mut last_error = String::new();
     for _ in 0..100 {
-        match Client::connect_with(&endpoint, &token, options.clone()).await {
+        match Client::connect(&endpoint, &token, options.clone()).await {
             Ok(client) => match client.info().await {
                 Ok(_) => {
                     connected = Some(client);
@@ -173,7 +173,12 @@ async fn tls_listeners_and_mutual_tls() -> TestResult {
     let client = connected.ok_or_else(|| format!("TLS gRPC unavailable: {last_error}"))?;
     assert_eq!(client.info().await?.backend, "sqlite");
     // Plaintext gRPC against the TLS listener fails instead of downgrading.
-    let plain = Client::connect(format!("http://127.0.0.1:{}", server.grpc.port()), &token).await;
+    let plain = Client::connect(
+        format!("http://127.0.0.1:{}", server.grpc.port()),
+        &token,
+        Default::default(),
+    )
+    .await;
     assert!(match plain {
         Ok(c) => c.info().await.is_err(),
         Err(_) => true,

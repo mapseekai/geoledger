@@ -108,19 +108,25 @@ def _error(error):
     codes = {_grpc.StatusCode.UNAUTHENTICATED: "unauthenticated", _grpc.StatusCode.PERMISSION_DENIED: "permission_denied",
              _grpc.StatusCode.NOT_FOUND: "not_found", _grpc.StatusCode.ABORTED: "conflict", _grpc.StatusCode.ALREADY_EXISTS: "conflict",
              _grpc.StatusCode.FAILED_PRECONDITION: "conflict", _grpc.StatusCode.INVALID_ARGUMENT: "invalid_argument",
-             _grpc.StatusCode.OUT_OF_RANGE: "invalid_argument", _grpc.StatusCode.DEADLINE_EXCEEDED: "timeout",
+             _grpc.StatusCode.OUT_OF_RANGE: "resource_exhausted", _grpc.StatusCode.DEADLINE_EXCEEDED: "deadline_exceeded",
              _grpc.StatusCode.CANCELLED: "cancelled", _grpc.StatusCode.RESOURCE_EXHAUSTED: "resource_exhausted"}
     uncertain = error.code() in (_grpc.StatusCode.DEADLINE_EXCEEDED, _grpc.StatusCode.CANCELLED, _grpc.StatusCode.UNAVAILABLE,
-                                _grpc.StatusCode.UNKNOWN, _grpc.StatusCode.INTERNAL, _grpc.StatusCode.DATA_LOSS, _grpc.StatusCode.RESOURCE_EXHAUSTED)
+                                _grpc.StatusCode.UNKNOWN, _grpc.StatusCode.INTERNAL, _grpc.StatusCode.DATA_LOSS, _grpc.StatusCode.RESOURCE_EXHAUSTED, _grpc.StatusCode.OUT_OF_RANGE)
     try:
         for key, value in error.trailing_metadata() or []:
             if key == "grpc-status-details-bin":
-                for item in _pb.RpcStatus.FromString(value).details:
+                envelope = _pb.RpcStatus.FromString(value)
+                if envelope.code != error.code().value[0]:
+                    raise ValueError("mismatched RPC status")
+                for item in envelope.details:
                     if item.type_url == "type.googleapis.com/geoledger.v1.ErrorDetail":
                         detail = _decode(_pb.ErrorDetail.FromString(item.value))
+                        if not detail["code"]:
+                            raise ValueError("missing business error code")
                         return GeoLedgerError(detail["code"], detail["message"], request_id=detail["request_id"], conflicts=detail["conflicts"], uncertain=uncertain)
     except Exception:
         pass  # Malformed optional metadata must not hide the original failure.
+    uncertain = uncertain or error.code() in (_grpc.StatusCode.ABORTED, _grpc.StatusCode.ALREADY_EXISTS, _grpc.StatusCode.FAILED_PRECONDITION)
     return GeoLedgerError(codes.get(error.code(), "unavailable"), error.details() or "request failed", uncertain=uncertain)
 
 _REQUESTS = {"RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDatasetRequest", "DeleteDataset": "DeleteDatasetRequest", "Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
@@ -385,13 +391,9 @@ class Workspace:
             try:
                 return self._update(self._client.publish(self._pending))
             except GeoLedgerError as e:
-                if e.code == "publication_attempt_rejected":
-                    # A rejection of this attempt cannot settle an earlier
-                    # unknown attempt that may still reach the publication lock.
-                    if not was_pending:
-                        self._pending = None
-                        e.uncertain = False
-                elif not e.uncertain and (not was_pending or e.code not in ("unauthenticated", "permission_denied", "not_found", "invalid_argument")):
+                # Only a permanent workspace-version rejection can settle a
+                # previously unknown request; HEAD-dependent conflicts cannot.
+                if not e.uncertain and (not was_pending or e.code == "workspace_version_conflict"):
                     self._pending = None
                 raise
 

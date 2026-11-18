@@ -532,6 +532,15 @@ impl ProjectRepository for Transaction {
     }
 }
 impl FeatureRepository for Transaction {
+    fn feature_exists(&mut self, query: &FeatureQuery) -> Result<bool> {
+        let value = if query.workspace.is_some() && self.local.status == "open" {
+            self.draft_value()
+        } else {
+            self.local.published.as_ref()
+        };
+        Ok(query.after.as_str() < "one" && value.is_some())
+    }
+
     fn feature_page(&mut self, query: &FeatureQuery) -> Result<Vec<Row>> {
         let value = if query.workspace.is_some() && self.local.status == "open" {
             self.draft_value()

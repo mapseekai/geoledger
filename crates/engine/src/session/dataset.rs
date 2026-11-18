@@ -270,7 +270,7 @@ mod tests {
 
     fn dataset_tables(storage: Storage) -> Result<()> {
         let app = Application::new(storage.clone());
-        app.migrate()?;
+        app.initialize()?;
         let mut db = Client::open(
             &storage,
             &Arc::new(postgres::Pool::default()),

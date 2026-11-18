@@ -166,7 +166,6 @@ export function PublishDialog({
         ) {
           sessionStorage.removeItem("gl.publication");
           setPending(undefined);
-          error.uncertain = false;
         }
         if (error instanceof ApiError && error.status === 409)
           setRecheck((n) => n + 1);

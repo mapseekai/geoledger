@@ -92,14 +92,15 @@ impl Client {
             Storage::Postgis(dsn) => Backend::Postgis(pool.connect(dsn, timeout)?),
             Storage::Sqlite(path) => {
                 let c = rusqlite::Connection::open(path).map_err(sqlite_error)?;
-                let native = geoledger_spatialite::load_configured(c).map_err(|e| {
+                let mut native = geoledger_spatialite::load_configured(c).map_err(|e| {
                     Error::new(500, "cannot load SpatiaLite; install mod_spatialite or set GL_SPATIALITE_EXTENSION to its trusted library path").caused_by(e)
                 })?;
+                native
+                    .progress_handler(1000, Some(move || Instant::now() >= deadline))
+                    .map_err(sqlite_error)?;
                 let c = native.read().map_err(sqlite_error)?;
                 c.busy_timeout(timeout).map_err(sqlite_error)?;
                 c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;")
-                    .map_err(sqlite_error)?;
-                c.progress_handler(1000, Some(move || Instant::now() >= deadline))
                     .map_err(sqlite_error)?;
                 let flags = FunctionFlags::SQLITE_UTF8
                     | FunctionFlags::SQLITE_DETERMINISTIC
@@ -388,7 +389,7 @@ impl Client {
         Ok(SqlTransaction(self, TransactionState::default()))
     }
     /// Initialize a fresh current-format database or validate an existing one.
-    fn migrate(self) -> Result<()> {
+    fn initialize(self) -> Result<()> {
         let sqlite = matches!(self.backend, Backend::Sqlite(_));
         if let Backend::Sqlite(connection) = &self.backend {
             self.sqlite_admission(connection, "PRAGMA journal_mode=WAL")?;
@@ -483,8 +484,8 @@ impl Drop for Client {
         if self.transaction {
             match &mut self.backend {
                 Backend::Sqlite(c) => {
+                    let _ = c.progress_handler(0, None::<fn() -> bool>);
                     if let Ok(c) = c.read() {
-                        let _ = c.progress_handler(0, None::<fn() -> bool>);
                         let _ = c.execute_batch("ROLLBACK");
                     }
                 }
@@ -671,6 +672,47 @@ pub(crate) fn verify_sqlite_file(path: &std::path::Path, timeout: Duration) -> R
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sqlite_drop_clears_cancellation_before_rollback() -> Result<()> {
+        use std::sync::atomic::AtomicUsize;
+        let dir =
+            tempfile::tempdir().map_err(|e| Error::new(500, "test directory").caused_by(e))?;
+        let storage = Storage::Sqlite(dir.path().join("cancelled-rollback.db"));
+        let pool = Arc::new(postgres::Pool::default());
+        let timeout = Duration::from_secs(30);
+        let mut client = Client::open(&storage, &pool, timeout)?;
+        client.batch_execute("CREATE TABLE rollback_probe(value INTEGER)")?;
+        let mut t = client.transaction(false)?;
+        t.batch_execute("INSERT INTO rollback_probe VALUES(1)")?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        if let Backend::Sqlite(connection) = &mut t.0.backend {
+            connection
+                .progress_handler(
+                    1,
+                    Some(move || {
+                        observed.fetch_add(1, Ordering::Relaxed);
+                        true
+                    }),
+                )
+                .map_err(sqlite_error)?;
+        }
+        drop(t);
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "rollback must not invoke the cancelled operation's progress callback"
+        );
+        let mut reopened = Client::open(&storage, &pool, timeout)?;
+        assert_eq!(
+            reopened
+                .query_one("SELECT count(*) FROM rollback_probe", &[])?
+                .get::<_, i64>(0usize)?,
+            0
+        );
+        Ok(())
+    }
 
     fn seed_current_from_history(
         t: &mut SqlTransaction,
@@ -872,7 +914,7 @@ mod tests {
             ..Default::default()
         }));
         let timeout = Duration::from_secs(10);
-        Client::open(&storage, &pool, timeout)?.migrate()?;
+        Client::open(&storage, &pool, timeout)?.initialize()?;
         for outcome in ["rollback_failure", "deadline", "unwind"] {
             let project = uuid::Uuid::new_v4().to_string();
             let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
@@ -975,7 +1017,7 @@ mod tests {
                 .get::<_, String>(0usize)?,
             "geoledger_test"
         );
-        Client::open(&storage, &pool, timeout)?.migrate()?;
+        Client::open(&storage, &pool, timeout)?.initialize()?;
         let project = uuid::Uuid::new_v4().to_string();
         let other = uuid::Uuid::new_v4().to_string();
         let mut setup = Client::open(&storage, &pool, timeout)?.transaction(false)?;
@@ -1065,7 +1107,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let storage = Storage::Sqlite(dir.path().join("query.db"));
             let pool = Arc::new(postgres::Pool::default());
-            Client::open(&storage, &pool, Duration::from_secs(30))?.migrate()?;
+            Client::open(&storage, &pool, Duration::from_secs(30))?.initialize()?;
             let mut t =
                 Client::open(&storage, &pool, Duration::from_secs(30))?.transaction(false)?;
             t.batch_execute(
@@ -1089,8 +1131,7 @@ mod tests {
             seed_current_from_history(&mut t, "p", "d")?;
             let steps = Arc::new(AtomicUsize::new(0));
             let observed = steps.clone();
-            if let Backend::Sqlite(c) = &t.0.backend {
-                let c = c.read().map_err(sqlite_error)?;
+            if let Backend::Sqlite(c) = &mut t.0.backend {
                 c.progress_handler(
                     1,
                     Some(move || {
@@ -1268,7 +1309,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let storage = Storage::Sqlite(dir.path().join("sparse.db"));
             let pool = Arc::new(postgres::Pool::default());
-            Client::open(&storage, &pool, Duration::from_secs(30))?.migrate()?;
+            Client::open(&storage, &pool, Duration::from_secs(30))?.initialize()?;
             let mut t =
                 Client::open(&storage, &pool, Duration::from_secs(30))?.transaction(false)?;
             t.batch_execute(r#"
@@ -1296,8 +1337,7 @@ mod tests {
             seed_current_from_history(&mut t, "p", "other")?;
             let steps = Arc::new(AtomicUsize::new(0));
             let observed = steps.clone();
-            if let Backend::Sqlite(c) = &t.0.backend {
-                let c = c.read().map_err(sqlite_error)?;
+            if let Backend::Sqlite(c) = &mut t.0.backend {
                 c.progress_handler(
                     1,
                     Some(move || {
@@ -1367,7 +1407,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let storage = Storage::Sqlite(dir.path().join("close-history.db"));
             let pool = Arc::new(postgres::Pool::default());
-            Client::open(&storage, &pool, Duration::from_secs(30))?.migrate()?;
+            Client::open(&storage, &pool, Duration::from_secs(30))?.initialize()?;
             let mut t =
                 Client::open(&storage, &pool, Duration::from_secs(30))?.transaction(false)?;
             t.batch_execute("INSERT INTO gl_projects(id,name) VALUES('p','p'); INSERT INTO gl_project_members(project,subject,role) VALUES('p','alice','owner'); INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('p','d','points','point'); INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('p','w','alice',0); INSERT INTO gl_commits(project,revision,workspace,subject,message) VALUES('p',1,'w','alice','seed'),('p',2,'w','alice','edit'); WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<5000) INSERT INTO gl_history(project,dataset,feature_id,valid_from,properties) SELECT 'p','d',printf('%08d',n),1,'{}' FROM ids;")?;
@@ -1377,17 +1417,15 @@ mod tests {
             t.flush_stage()?;
             let steps = Arc::new(AtomicUsize::new(0));
             let observed = steps.clone();
-            if let Backend::Sqlite(c) = &t.0.backend {
-                c.read()
-                    .map_err(sqlite_error)?
-                    .progress_handler(
-                        1,
-                        Some(move || {
-                            observed.fetch_add(1, Ordering::Relaxed);
-                            false
-                        }),
-                    )
-                    .map_err(sqlite_error)?;
+            if let Backend::Sqlite(c) = &mut t.0.backend {
+                c.progress_handler(
+                    1,
+                    Some(move || {
+                        observed.fetch_add(1, Ordering::Relaxed);
+                        false
+                    }),
+                )
+                .map_err(sqlite_error)?;
             }
             t.close_history("p", 2)?;
             let work = steps.load(Ordering::Relaxed);
@@ -1426,14 +1464,13 @@ mod tests {
             let dir = tempfile::tempdir()?;
             let storage = Storage::Sqlite(dir.path().join("bounded.db"));
             let pool = Arc::new(postgres::Pool::default());
-            Client::open(&storage, &pool, Duration::from_secs(30))?.migrate()?;
+            Client::open(&storage, &pool, Duration::from_secs(30))?.initialize()?;
             let mut t =
                 Client::open(&storage, &pool, Duration::from_secs(30))?.transaction(false)?;
             t.batch_execute("INSERT INTO gl_projects(id,name) VALUES('p','p'); INSERT INTO gl_project_members(project,subject,role) VALUES('p','alice','owner'); INSERT INTO gl_datasets(project,id,name,geometry_type) VALUES('p','d','points','point'); INSERT INTO gl_workspaces(project,id,owner,base_revision) VALUES('p','w','alice',0);")?;
             let steps = Arc::new(AtomicUsize::new(0));
             let observed = steps.clone();
-            if let Backend::Sqlite(c) = &t.0.backend {
-                let c = c.read().map_err(sqlite_error)?;
+            if let Backend::Sqlite(c) = &mut t.0.backend {
                 c.progress_handler(
                     1,
                     Some(move || {
@@ -1494,7 +1531,7 @@ mod tests {
             let dir = tempfile::tempdir()?;
             let path = dir.path().join("cache.db");
             let app = crate::Application::new(Storage::Sqlite(path.clone()));
-            app.migrate()?;
+            app.initialize()?;
             let p = uuid::Uuid::new_v4().to_string();
             let d = uuid::Uuid::new_v4().to_string();
             let w = uuid::Uuid::new_v4().to_string();
@@ -1558,7 +1595,7 @@ mod tests {
             let storage = Storage::Postgis(dsn);
             let pool = Arc::new(postgres::Pool::default());
             let timeout = Duration::from_secs(30);
-            Client::open(&storage, &pool, timeout)?.migrate()?;
+            Client::open(&storage, &pool, timeout)?.initialize()?;
             let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
             let project = uuid::Uuid::new_v4().to_string();
             let table = format!("batch_{}", uuid::Uuid::new_v4().simple());
@@ -1710,7 +1747,7 @@ mod tests {
             let storage = Storage::Postgis(dsn);
             let pool = Arc::new(postgres::Pool::default());
             let timeout = Duration::from_secs(30);
-            Client::open(&storage, &pool, timeout)?.migrate()?;
+            Client::open(&storage, &pool, timeout)?.initialize()?;
             let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
             let p = uuid::Uuid::new_v4().to_string();
             let d = uuid::Uuid::new_v4().to_string();
@@ -1926,7 +1963,7 @@ mod tests {
             let storage = Storage::Postgis(dsn);
             let pool = Arc::new(postgres::Pool::default());
             let timeout = Duration::from_secs(30);
-            Client::open(&storage, &pool, timeout)?.migrate()?;
+            Client::open(&storage, &pool, timeout)?.initialize()?;
             let mut t = Client::open(&storage, &pool, timeout)?.transaction(false)?;
             let background = uuid::Uuid::new_v4().to_string();
             let project = uuid::Uuid::new_v4().to_string();

@@ -311,7 +311,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
     };
     let app = application(&args, storage);
     let bootstrap = app.clone();
-    tokio::task::spawn_blocking(move || bootstrap.migrate()).await??;
+    tokio::task::spawn_blocking(move || bootstrap.initialize()).await??;
     let initial = app.clone();
     let username = args.admin_username.clone();
     let data_dir = args.data_dir.clone();
@@ -611,7 +611,7 @@ mod tests {
         std::fs::create_dir_all(&root)?;
         let dir = tempfile::tempdir_in(root)?;
         let app = Application::new(Storage::Sqlite(dir.path().join("db.sqlite3")));
-        app.migrate()?;
+        app.initialize()?;
         Ok((dir, app))
     }
     #[test]

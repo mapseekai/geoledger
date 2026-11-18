@@ -47,7 +47,9 @@ async fn connect(
     token: &str,
 ) -> Result<Client, Box<dyn std::error::Error + Send + Sync>> {
     for _ in 0..100 {
-        if let Ok(c) = Client::connect(format!("http://{}", s.grpc), token).await {
+        if let Ok(c) =
+            Client::connect(format!("http://{}", s.grpc), token, Default::default()).await
+        {
             return Ok(c);
         }
         tokio::time::sleep(Duration::from_millis(30)).await;

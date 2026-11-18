@@ -1,4 +1,5 @@
 //! GeoLedger client: ordinary business methods, with a private network transport.
+mod input;
 mod models;
 use geoledger_rpc::v1 as pb;
 pub use models::*;
@@ -113,13 +114,15 @@ impl From<Status> for Error {
         use prost::Message;
         let detail = pb::RpcStatus::decode(status.details())
             .ok()
+            .filter(|envelope| envelope.code == status.code() as i32)
             .and_then(|envelope| {
                 envelope
                     .details
                     .into_iter()
                     .find(|d| d.type_url == "type.googleapis.com/geoledger.v1.ErrorDetail")
             })
-            .and_then(|d| pb::ErrorDetail::decode(d.value.as_slice()).ok());
+            .and_then(|d| pb::ErrorDetail::decode(d.value.as_slice()).ok())
+            .filter(|detail| !detail.code.trim().is_empty());
         let code = match status.code() {
             tonic::Code::Unauthenticated => "unauthenticated",
             tonic::Code::PermissionDenied => "permission_denied",
@@ -131,11 +134,13 @@ impl From<Status> for Error {
             // Tonic uses an undetailed OutOfRange for both encoding and decoding
             // message limits. It does not identify which peer rejected the message.
             tonic::Code::OutOfRange => "resource_exhausted",
-            tonic::Code::DeadlineExceeded => "timeout",
+            tonic::Code::DeadlineExceeded => "deadline_exceeded",
             tonic::Code::Cancelled => "cancelled",
             tonic::Code::ResourceExhausted => "resource_exhausted",
             _ => "unavailable",
         };
+        // A proxy can reject a retry while an earlier publication still runs.
+        // Undetailed or malformed conflict-family statuses prove no business state.
         let uncertain = matches!(
             status.code(),
             tonic::Code::DeadlineExceeded
@@ -146,7 +151,11 @@ impl From<Status> for Error {
                 | tonic::Code::DataLoss
                 | tonic::Code::ResourceExhausted
                 | tonic::Code::OutOfRange
-        );
+        ) || (detail.is_none()
+            && matches!(
+                status.code(),
+                tonic::Code::Aborted | tonic::Code::AlreadyExists | tonic::Code::FailedPrecondition
+            ));
         let diagnostic = Some(Arc::new(Diagnostic {
             description: format!("gRPC {:?}", status.code()),
             cause: None,
@@ -261,6 +270,8 @@ pub struct ConnectOptions {
     pub allow_insecure: bool,
     /// Extra PEM CA bundle trusted for `https://` endpoints (private PKI).
     pub ca_pem: Option<Vec<u8>>,
+    /// Per-message outbound and inbound Protobuf byte limits.
+    pub message_limits: MessageLimits,
 }
 impl Default for ConnectOptions {
     fn default() -> Self {
@@ -268,6 +279,7 @@ impl Default for ConnectOptions {
             timeout: Duration::from_secs(30),
             allow_insecure: false,
             ca_pem: None,
+            message_limits: MessageLimits::default(),
         }
     }
 }
@@ -276,8 +288,7 @@ impl Default for ConnectOptions {
 ///
 /// Both limits must be in `1..=usize::MAX`. They count serialized message bytes,
 /// excluding the gRPC frame header; this client does not enable compression.
-/// [`MessageLimits::default`] uses `usize::MAX` for both directions, preserving
-/// the behavior of the existing connection methods. gRPC framing limits and the
+/// [`MessageLimits::default`] uses 64 MiB for both directions. gRPC framing limits and the
 /// server's own limits still apply. These are not process-memory limits: encoding,
 /// JSON conversion, and concurrent requests may allocate additional memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,19 +327,10 @@ impl MessageLimits {
 impl Default for MessageLimits {
     fn default() -> Self {
         Self {
-            max_encoding_bytes: usize::MAX,
-            max_decoding_bytes: usize::MAX,
+            max_encoding_bytes: 64 * 1024 * 1024,
+            max_decoding_bytes: 64 * 1024 * 1024,
         }
     }
-}
-
-// Business input must retain the caller's explicit archive/reactivate intent
-// before conversion to the generated proto3 request and its defaulted fields.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ArchiveProjectInput {
-    project: String,
-    archived: bool,
 }
 
 /// True for `localhost` and loopback IP literals.
@@ -345,55 +347,23 @@ fn insecure_opt_in() -> bool {
 }
 
 impl Client {
-    /// Connect with a 30-second per-request timeout. Requires an API Key.
-    ///
-    /// Errors classify invalid configuration or unavailable transport; local
-    /// diagnostic sources contain only safe classifications. Clones share the channel.
-    pub async fn connect(endpoint: impl Into<String>, api_key: &str) -> Result<Self, Error> {
-        Self::connect_with(endpoint, api_key, ConnectOptions::default()).await
-    }
-    /// Connect with a positive per-request timeout; connection establishment is
-    /// separately bounded to ten seconds. Dropping a request future cancels local
-    /// waiting but does not prove that a server-side write was rolled back.
-    pub async fn connect_with_timeout(
-        endpoint: impl Into<String>,
-        api_key: &str,
-        timeout: Duration,
-    ) -> Result<Self, Error> {
-        Self::connect_with(
-            endpoint,
-            api_key,
-            ConnectOptions {
-                timeout,
-                ..ConnectOptions::default()
-            },
-        )
-        .await
-    }
-    /// Connect using explicit TLS and timeout options. Plaintext is restricted
-    /// to loopback unless explicitly allowed. Invalid options return
-    /// `invalid_argument`; connection failures return `unavailable`.
-    pub async fn connect_with(
-        endpoint: impl Into<String>,
-        api_key: &str,
-        options: ConnectOptions,
-    ) -> Result<Self, Error> {
-        Self::connect_with_message_limits(endpoint, api_key, options, MessageLimits::default())
-            .await
-    }
     /// Connect using explicit TLS, timeout, and per-message byte limits.
     ///
+    /// Use [`ConnectOptions::default`] for a 30-second request timeout and 64 MiB
+    /// limits in each direction. Connection establishment is bounded to ten seconds.
+    /// Plaintext is restricted to loopback unless explicitly allowed. Invalid
+    /// configuration returns `invalid_argument`; connection failures return `unavailable`.
     /// The limits are retained by every client clone. A rejected response can
     /// arrive after a write commits, so message-limit errors remain uncertain.
     /// Retry an identical pending publication, using a new client with a larger
     /// decoding limit if needed. This does not raise the server's own limits.
-    pub async fn connect_with_message_limits(
+    pub async fn connect(
         endpoint: impl Into<String>,
         api_key: &str,
         options: ConnectOptions,
-        message_limits: MessageLimits,
     ) -> Result<Self, Error> {
         let timeout = options.timeout;
+        let message_limits = options.message_limits;
         let endpoint = endpoint.into();
         let mut e = Endpoint::from_shared(endpoint).map_err(|error| {
             Error::invalid("endpoint must be http(s)://host:port")
@@ -458,9 +428,11 @@ impl Client {
         })
     }
     /// Advanced business-JSON entry point, also used by the CLI. GeoJSON is a plain object.
-    /// `archive_project` requires `project` and an explicit boolean `archived`,
-    /// and rejects unknown fields before sending the RPC.
+    /// Requires the current operation's explicit required fields and JSON types.
+    /// Unknown request fields are rejected before sending the RPC. Feature properties
+    /// remain ordinary, unrestricted JSON values.
     pub async fn execute(&self, operation: &str, mut value: Value) -> Result<Value, Error> {
+        input::validate(operation, &value)?;
         for key in ["edits", "resolutions"] {
             if let Some(edits) = value.get_mut(key).and_then(Value::as_array_mut) {
                 for edit in edits {
@@ -640,17 +612,11 @@ impl Client {
                     .await?
                     .into_inner(),
             )?,
-            "archive_project" => {
-                let input: ArchiveProjectInput = serde_json::from_value(value)?;
-                serde_json::to_value(
-                    rpc.archive_project(pb::ArchiveProjectRequest {
-                        project: input.project,
-                        archived: input.archived,
-                    })
+            "archive_project" => serde_json::to_value(
+                rpc.archive_project(serde_json::from_value::<pb::ArchiveProjectRequest>(value)?)
                     .await?
                     .into_inner(),
-                )?
-            }
+            )?,
             "delete_project" => serde_json::to_value(
                 rpc.delete_project(serde_json::from_value::<pb::DeleteProjectRequest>(value)?)
                     .await?
@@ -1119,10 +1085,10 @@ impl Workspace {
     /// After cancellation or an uncertain error, retry with the identical message
     /// or recover the intent through [`Workspace::pending_publication`]. Pending
     /// publication blocks edits. A successful retry replays the committed receipt.
-    /// A first `publication_attempt_rejected` permits correcting this workspace;
-    /// the same error during a retry preserves the prior uncertain intent. Other
-    /// definitive failures can clear pending intent, but authorization and input
-    /// failures during a retry preserve it for later recovery.
+    /// A definitive first-attempt rejection permits correcting this workspace.
+    /// After an earlier unknown attempt, only a definitive, validated business
+    /// `workspace_version_conflict` can release the pending intent. Other errors,
+    /// including merge conflicts, do not prove the earlier attempt cannot commit.
     pub async fn publish(&mut self, message: &str) -> Result<PublicationResult, Error> {
         let was_pending = self.pending.is_some();
         if let Some(p) = &self.pending {
@@ -1151,27 +1117,11 @@ impl Workspace {
                 self.info.status = result.status.clone();
                 Ok(result)
             }
-            Err(mut e) => {
-                // This code proves only that this attempt was rejected before
-                // commit. An earlier in-flight attempt may still commit, so a
-                // retry must retain its original intent regardless of the flag.
-                if e.code == "publication_attempt_rejected" {
-                    if !was_pending {
-                        e.uncertain = false;
-                        self.pending = None;
-                    }
-                    return Err(e);
-                }
-                if !e.uncertain
-                    && (!was_pending
-                        || !matches!(
-                            e.code.as_str(),
-                            "unauthenticated"
-                                | "permission_denied"
-                                | "not_found"
-                                | "invalid_argument"
-                        ))
-                {
+            Err(e) => {
+                // A merge conflict can disappear if HEAD changes again. Only an
+                // authoritative workspace version/closed-state rejection proves
+                // that an earlier publication with this version cannot still commit.
+                if !e.uncertain && (!was_pending || e.code == "workspace_version_conflict") {
                     self.pending = None
                 }
                 Err(e)
@@ -1344,6 +1294,12 @@ mod tests {
         assert_eq!(error.code, "business_range");
         assert_eq!(error.message, "business range rejected");
         assert_eq!(error.request_id.as_deref(), Some("request"));
+        assert!(error.uncertain);
+    }
+    #[test]
+    fn undetailed_deadline_uses_the_current_business_code() {
+        let error = Error::from(Status::deadline_exceeded("request expired"));
+        assert_eq!(error.code, "deadline_exceeded");
         assert!(error.uncertain);
     }
     #[test]

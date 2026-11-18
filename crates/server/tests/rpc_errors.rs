@@ -22,7 +22,7 @@ fn authenticated<T>(body: T) -> Result<Request<T>, Box<dyn std::error::Error + S
 async fn large_conflicts_fit_trailers_and_keep_paginated_details() -> TestResult {
     let dir = common::tempdir()?;
     let app = Application::new(Storage::Sqlite(dir.path().join("errors.sqlite3")));
-    app.migrate()?;
+    app.initialize()?;
     common::seed(
         &dir.path().join("errors.sqlite3"),
         &[("review", common::KEY, false)],
@@ -225,7 +225,7 @@ impl PostgisFixture {
         let dsn = self.dsn.clone();
         let app = tokio::task::spawn_blocking(move || {
             let app = Application::new(Storage::Postgis(dsn));
-            app.migrate()?;
+            app.initialize()?;
             Ok::<_, geoledger_engine::Error>(app)
         })
         .await??;
@@ -263,7 +263,7 @@ fn source_feature(id: &str, label: &str) -> serde_json::Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires psql and isolated geoledger_test PostGIS database"]
-async fn postgis_publication_recovery_and_legacy_transport_are_atomic() -> TestResult {
+async fn postgis_publication_recovery_and_current_transport_are_atomic() -> TestResult {
     use axum::{body::Body, http::Request as HttpRequest};
     use geoledger_client::{Client, Edit, PostgisTable, Publication};
     use http_body_util::BodyExt;
@@ -281,7 +281,7 @@ async fn postgis_publication_recovery_and_legacy_transport_are_atomic() -> TestR
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
             .await
     });
-    let client = Client::connect(&endpoint, common::KEY).await?;
+    let client = Client::connect(&endpoint, common::KEY, Default::default()).await?;
     let project = client.create_project("source recovery").await?;
     let dataset = client
         .register_table(
@@ -337,10 +337,7 @@ async fn postgis_publication_recovery_and_legacy_transport_are_atomic() -> TestR
         .err()
         .ok_or("low-level CHECK accepted")?;
     assert_eq!(error.code, "publication_attempt_rejected");
-    assert!(
-        error.uncertain,
-        "low-level consumers lack first-attempt context"
-    );
+    assert!(!error.uncertain, "this publication attempt was rejected");
     let mut raw = pb::geo_ledger_client::GeoLedgerClient::connect(endpoint).await?;
     let status = raw
         .publish(authenticated(pb::PublishRequest {
@@ -355,8 +352,8 @@ async fn postgis_publication_recovery_and_legacy_transport_are_atomic() -> TestR
         .ok_or("raw CHECK accepted")?;
     assert_eq!(
         status.code(),
-        tonic::Code::Unavailable,
-        "older consumers must retain unknown outcomes"
+        tonic::Code::InvalidArgument,
+        "source rejection settles this publication attempt"
     );
     let envelope = pb::RpcStatus::decode(status.details())?;
     let detail =
@@ -373,7 +370,7 @@ async fn postgis_publication_recovery_and_legacy_transport_are_atomic() -> TestR
                 .body(Body::from(serde_json::to_vec(&intent)?))?,
         )
         .await?;
-    assert_eq!(response.status().as_u16(), 503);
+    assert_eq!(response.status().as_u16(), 400);
     let body: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await?.to_bytes())?;
     assert_eq!(body["error"]["code"], "publication_attempt_rejected");
@@ -410,6 +407,12 @@ async fn postgis_publication_recovery_and_legacy_transport_are_atomic() -> TestR
 // A transport queue retains the complete first request before it enters the engine.
 // Returning Unavailable does not discard that request; the test controls its later
 // execution. This is deliberately not an engine-worker or rollback-ack hook.
+#[derive(Clone, Copy)]
+enum ProxyPublicationFailure {
+    HttpConflict,
+    Grpc(tonic::Code),
+}
+
 type DelayedGate = (
     tokio::sync::oneshot::Receiver<()>,
     tokio::sync::oneshot::Sender<Result<u16, String>>,
@@ -419,6 +422,8 @@ struct DelayedPublication {
     inner: geoledger_server::Grpc,
     gate: std::sync::Arc<tokio::sync::Mutex<Option<DelayedGate>>>,
     payloads: std::sync::Arc<tokio::sync::Mutex<Vec<Vec<u8>>>>,
+    proxy_failures:
+        std::sync::Arc<tokio::sync::Mutex<std::collections::VecDeque<ProxyPublicationFailure>>>,
 }
 impl tonic::server::NamedService for DelayedPublication {
     const NAME: &'static str = <geoledger_server::Grpc as tonic::server::NamedService>::NAME;
@@ -441,6 +446,7 @@ impl tower::Service<axum::http::Request<tonic::body::Body>> for DelayedPublicati
         let inner = self.inner.clone();
         let gate = self.gate.clone();
         let payloads = self.payloads.clone();
+        let proxy_failures = self.proxy_failures.clone();
         Box::pin(async move {
             if request.uri().path() != "/geoledger.v1.GeoLedger/Publish" {
                 return inner.oneshot(request).await;
@@ -487,7 +493,26 @@ impl tower::Service<axum::http::Request<tonic::body::Body>> for DelayedPublicati
                 )
                 .into_http())
             } else {
-                inner.oneshot(request).await
+                let failure = proxy_failures.lock().await.pop_front();
+                match failure {
+                    Some(ProxyPublicationFailure::Grpc(code)) => Ok(tonic::Status::new(
+                        code,
+                        "proxy rejection without business detail",
+                    )
+                    .into_http()),
+                    Some(ProxyPublicationFailure::HttpConflict) => {
+                        let mut response = axum::http::Response::new(tonic::body::Body::new(
+                            axum::body::Body::from("proxy conflict"),
+                        ));
+                        *response.status_mut() = axum::http::StatusCode::CONFLICT;
+                        response.headers_mut().insert(
+                            "content-type",
+                            axum::http::HeaderValue::from_static("text/plain"),
+                        );
+                        Ok(response)
+                    }
+                    None => inner.oneshot(request).await,
+                }
             }
         })
     }
@@ -509,10 +534,12 @@ async fn postgis_late_original_attempt_cannot_be_settled_by_retry_rejection() ->
         let (release, wait) = tokio::sync::oneshot::channel();
         let (complete, completed) = tokio::sync::oneshot::channel();
         let payloads = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let proxy_failures = Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new()));
         let delayed = DelayedPublication {
             inner: geoledger_server::grpc(service),
             gate: Arc::new(tokio::sync::Mutex::new(Some((wait, complete)))),
             payloads: payloads.clone(),
+            proxy_failures: proxy_failures.clone(),
         };
         let mut servers = tokio::task::JoinSet::new();
         servers.spawn(async move {
@@ -521,7 +548,7 @@ async fn postgis_late_original_attempt_cannot_be_settled_by_retry_rejection() ->
                 .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
                 .await
         });
-        let client = Client::connect(endpoint, common::KEY).await?;
+        let client = Client::connect(endpoint, common::KEY, Default::default()).await?;
         let project = client.create_project("late publication").await?;
         let dataset = client
             .register_table(
@@ -550,13 +577,29 @@ async fn postgis_late_original_attempt_cannot_be_settled_by_retry_rejection() ->
             .ok_or("missing unknown intent")?
             .clone();
         let before = db.snapshot()?;
+        for failure in [
+            ProxyPublicationFailure::HttpConflict,
+            ProxyPublicationFailure::Grpc(tonic::Code::Aborted),
+            ProxyPublicationFailure::Grpc(tonic::Code::AlreadyExists),
+            ProxyPublicationFailure::Grpc(tonic::Code::FailedPrecondition),
+        ] {
+            proxy_failures.lock().await.push_back(failure);
+            let rejected = workspace
+                .publish("original")
+                .await
+                .err()
+                .ok_or("proxy unexpectedly accepted")?;
+            assert!(rejected.uncertain);
+            assert_eq!(workspace.pending_publication(), Some(&original));
+            assert_eq!(db.snapshot()?, before);
+        }
         let rejection = workspace
             .publish("original")
             .await
             .err()
             .ok_or("expected source rejection")?;
         assert_eq!(rejection.code, "publication_attempt_rejected");
-        assert!(rejection.uncertain);
+        assert!(!rejection.uncertain);
         assert_eq!(workspace.pending_publication(), Some(&original));
         assert_eq!(db.snapshot()?, before);
         assert_eq!(
@@ -591,7 +634,7 @@ async fn postgis_late_original_attempt_cannot_be_settled_by_retry_rejection() ->
                 .await
                 .err()
                 .ok_or("stale request accepted")?;
-            assert_eq!(stale.code, "conflict");
+            assert_eq!(stale.code, "workspace_version_conflict");
             assert!(!stale.uncertain);
             assert!(workspace.pending_publication().is_none());
             workspace.refresh().await?;
@@ -620,6 +663,196 @@ async fn postgis_late_original_attempt_cannot_be_settled_by_retry_rejection() ->
             db.query("SELECT count(*) FROM gl_audit_events WHERE action='publish'")?,
             "1"
         );
+        servers.abort_all();
+        while servers.join_next().await.is_some() {}
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires psql and isolated geoledger_test PostGIS database"]
+async fn postgis_merge_rejection_keeps_late_intent_until_receipt_or_workspace_version_proof()
+-> TestResult {
+    use geoledger_client::{Client, Edit, PostgisTable};
+    use std::{sync::Arc, time::Duration};
+    for advance_version in [false, true] {
+        let db = PostgisFixture::new()?;
+        db.query("CREATE SCHEMA business; CREATE TABLE business.points(id bigint PRIMARY KEY,label text NOT NULL,n numeric(20,0),geom geometry(Point,4326)); INSERT INTO business.points VALUES(1,'0',18446744073709551615,NULL)")?;
+        let service = db.service().await?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let (complete, completed) = tokio::sync::oneshot::channel();
+        let payloads = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let delayed = DelayedPublication {
+            inner: geoledger_server::grpc(service),
+            gate: Arc::new(tokio::sync::Mutex::new(Some((wait, complete)))),
+            payloads: payloads.clone(),
+            proxy_failures: Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new())),
+        };
+        let mut servers = tokio::task::JoinSet::new();
+        servers.spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(delayed)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+        });
+        let client = Client::connect(endpoint, common::KEY, Default::default()).await?;
+        let project = client.create_project("merge recovery").await?;
+        let dataset = client
+            .register_table(
+                &project.id,
+                "points",
+                &PostgisTable {
+                    schema: "business".into(),
+                    table: "points".into(),
+                    id_column: "id".into(),
+                    geometry_column: "geom".into(),
+                },
+            )
+            .await?;
+        let mut workspace = client.create_workspace(&project.id).await?;
+        workspace
+            .save(&dataset.id, source_feature("1", "2"))
+            .await?;
+        let unknown = workspace
+            .publish("original")
+            .await
+            .err()
+            .ok_or("expected delayed original")?;
+        assert!(unknown.uncertain);
+        let original = workspace
+            .pending_publication()
+            .ok_or("lost original intent")?
+            .clone();
+
+        let mut competing = client.create_workspace(&project.id).await?;
+        competing
+            .save(&dataset.id, source_feature("1", "3"))
+            .await?;
+        assert_eq!(competing.publish("head becomes 3").await?.revision, 2);
+        let before_rejection = db.snapshot()?;
+        let merge = workspace
+            .publish("original")
+            .await
+            .err()
+            .ok_or("expected merge conflict")?;
+        assert_eq!(merge.code, "conflict");
+        assert!(
+            !merge.uncertain,
+            "this merge attempt is definite, not the earlier request"
+        );
+        assert!(merge.conflicts.is_some());
+        assert_eq!(workspace.pending_publication(), Some(&original));
+        assert_eq!(db.snapshot()?, before_rejection);
+        assert!(
+            workspace
+                .save(&dataset.id, source_feature("1", "changed"))
+                .await
+                .is_err()
+        );
+
+        let after_reconcile = if advance_version {
+            // A separate current handle deliberately reconciles and atomically
+            // advances the workspace version. It never rewrites the old intent.
+            let mut resolver = client.workspace(&project.id, workspace.id()).await?;
+            let resolved = resolver
+                .resolve(
+                    2,
+                    &[Edit {
+                        dataset: dataset.id.clone(),
+                        feature_id: "1".into(),
+                        feature: Some(source_feature("1", "2")),
+                    }],
+                )
+                .await?;
+            assert_eq!(resolved.version, 2);
+            assert_eq!(resolved.remaining_conflicts, 0);
+            Some(db.snapshot()?)
+        } else {
+            // HEAD can return to the original base value while this workspace's
+            // version remains unchanged, so a merge rejection is not a fence.
+            let mut restore_base = client.create_workspace(&project.id).await?;
+            restore_base
+                .save(&dataset.id, source_feature("1", "0"))
+                .await?;
+            assert_eq!(
+                restore_base
+                    .publish("head returns to base value")
+                    .await?
+                    .revision,
+                3
+            );
+            None
+        };
+        assert_eq!(workspace.pending_publication(), Some(&original));
+        release
+            .send(())
+            .map_err(|_| "delayed request disappeared")?;
+        let old_status = tokio::time::timeout(Duration::from_secs(10), completed)
+            .await??
+            .map_err(std::io::Error::other)?;
+        if advance_version {
+            assert_eq!(old_status, tonic::Code::Aborted as u16);
+            assert_eq!(
+                db.snapshot()?,
+                after_reconcile.ok_or("missing fenced snapshot")?
+            );
+            let stale = workspace
+                .publish("original")
+                .await
+                .err()
+                .ok_or("old version accepted")?;
+            assert_eq!(stale.code, "workspace_version_conflict");
+            assert!(!stale.uncertain);
+            assert!(workspace.pending_publication().is_none());
+            workspace.refresh().await?;
+            assert_eq!(workspace.info().version, 2);
+            workspace
+                .save(&dataset.id, source_feature("1", "4"))
+                .await?;
+            assert_eq!(
+                workspace
+                    .publish("corrected after version proof")
+                    .await?
+                    .revision,
+                3
+            );
+            assert_eq!(
+                db.query("SELECT label FROM business.points WHERE id=1")?,
+                "4"
+            );
+            assert_eq!(db.query("SELECT count(*) FROM gl_idempotency")?, "2");
+            assert_eq!(db.query("SELECT count(*) FROM gl_commits")?, "3");
+            assert_eq!(
+                db.query("SELECT count(*) FROM gl_audit_events WHERE action='publish'")?,
+                "2"
+            );
+        } else {
+            assert_eq!(old_status, tonic::Code::Ok as u16);
+            let receipt = workspace.publish("original").await?;
+            assert_eq!(receipt.revision, 4);
+            assert_eq!(workspace.publish("original").await?, receipt);
+            assert_eq!(workspace.pending_publication(), Some(&original));
+            assert_eq!(
+                db.query("SELECT label FROM business.points WHERE id=1")?,
+                "2"
+            );
+            assert_eq!(db.query("SELECT count(*) FROM gl_idempotency")?, "3");
+            assert_eq!(db.query("SELECT count(*) FROM gl_commits")?, "4");
+            assert_eq!(
+                db.query("SELECT count(*) FROM gl_audit_events WHERE action='publish'")?,
+                "3"
+            );
+        }
+        let requests = payloads.lock().await;
+        let original_bytes = requests.first().ok_or("missing original bytes")?;
+        assert_eq!(requests.get(2), Some(original_bytes));
+        assert_eq!(
+            requests.get(if advance_version { 3 } else { 4 }),
+            Some(original_bytes)
+        );
+        drop(requests);
         servers.abort_all();
         while servers.join_next().await.is_some() {}
     }

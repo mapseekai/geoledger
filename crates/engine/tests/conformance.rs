@@ -536,8 +536,8 @@ impl Fixture {
             Storage::Sqlite(dir.path().join("geoledger.db"))
         };
         let app = Application::new(storage);
-        app.migrate()?;
-        app.migrate()?;
+        app.initialize()?;
+        app.initialize()?;
         let alice = Uuid::new_v4().to_string();
         let bob = Uuid::new_v4().to_string();
         let viewer = Uuid::new_v4().to_string();

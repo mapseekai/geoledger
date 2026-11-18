@@ -363,7 +363,7 @@ mod tests {
             tempfile::tempdir().map_err(|e| Error::new(500, "test directory").caused_by(e))?;
         let storage = Storage::Sqlite(dir.path().join("save-schema-reads.db"));
         let app = Application::new(storage.clone());
-        app.migrate()?;
+        app.initialize()?;
         let project =
             app.execute("alice", "create_project", json!({"name":"schema reads"}))?["project"]
                 .clone();
@@ -414,33 +414,33 @@ mod tests {
                     }
                     let reads = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
                     let observed = reads.clone();
-                    let Backend::Sqlite(db) = &t.0.backend else {
+                    let Backend::Sqlite(db) = &mut t.0.backend else {
                         return Err(Error::new(500, "SQLite fixture required"));
                     };
                     {
                         let db = db.read().map_err(sqlite_error)?;
                         // Authorizer observes preparation; disable caching so every execution is counted.
                         db.set_prepared_statement_cache_capacity(0);
-                        db.authorizer(Some(move |context: AuthContext<'_>| {
-                            if let AuthAction::Read {
-                                table_name,
-                                column_name: "definition",
-                            } = context.action
-                                && context.accessor.is_none()
-                            {
-                                let index = match table_name {
-                                    "gl_workspace_schemas" => Some(0),
-                                    "gl_schema_history" => Some(1),
-                                    _ => None,
-                                };
-                                if let Some(index) = index {
-                                    observed[index].fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
-                            Authorization::Allow
-                        }))
-                        .map_err(sqlite_error)?;
                     }
+                    db.authorizer(Some(move |context: AuthContext<'_>| {
+                        if let AuthAction::Read {
+                            table_name,
+                            column_name: "definition",
+                        } = context.action
+                            && context.accessor.is_none()
+                        {
+                            let index = match table_name {
+                                "gl_workspace_schemas" => Some(0),
+                                "gl_schema_history" => Some(1),
+                                _ => None,
+                            };
+                            if let Some(index) = index {
+                                observed[index].fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        Authorization::Allow
+                    }))
+                    .map_err(sqlite_error)?;
                     let edits = (0..edit_count).map(|i| json!({"dataset":datasets[i % dataset_count],"feature_id":format!("feature-{i:03}"),"feature":{"type":"Feature","id":format!("feature-{i:03}"),"properties":{"label":format!("value-{i}")},"geometry":null}})).collect::<Vec<_>>();
                     let before = t.0.query_count;
                     let result = crate::workspace::save(

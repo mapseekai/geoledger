@@ -23,7 +23,7 @@ impl StorageBackend for SqlStorage {
         }
     }
     fn initialize(&self, timeout: Duration) -> Result<()> {
-        Client::open(&self.storage, &self.pool, timeout)?.migrate()
+        Client::open(&self.storage, &self.pool, timeout)?.initialize()
     }
     fn health(&self, timeout: Duration) -> Result<()> {
         let mut c = Client::open(&self.storage, &self.pool, timeout)?;
@@ -76,7 +76,7 @@ impl StorageMaintenance for SqlStorage {
         input: &mut dyn std::io::BufRead,
         timeout: Duration,
     ) -> Result<crate::DataSummary> {
-        Client::open(&self.storage, &self.pool, timeout)?.migrate()?;
+        Client::open(&self.storage, &self.pool, timeout)?.initialize()?;
         portable::import(Client::open(&self.storage, &self.pool, timeout)?, input)
     }
     fn backup(&self, target: &std::path::Path, timeout: Duration) -> Result<()> {

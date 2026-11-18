@@ -185,7 +185,9 @@ pub(super) fn workspace(
     let v: i64 = r.get(1usize)?;
     let status: String = r.get(2usize)?;
     if version.is_some_and(|x| x != v || status != "open") {
-        return Err(stale());
+        let mut error = stale();
+        error.body["error"]["code"] = json!("workspace_version_conflict");
+        return Err(error);
     }
     Ok((r.get(0usize)?, v, status))
 }

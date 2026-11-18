@@ -26,7 +26,7 @@ SDK 支持 `https://host:port` 并校验服务端证书；默认超时 30 秒；
 | --- | --- | --- |
 | Go | `DialWithOptions(endpoint, apiKey, DialOptions{AllowInsecure: true})` | 系统信任库 |
 | Python | `Client(endpoint, api_key, allow_insecure=True)` | `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` |
-| Rust | `Client::connect_with(endpoint, api_key, ConnectOptions { allow_insecure: true, ..Default::default() })` | `ConnectOptions::ca_pem` |
+| Rust | `Client::connect(endpoint, api_key, ConnectOptions { allow_insecure: true, ..Default::default() })` | `ConnectOptions::ca_pem` |
 | TypeScript | `new Client(endpoint, apiKey, timeoutMs, { allowInsecure: true })` | `NODE_EXTRA_CA_CERTS` 或系统信任库 |
 | CLI | `gl --allow-insecure` | `gl --ca-file ca.pem` |
 
@@ -65,7 +65,7 @@ with Client("http://127.0.0.1:7882", os.environ["GL_API_KEY"]) as client:
 use geoledger_client::Client;
 use serde_json::json;
 
-let client = Client::connect(endpoint, &api_key).await?;
+let client = Client::connect(endpoint, &api_key, Default::default()).await?;
 let project = client.create_project("城市道路").await?;
 let dataset = client.create_dataset(&project.id, "roads", "point").await?;
 let mut draft = client.create_workspace(&project.id).await?;
@@ -78,11 +78,12 @@ let receipt = draft.publish("新增道路").await?;
 
 结果是 SDK 自身的业务结构，GeoJSON 使用 `serde_json::Value`。
 客户端可克隆复用连接，工作区修改使用 `&mut self`。
+`ConnectOptions` 统一包含超时、明文选项、私有 CA 与 `message_limits`；编码和解码默认各 64 MiB，计算 Protobuf 消息字节而非整个进程内存。使用 `MessageLimits::new(encoding_bytes, decoding_bytes)` 显式调整，两个值都必须大于零。迁移代码见 [0.4 迁移说明](migration-0.4.md)。
 完整示例见 [Rust 示例](../sdk/rust/examples/smoke.rs)。
 
 ## Go
 
-模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.25+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`api_key` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
+模块为 [github.com/mapseekai/geoledger/sdk/go](../sdk/go/go.mod)，要求 Go 1.27.4+。以下片段位于返回 `error` 的函数内，导入该模块为 `geoledger`，使用已配置的 `endpoint`、`api_key` 和 `context.Context` 类型的 `ctx`。所有网络调用接受标准 context。
 
 ```go
 client, err := geoledger.Dial(endpoint, apiKey)
@@ -224,29 +225,33 @@ JSON 对象键通过递归校验，保护普通对象的编解码语义；
 
 Python / TS 捕获 `GeoLedgerError`；Rust 使用 `Error`；Go 用 `errors.As` 获取 `*geoledger.Error`。
 它们提供业务 `code`、message、request_id / requestId、可选 conflicts，以及 `uncertain` / Uncertain。
-常见业务码包括 `invalid_argument`、`unauthenticated`、`not_found`、`conflict`、`timeout`、`unavailable` 和 `publication_attempt_rejected`。
+常见业务码包括 `invalid_argument`、`unauthenticated`、`not_found`、`conflict`、`workspace_version_conflict`、`deadline_exceeded`、`unavailable` 和 `publication_attempt_rejected`。
 调用方通过 SDK 的业务错误类型处理结果。
+
+HTTP 业务错误只有 `{"error":{"code","message","request_id"}}` 这一 envelope，`conflicts` 可选；BFF 不再解释顶层 `code/message` 或字符串 `error` 旧形状。超时统一为 `deadline_exceeded`。没有业务详情的 gRPC `OutOfRange` 按 `resource_exhausted` 且 `uncertain=true` 处理，因为它可能来自响应解码限制；不能据此证明写入没有完成。代理返回空、HTML 或普通文本错误仍依实际 HTTP 状态保守处理，不回显任意上游响应。
 
 当 `uncertain` 为真时，写入可能已经完成。对同一工作区再次 `publish` 并使用原说明即可重试原请求；
 期间工作区对象保持原要素上下文和发布说明，以便确认原请求。成功后再次调用也返回原发布结果，包括项目归档或发布者降级为 viewer 后；当前成员身份和工作区归属仍必须有效。
 首次发布被明确拒绝时释放待重试请求，保留草稿版本供查询、修正和解决冲突。
-已有待确认请求在重试遇到身份验证失败、权限拒绝、资源不可见或 `invalid_argument` 时仍然保留；
-先前发布的结果通过原请求确认。恢复访问后继续使用原请求及其请求 ID。
+已有待确认请求遇到错误时继续保留，只有来自当前结构化业务详情、且确定的 `workspace_version_conflict` 可以释放。该码表示原请求的预期工作区版本已失效或工作区已关闭；项目 HEAD 变化、普通 409 和合并冲突不具备这个证明。先前发布的结果通过原请求确认，已提交回执优先于版本拒绝返回。
 
 `publication_attempt_rejected` 表示发布事务在源表数据写入、转换或显式约束检查中，收到明确的 CHECK、NOT NULL、外键或数值越界拒绝；本次尝试在发送 COMMIT 前失败。公开消息脱敏，服务端保留原始错误并仅以 SQLSTATE 记录 PostgreSQL 诊断。它不表示以前未知的同一请求已经终结，也不保证错误送达前已经收到 ROLLBACK 确认。
 
-该码继续使用 **HTTP 503 / gRPC Unavailable**。旧 SDK、旧控制台及错误详情丢失的消费者继续按未知结果保留原意图，因此无需假设所有客户端已同步升级。新 SDK 的低层 `client.publish(intent)` 同样保守返回 `uncertain=true`；只有掌握首次尝试上下文的 `Workspace.publish` 和控制台发布流程，才能解除对应编辑门禁。
+该码使用 **HTTP 400 / gRPC InvalidArgument**。四语言 SDK 的低层 `client.publish(intent)` 和工作区调用均对本次拒绝返回 `uncertain=false`，无需先按未知结果处理再在高层改写。工作区是否可以解除编辑门禁，还取决于此前是否已有未知结果：本次确定失败不能否定先前尝试可能已提交。服务端、SDK、CLI 和 Web 应按同一版本更新；旧客户端不属于本次部署组合的兼容承诺。
 
 | 发布调用上下文与结果 | 工作区发布意图 | 返回结果的解释 |
 |---|---|---|
-| 没有待确认意图的首次调用收到 `publication_attempt_rejected` | 清除；可用同一句柄保存修正，再发新请求 | 高层 SDK 返回 `uncertain=false`，草稿版本不变 |
+| 没有待确认意图的首次调用收到 `publication_attempt_rejected` | 清除；可用同一句柄保存修正，再发新请求 | 低层及高层 SDK 均返回 `uncertain=false`，草稿版本不变 |
 | 已有待确认意图的重试收到 `publication_attempt_rejected` | 无条件保留原请求 ID、版本和完整 payload | 本次拒绝不能否定迟到的旧尝试；即使某一适配器提供 `uncertain=false` 也不清除 |
 | 已有待确认意图的重试收到 `invalid_argument` 或身份、权限、可见性错误 | 保留 | 修复当前请求或恢复访问本身不能证明旧发布未提交 |
 | 超时、断链、取消、响应丢失或没有可信错误详情的 503 | 保留 | 继续以原意图确认结果 |
 | 成功或成功回执重放 | SDK 保留成功意图，更新句柄为 published | 再次调用可取回同一回执 |
-| 已有语义明确的草稿版本或合并冲突 | 沿既有冲突分支释放 | 刷新、修正或解决冲突后继续 |
+| 已有待确认意图，收到可信的 `workspace_version_conflict` | 释放 | 工作区版本单调增加，旧预期版本不能再提交；已提交则先返回原回执 |
+| 已有待确认意图，收到普通或合并冲突、缺少详情的 409/Aborted、其他未知业务码 | 保留 | HEAD 或外部条件可能变化，迟到的旧请求仍可能成功 |
 
-服务端在取得项目 HEAD 锁之前和之后都查询回执，避免等待锁时重复提交。锁内本次拒绝仍无法排除一个仍在等待取得该锁的旧尝试；该旧尝试可能在外部约束条件变化后成功。因此这里没有“自动放弃未知发布”的入口，也没有将所有 4xx、5xx 或所有 SQLSTATE 22/23 类统一改判。
+没有有效当前业务详情的 gRPC `Aborted`、`AlreadyExists`、`FailedPrecondition` 和 HTTP 409 按不确定结果处理。gRPC 详情必须属于当前 `ErrorDetail` 且 envelope 的 status code 与实际状态一致，业务 code 非空；不能用默认空 Protobuf 对象充当失败证明。
+
+服务端在取得项目 HEAD 锁之前和之后都查询回执，避免等待锁时重复提交。锁内本次拒绝仍无法排除一个仍在等待取得该锁的旧尝试；该旧尝试可能在外部约束条件变化后成功。因此这里没有“自动放弃未知发布”的入口，也没有将所有 4xx、5xx 或所有 SQLSTATE 22/23 类统一改判。遇到持续的合并冲突时，可以保留原 intent，使用独立的当前工作区句柄进行带版本检查的修正/解决冲突，原子推进工作区版本后，再用原 intent 确认成功回执或版本失效；详细步骤见 [恢复未知发布](migration-0.4.md#恢复未知发布)。
 
 工作区的 `pending_publication` / `PendingPublication()` / `pendingPublication` 暴露可持久化的业务发布意图，
 可在跨进程恢复时交给 `client.publish(intent)`。Python 使用 `dataclasses.asdict`，Rust / Go 使用 JSON 序列化，
@@ -292,13 +297,19 @@ SDK 可从本仓库源码构建和安装，包注册表分发通过独立发布�
 Audit 仅项目 owner 可读。项目与列表结果包含 `state`（active / archived）和调用者的 `role`；成员与生命周期规则见 [项目与成员治理](production.md#项目与成员治理)。每页 1–1000 条、Feature 不设独立于请求/响应预算的字节上限、最多 256 个属性；坐标系按数据集声明，XY/XYZ。
 标识采用有效文本字符，属性键和值使用 U+0000 以外的 JSON 文本；服务统一校验输入并返回业务错误。容量配置见 [生产运行](production.md)。
 
+## JSON 输入边界
+
+HTTP 业务请求、认证操作及 Rust SDK/CLI 的动态 JSON 入口只接受当前操作定义的字段。未知字段、缺少必填值和错误 JSON 类型返回 `invalid_argument`；不会先被 proto3 的默认值填充或静默丢弃。`info` 的请求对象为 `{}`。业务 API 的分页默认值和可选查询字段仍按各操作定义生效，GeoJSON 的用户属性仍是自由 JSON，不受请求 envelope 的字段名单限制。
+
+更新 API Key 时省略 `expires_at` 保留现有到期时间，显式 `null` 清除；RFC 3339 带时区输入统一为 UTC 毫秒文本，UTC 年份限定 1–9999，过期时间必须在未来。到期时间不接受闰秒 `:60`，避免时间库把它隐式改为前一纳秒。
+
 ## 当前版本契约
 
 服务端、CLI、四语言 SDK 和 Web 控制台按同一发布版本部署，协议以 [geoledger.proto](../proto/geoledger/v1/geoledger.proto) 为统一来源。CI 检查生成代码的可复现性，并通过真实服务验证各 SDK。
 
 当前 gRPC 包为 `geoledger.v1`，HTTP 入口为 `/api/v1`。接口及存储格式变化在 [CHANGELOG](../CHANGELOG.md) 中说明，调用方随版本一起更新。
 
-当前存储格式为 19，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
+当前源码版本为 `0.4.0-alpha.1`。破坏性源码与行为迁移见 [0.4 迁移说明](migration-0.4.md)。当前存储格式为 19，新库直接创建当前结构。同格式的数据备份、恢复和跨后端搬迁见 [备份与恢复](production.md#备份与恢复)。
 
 `Info.max_feature_bytes` 为 `0` 表示不设独立的单要素字节上限；`max_request_bytes` 返回当前服务的实际编码请求预算，默认 67,108,864 字节。单要素仍受所在请求和响应的总预算约束。
 
