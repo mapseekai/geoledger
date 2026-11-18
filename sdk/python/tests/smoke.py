@@ -50,7 +50,7 @@ with Client(os.environ.get("GL_ENDPOINT", "http://127.0.0.1:7882"), api_key) as 
         client.create_dataset(project.id, "places", "point", 3, crs="EPSG:3857")
         raise AssertionError("duplicate accepted")
     except GeoLedgerError as e:
-        assert e.code == "workspace_version_conflict"
+        assert e.code == "conflict"
     left, right = client.create_workspace(project.id), client.create_workspace(project.id)
     left.save(dataset.id, {**feature, "properties": {"side": "left"}})
     right.save(dataset.id, {**feature, "properties": {"side": "right"}})

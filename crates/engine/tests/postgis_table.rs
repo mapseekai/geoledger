@@ -701,8 +701,11 @@ fn existing_table_publication_is_atomic() -> TestResult {
         )?;
         let req = json!({"workspace":w,"expected_workspace_version":1,"request_id":uuid::Uuid::new_v4(),"message":"atomic"});
         let error = run("publish", req).err().ok_or("CHECK accepted")?;
-        assert_eq!(error.status, 503);
+        assert_eq!(error.status, 400);
         assert_eq!(error.body["error"]["code"], "publication_attempt_rejected");
+        let rejected_workspace = run("get_workspace", json!({"workspace":w}))?;
+        assert_eq!(rejected_workspace["version"], 1);
+        assert_eq!(rejected_workspace["status"], "open");
         assert_eq!(
             error.diagnostic().as_deref(),
             Some("postgres sqlstate=23514")
@@ -1049,7 +1052,7 @@ fn deferred_constraints_and_schema_drift() -> TestResult {
             {"dataset":parent,"feature_id":"1","feature":feature("1",json!({"label":"must rollback"}))},
             {"dataset":child,"feature_id":"2","feature":feature("2",json!({"parent_id":999}))}
         ])).err().ok_or("deferred FK accepted")?;
-        assert_eq!(error.status, 503);
+        assert_eq!(error.status, 400);
         assert_eq!(error.body["error"]["code"], "publication_attempt_rejected");
         assert_eq!(
             error.diagnostic().as_deref(),
@@ -1209,7 +1212,16 @@ fn publication_source_rejections_are_local_and_atomic() -> TestResult {
                 let error = run("publish", request)
                     .err()
                     .ok_or("invalid source accepted")?;
-                assert_eq!(error.status, 503, "{table} {sqlstate}");
+                assert_eq!(
+                    error.status,
+                    if classified { 400 } else { 503 },
+                    "{table} {sqlstate}"
+                );
+                // Only the explicit source-boundary SQLSTATE whitelist settles
+                // this attempt; unclassified conversion errors stay conservative.
+                let rejected_workspace = run("get_workspace", json!({"workspace":workspace}))?;
+                assert_eq!(rejected_workspace["version"], 1);
+                assert_eq!(rejected_workspace["status"], "open");
                 assert_eq!(
                     error.body["error"]["code"],
                     if classified {

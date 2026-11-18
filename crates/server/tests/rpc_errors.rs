@@ -811,13 +811,46 @@ async fn postgis_merge_rejection_keeps_late_intent_until_receipt_or_workspace_ve
             workspace
                 .save(&dataset.id, source_feature("1", "4"))
                 .await?;
-            assert_eq!(
-                workspace
-                    .publish("corrected after version proof")
-                    .await?
-                    .revision,
-                3
-            );
+            assert_eq!(workspace.info().version, 3);
+            let before_unresolved = db.snapshot()?;
+            let unresolved = workspace
+                .publish("edited after version proof")
+                .await
+                .err()
+                .ok_or("edited resolution unexpectedly remained valid")?;
+            assert_eq!(unresolved.code, "conflict");
+            assert!(!unresolved.uncertain);
+            let conflict = unresolved
+                .conflicts
+                .as_ref()
+                .and_then(|page| page.conflicts.first())
+                .ok_or("missing stale-resolution conflict")?;
+            assert_eq!(conflict.reason, "stale_resolution");
+            assert_eq!(conflict.resolved_against_revision, Some(2));
+            // This is a new first attempt after the permanent version proof,
+            // so its definite rejection releases only its newly created intent.
+            assert!(workspace.pending_publication().is_none());
+            assert_eq!(db.snapshot()?, before_unresolved);
+            let resolved = workspace
+                .resolve(
+                    2,
+                    &[Edit {
+                        dataset: dataset.id.clone(),
+                        feature_id: "1".into(),
+                        feature: Some(source_feature("1", "4")),
+                    }],
+                )
+                .await?;
+            assert_eq!(resolved.version, 4);
+            assert_eq!(resolved.remaining_conflicts, 0);
+            let corrected = workspace.publish("corrected after version proof").await?;
+            assert_eq!(corrected.revision, 3);
+            let recovered = workspace
+                .pending_publication()
+                .ok_or("missing new successful intent")?;
+            assert_eq!(recovered.expected_workspace_version, 4);
+            assert_ne!(recovered.request_id, original.request_id);
+            assert_eq!(client.publish(recovered).await?, corrected);
             assert_eq!(
                 db.query("SELECT label FROM business.points WHERE id=1")?,
                 "4"

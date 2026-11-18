@@ -9,7 +9,7 @@
 ### Breaking
 
 - Rust SDK 只保留 `Client::connect(endpoint, api_key, ConnectOptions)`，消息限制并入 options，双向默认各 64 MiB；删除为旧调用方式保留的连接入口与无限默认。所有示例、CLI 和仓库调用者同步迁移。
-- Rust SDK/CLI 的动态 JSON、认证请求和 HTTP `info` 严格按当前操作定义解析，拒绝未知字段、缺少必需值和错误类型。API Key 到期时间拒绝闰秒 `:60`，继续标准化为 UTC 毫秒并保留省略/显式 null 的区别。
+- Rust SDK/CLI 的动态 JSON、认证请求和 HTTP `info` 严格按当前操作定义解析，拒绝未知字段、缺少必需值和错误类型。API Key 到期时间拒绝闰秒 `:60`，继续标准化为 UTC 毫秒，拒绝标准化后不再处于未来的值，并保留省略/显式 null 的区别。
 - 源表 CHECK、NOT NULL、外键与数值范围明确拒绝使用 `publication_attempt_rejected` + HTTP 400 / gRPC InvalidArgument；低层与工作区调用对本次失败直接返回 `uncertain=false`。已有未知发布的原始 intent 仍按恢复合同保留。
 - 已有未知发布仅在成功回执或可信的 `workspace_version_conflict` 后结案；普通/合并冲突、裸 409/Aborted 与其他错误保留原 intent，防止迟到原请求提交后失去恢复状态。独立当前句柄可通过原子草稿版本推进协助确认旧请求。
 - 错误契约统一为当前结构化 envelope 和 `deadline_exceeded` 业务码；移除旧错误 JSON 形状与别名。没有业务详情的 gRPC OutOfRange 在四语言 SDK 中统一为资源限制及不确定结果。

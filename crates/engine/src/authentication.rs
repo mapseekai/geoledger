@@ -222,13 +222,19 @@ fn expiry_at(value: &str, current: OffsetDateTime) -> Result<String> {
         .map_err(|_| Error::new(400, "expires_at must be RFC 3339"))?
         .checked_to_offset(UtcOffset::UTC)
         .ok_or_else(|| Error::new(400, "expiry must be before year 10000"))?;
-    if date <= current || !(1..=9999).contains(&date.year()) {
+    if !(1..=9999).contains(&date.year()) {
         return Err(Error::new(
             400,
             "expiry must be in the future and before year 10000",
         ));
     }
-    Ok(timestamp(date))
+    let normalized = timestamp(date);
+    // Authorization compares stored millisecond timestamps. Validate the same
+    // representation so a future submillisecond value cannot expire on insert.
+    if normalized <= timestamp(current) {
+        return Err(Error::new(400, "expiry must be in a future millisecond"));
+    }
+    Ok(normalized)
 }
 fn page(input: &Value) -> Result<(&str, i64)> {
     let after = input
@@ -816,6 +822,8 @@ mod tests {
         for input in [
             "2026-01-01T00:00:00.123Z",
             "2026-01-01T00:00:00.122999999Z",
+            "2026-01-01T00:00:00.123000001Z",
+            "2026-01-01T00:00:00.123999999Z",
             "2027-02-30T00:00:00Z",
             "2027-03-02T00:04:05",
             "2027-03-02T00:04:05Z trailing",
