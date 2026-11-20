@@ -7,6 +7,7 @@ ENV CARGO_BUILD_JOBS=2 RUSTFLAGS="-C target-feature=-crt-static" GL_SPATIALITE_E
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY vendor ./vendor
 COPY sdk/rust ./sdk/rust
 COPY proto ./proto
 RUN cargo build --release --locked --bins
@@ -79,6 +80,8 @@ COPY --from=node-runtime /usr/local/bin/node /nodejs/bin/node
 COPY --from=build /src/target/release/geoledger-server /src/target/release/gl /usr/local/bin/
 COPY --from=build --chown=10001:10001 /output /app
 COPY Cargo.lock /usr/share/geoledger/Cargo.lock
+COPY vendor/rstar-0.12.2/LICENSE-* /usr/share/licenses/geoledger/rstar/
+COPY vendor/geo-types-0.7.20/LICENSE-* /usr/share/licenses/geoledger/geo-types/
 COPY deploy/container.cjs /app/container.cjs
 WORKDIR /app
 USER 10001:10001

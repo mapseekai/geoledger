@@ -30,3 +30,8 @@ expect_used = "deny"
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# Temporary heapless backport; provenance and removal criteria in vendor/README.md.
+[patch.crates-io]
+rstar = { path = "vendor/rstar-0.12.2" }
+geo-types = { path = "vendor/geo-types-0.7.20" }
