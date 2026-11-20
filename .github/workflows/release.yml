@@ -112,6 +112,11 @@ jobs:
           dist="geoledger-$VERSION-$TARGET"
           mkdir "$dist"
           cp "$out/geoledger-server$exe" "$out/gl$exe" LICENSE README.md CHANGELOG.md "$dist/"
+          for crate in vendor/rstar-0.12.2 vendor/geo-types-0.7.20; do
+            license_dir="$dist/licenses/${crate##*/}"
+            mkdir -p "$license_dir"
+            cp "$crate"/LICENSE-* "$license_dir/"
+          done
           if [[ $RUNNER_OS == Windows ]]; then
             cp scripts/install-spatialite.py .security/windows-spatialite.lock.json "$dist/"
             python scripts/smoke-server.py --binary "$dist/geoledger-server$exe" --runtime "$RUNNER_TEMP/geoledger-native"
