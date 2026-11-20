@@ -16,7 +16,7 @@ async fn members_archive_delete_and_admin_over_grpc_and_http() -> TestResult {
             admin_only_project_creation: false,
             max_owned_projects: Some(2),
         });
-    app.migrate()?;
+    app.initialize()?;
     common::seed(
         &dir.path().join("members.sqlite3"),
         &[
@@ -40,9 +40,9 @@ async fn members_archive_delete_and_admin_over_grpc_and_http() -> TestResult {
             .await
     });
     let endpoint = format!("http://{grpc_addr}");
-    let alice = Client::connect(&endpoint, ALICE).await?;
-    let bob = Client::connect(&endpoint, BOB).await?;
-    let root = Client::connect(&endpoint, ROOT).await?;
+    let alice = Client::connect(&endpoint, ALICE, Default::default()).await?;
+    let bob = Client::connect(&endpoint, BOB, Default::default()).await?;
+    let root = Client::connect(&endpoint, ROOT, Default::default()).await?;
 
     let project = alice.create_project("lifecycle").await?;
     assert_eq!(project.state, "active");

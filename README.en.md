@@ -6,7 +6,7 @@ GeoLedger is a version control and collaborative editing service for spatial fea
 
 The repository contains the Rust server `geoledger-server`, the remote `gl` CLI, a web console, and SDKs for Rust, Go, TypeScript / Node.js, and Python. The server manages data in SQLite + SpatiaLite or PostGIS. HTTP and gRPC requests use the same application engine.
 
-The current source version is `0.3.0-alpha.9`, with storage format 19, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively.
+The current source version is `0.4.0-alpha.1`, with storage format 19, defined in [Cargo.toml](Cargo.toml) and the [engine](crates/engine/src/lib.rs), respectively. This version tightens Rust APIs and JSON/error contracts; read the [0.4 migration guide](docs/migration-0.4.md) before upgrading.
 
 Each internally created dataset immediately gets its own physical table and spatial indexes. Roads, buildings, points of interest, and other datasets remain separate within one database, with transactional publication and version history.
 
@@ -37,11 +37,11 @@ Run the shell commands below from the repository root.
 
 | Task | Tools and dependencies |
 |---|---|
-| Rust builds | Rust 1.88+, Cargo, protoc, a C toolchain, and CMake; Linux/macOS also require pkg-config and OpenSSL development libraries. Regular Rust CI checks use 1.92.0. |
+| Rust builds | Rust 1.89+, Cargo, protoc, a C toolchain, and CMake; Linux/macOS also require pkg-config and OpenSSL development libraries. Regular Rust CI checks use 1.92.0. |
 | SQLite service | The native SpatiaLite extension and its dependencies. Set `GL_SPATIALITE_EXTENSION` to select its path. The repository Dockerfile includes the runtime. |
 | PostGIS service | A PostgreSQL database with the PostGIS extension enabled and a service account. |
 | Web and TypeScript SDK | Node.js 22 and npm. |
-| Go SDK | Go 1.27.3+, as declared in [go.mod](sdk/go/go.mod). |
+| Go SDK | Go 1.27.4+, as declared in [go.mod](sdk/go/go.mod). |
 | Python SDK | Python 3.10+, as declared in [pyproject.toml](sdk/python/pyproject.toml). |
 | Repository checks | Python 3.11+, Bash, rustfmt, and Clippy. Browser verification uses Python Playwright and Chromium/Chrome with a working sandbox. |
 | Containers | Docker, Docker Compose, and OpenSSL to generate the session secret. |

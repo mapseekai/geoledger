@@ -24,9 +24,9 @@ fn service(
     limits: Limits,
 ) -> Result<Service, Box<dyn std::error::Error + Send + Sync>> {
     let app = Application::new(Storage::Sqlite(path.to_owned()));
-    app.migrate()?;
+    app.initialize()?;
     common::seed(path, &[("ops", TOKEN, true)])?;
-    Ok(Service::new(app).with_limits(limits))
+    Ok(Service::new_with_limits(app, limits))
 }
 fn request(op: &str, value: Value) -> Result<Request<Body>, axum::http::Error> {
     Request::builder()
@@ -210,7 +210,7 @@ async fn stream_budget_survives_slow_consumer_and_releases_at_eof_or_drop() -> T
     let dir = common::tempdir()?;
     let path = dir.path().join("stream.db");
     let app = Application::new(Storage::Sqlite(path.clone()));
-    app.migrate()?;
+    app.initialize()?;
     let project = app.execute(
         &common::user_id("ops"),
         "create_project",

@@ -23,7 +23,7 @@ fn with_param(dsn: &str, param: &str) -> String {
 fn verify_full_verify_ca_and_require_connect_over_tls() -> Result<(), Box<dyn std::error::Error>> {
     let dsn = std::env::var("GL_TEST_TLS_DATABASE_URL")?;
     // Default (no sslmode) is verify-full; the server only accepts encrypted sessions.
-    app(&dsn).migrate()?;
+    app(&dsn).initialize()?;
     app(&with_param(&dsn, "sslmode=verify-full")).check_schema()?;
     app(&with_param(&dsn, "sslmode=verify-ca")).check_schema()?;
     app(&with_param(&dsn, "sslmode=require")).check_schema()?;
@@ -73,6 +73,6 @@ fn no_silent_downgrade_to_plaintext() -> Result<(), Box<dyn std::error::Error>> 
             .is_err()
     );
     // Explicit plaintext stays possible for loopback development servers.
-    app(&with_param(&dsn, "sslmode=disable")).migrate()?;
+    app(&with_param(&dsn, "sslmode=disable")).initialize()?;
     Ok(())
 }

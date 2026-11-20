@@ -1,12 +1,14 @@
 //! Database identities, password verification and opaque credentials. No secret is serializable.
+mod input;
+
 use crate::repository::CredentialRepository;
 use crate::{Application, Error, Result, bad, missing, text};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
+use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 struct Deadline(Instant);
@@ -93,11 +95,25 @@ impl std::fmt::Debug for AuthenticatedIdentity {
             .finish_non_exhaustive()
     }
 }
+// Credential timestamps have one storage representation so lexical comparisons
+// agree with chronological order: UTC, four-digit year, and millisecond precision.
+fn timestamp(date: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        date.year(),
+        u8::from(date.month()),
+        date.day(),
+        date.hour(),
+        date.minute(),
+        date.second(),
+        date.millisecond()
+    )
+}
 fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    timestamp(OffsetDateTime::now_utc())
 }
 fn ago(minutes: i64) -> String {
-    (Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339_opts(SecondsFormat::Millis, true)
+    timestamp(OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
 }
 fn unauthenticated() -> Error {
     Error::new(401, "authentication failed")
@@ -194,16 +210,31 @@ fn expiry(input: &Value) -> Result<Option<String>> {
     let Some(v) = input.get("expires_at").filter(|v| !v.is_null()) else {
         return Ok(None);
     };
-    let date = DateTime::parse_from_rfc3339(v.as_str().ok_or_else(bad)?)
+    expiry_at(v.as_str().ok_or_else(bad)?, OffsetDateTime::now_utc()).map(Some)
+}
+fn expiry_at(value: &str, current: OffsetDateTime) -> Result<String> {
+    // RFC 3339 permits :60, but credential expiry does not: silently mapping it
+    // to the preceding nanosecond would change the caller's expiration instant.
+    if value.as_bytes().get(17..19) == Some(b"60") {
+        return Err(Error::new(400, "expires_at must not contain a leap second"));
+    }
+    let date = OffsetDateTime::parse(value, &Rfc3339)
         .map_err(|_| Error::new(400, "expires_at must be RFC 3339"))?
-        .with_timezone(&Utc);
-    if date <= Utc::now() || !(1..=9999).contains(&date.year()) {
+        .checked_to_offset(UtcOffset::UTC)
+        .ok_or_else(|| Error::new(400, "expiry must be before year 10000"))?;
+    if !(1..=9999).contains(&date.year()) {
         return Err(Error::new(
             400,
             "expiry must be in the future and before year 10000",
         ));
     }
-    Ok(Some(date.to_rfc3339_opts(SecondsFormat::Millis, true)))
+    let normalized = timestamp(date);
+    // Authorization compares stored millisecond timestamps. Validate the same
+    // representation so a future submillisecond value cannot expire on insert.
+    if normalized <= timestamp(current) {
+        return Err(Error::new(400, "expiry must be in a future millisecond"));
+    }
+    Ok(normalized)
 }
 fn page(input: &Value) -> Result<(&str, i64)> {
     let after = input
@@ -295,8 +326,7 @@ fn new_session(
         credential_version: user.credential_version,
         created_at: time.clone(),
         last_seen_at: time,
-        expires_at: (Utc::now() + chrono::Duration::hours(12))
-            .to_rfc3339_opts(SecondsFormat::Millis, true),
+        expires_at: timestamp(OffsetDateTime::now_utc() + time::Duration::hours(12)),
     };
     t.auth_insert_session(&session, &digest(&token))?;
     Ok(json!({"session":token,"user":user.user}))
@@ -450,9 +480,7 @@ impl Application {
         input: Value,
     ) -> Result<Value> {
         let deadline = Deadline::new(self.timeout)?;
-        if !input.is_object() {
-            return Err(bad());
-        }
+        input::validate(operation, &input)?;
         if operation == "login_password" {
             let name = string(&input, "username")?;
             let supplied = string(&input, "password")?;
@@ -780,12 +808,52 @@ mod tests {
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
     #[test]
-    fn password_hashes_preserve_legacy_verification_and_random_salts() -> TestResult {
+    fn credential_expiry_has_one_utc_millisecond_representation() -> TestResult {
+        let current = OffsetDateTime::parse("2026-01-01T00:00:00.123Z", &Rfc3339)?;
+        for (input, expected) in [
+            ("2027-03-02T08:04:05+08:00", "2027-03-02T00:04:05.000Z"),
+            ("2027-03-01T16:04:05-08:00", "2027-03-02T00:04:05.000Z"),
+            ("2027-03-02T00:04:05.1Z", "2027-03-02T00:04:05.100Z"),
+            ("2027-03-02T00:04:05.123456789Z", "2027-03-02T00:04:05.123Z"),
+            ("9999-12-31T23:59:59Z", "9999-12-31T23:59:59.000Z"),
+        ] {
+            assert_eq!(expiry_at(input, current)?, expected, "{input}");
+        }
+        for input in [
+            "2026-01-01T00:00:00.123Z",
+            "2026-01-01T00:00:00.122999999Z",
+            "2026-01-01T00:00:00.123000001Z",
+            "2026-01-01T00:00:00.123999999Z",
+            "2027-02-30T00:00:00Z",
+            "2027-03-02T00:04:05",
+            "2027-03-02T00:04:05Z trailing",
+            "0000-01-01T00:00:00Z",
+            "0001-01-01T00:00:00+23:59",
+            "9999-12-31T23:59:59-23:59",
+            "10000-01-01T00:00:00Z",
+            "2040-06-30T23:59:60Z",
+            "2040-06-30T23:59:60.5Z",
+        ] {
+            assert_eq!(
+                expiry_at(input, current).err().ok_or(input)?.status,
+                400,
+                "{input}"
+            );
+        }
+        assert!(expiry_at("2026-01-01T00:00:00.124Z", current).is_ok());
+        assert_eq!(expiry(&json!({}))?, None);
+        assert_eq!(expiry(&json!({"expires_at": null}))?, None);
+        assert!(expiry(&json!({"expires_at": 42})).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn password_hashes_verify_current_phc_parameters_and_random_salts() -> TestResult {
         const PASSWORD: &str = "test-password-123";
-        // Generated by argon2 0.5.3 with salt b"0123456789abcdef".
-        const LEGACY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$/7yZUTnsFycR/LOkXWEp/ZKEbjbxQwuH/xh10Nf3D04";
-        assert!(verify(PASSWORD, LEGACY_HASH));
-        assert!(!verify("test-password-456", LEGACY_HASH));
+        // Independent known-answer PHC fixture with the current Argon2id parameters.
+        const KNOWN_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$/7yZUTnsFycR/LOkXWEp/ZKEbjbxQwuH/xh10Nf3D04";
+        assert!(verify(PASSWORD, KNOWN_HASH));
+        assert!(!verify("test-password-456", KNOWN_HASH));
         let first = hash_password(PASSWORD)?;
         let second = hash_password(PASSWORD)?;
         let first_hash = PasswordHash::new(&first)?;
@@ -859,7 +927,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("deadlines.db");
         let app = Application::new(Storage::Sqlite(path.clone()));
-        app.migrate()?;
+        app.initialize()?;
         let db = rusqlite::Connection::open(path)?;
         Ok((dir, app, db))
     }
@@ -1037,12 +1105,11 @@ mod tests {
         let id = identity.session_id.ok_or("session")?;
         db.execute("UPDATE gl_sessions SET last_seen_at=?1", [ago(2)])?;
         db.execute_batch("CREATE TABLE touch_count(n INTEGER); INSERT INTO touch_count VALUES(0); CREATE TRIGGER count_touch AFTER UPDATE OF last_seen_at ON gl_sessions BEGIN UPDATE touch_count SET n=n+1; END;")?;
-        let time = Utc::now();
+        let time = OffsetDateTime::now_utc();
         for milliseconds in 0..10 {
-            let time = time + chrono::Duration::milliseconds(milliseconds);
-            let now = time.to_rfc3339_opts(SecondsFormat::Millis, true);
-            let before =
-                (time - chrono::Duration::minutes(1)).to_rfc3339_opts(SecondsFormat::Millis, true);
+            let time = time + time::Duration::milliseconds(milliseconds);
+            let now = timestamp(time);
+            let before = timestamp(time - time::Duration::minutes(1));
             let mut t = app.storage.begin(false, Duration::from_secs(5))?;
             t.auth_touch_session(&id, &now, &before)?;
             t.commit()?;

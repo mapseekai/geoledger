@@ -316,7 +316,7 @@ mod tests {
     fn schema_intent_is_reversible_versioned_and_restorable() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::new(Storage::Sqlite(dir.path().join("schema.db")));
-        app.migrate().unwrap();
+        app.initialize().unwrap();
         let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
         let project = call("create_project", json!({"name":"schema"}))["project"]
             .as_str()
@@ -420,7 +420,7 @@ mod tests {
         let mut export = Vec::new();
         app.export_data(&mut export).unwrap();
         let imported = Application::new(Storage::Sqlite(dir.path().join("imported.db")));
-        imported.migrate().unwrap();
+        imported.initialize().unwrap();
         imported
             .import_data(&mut std::io::Cursor::new(export))
             .unwrap();
@@ -450,7 +450,7 @@ mod tests {
     fn schema_conflict_rejects_without_losing_the_intent() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::new(Storage::Sqlite(dir.path().join("conflict.db")));
-        app.migrate().unwrap();
+        app.initialize().unwrap();
         let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
         let p = call("create_project", json!({"name":"conflict"}))["project"]
             .as_str()
@@ -504,7 +504,7 @@ mod tests {
     fn schema_clear_removes_temporary_fields_and_recovers_edited_hidden_values() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::new(Storage::Sqlite(dir.path().join("clear.db")));
-        app.migrate().unwrap();
+        app.initialize().unwrap();
         let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
         let p = call("create_project", json!({"name":"clear"}))["project"]
             .as_str()
@@ -585,7 +585,7 @@ mod tests {
     fn schema_history_before_first_explicit_schema_uses_each_revision_properties() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::new(Storage::Sqlite(dir.path().join("dynamic.db")));
-        app.migrate().unwrap();
+        app.initialize().unwrap();
         let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
         let p = call("create_project", json!({"name":"dynamic"}))["project"]
             .as_str()
@@ -657,7 +657,7 @@ mod tests {
     fn schema_resolution_cannot_reintroduce_a_retired_property() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::new(Storage::Sqlite(dir.path().join("resolution.db")));
-        app.migrate().unwrap();
+        app.initialize().unwrap();
         let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
         let p = call("create_project", json!({"name":"resolution"}))["project"]
             .as_str()
@@ -734,7 +734,7 @@ mod tests {
     fn schema_resolve_preserves_hidden_values_when_head_moves() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::new(Storage::Sqlite(dir.path().join("resolve-hidden.db")));
-        app.migrate().unwrap();
+        app.initialize().unwrap();
         let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
         let p = call("create_project", json!({"name":"resolve-hidden"}))["project"]
             .as_str()
@@ -815,7 +815,7 @@ mod tests {
     fn schema_merge_validates_automatic_and_current_base_publication() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::new(Storage::Sqlite(dir.path().join("automatic-schema.db")));
-        app.migrate().unwrap();
+        app.initialize().unwrap();
         let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
         let p = call("create_project", json!({"name":"automatic-schema"}))["project"]
             .as_str()
@@ -948,7 +948,7 @@ mod tests {
             for with_feature in [false, true] {
                 let dir = tempfile::tempdir().unwrap();
                 let app = Application::new(Storage::Sqlite(dir.path().join("field-limit.db")));
-                app.migrate().unwrap();
+                app.initialize().unwrap();
                 let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
                 let p = call("create_project", json!({"name":"field limit"}))["project"]
                     .as_str()
@@ -998,13 +998,13 @@ mod tests {
                 );
                 if with_feature {
                     let mut t = app.storage.begin(true, Duration::from_secs(30)).unwrap();
-                    let raw = t
-                        .edit_base(&p, &w, &d, "a", 1)
-                        .unwrap()
-                        .get::<_, String>(3usize)
-                        .unwrap();
+                    let repository::DraftState::Value(raw) =
+                        t.edit_base(&p, &w, &d, "a", 1).unwrap().draft
+                    else {
+                        panic!("saved feature must have a raw draft");
+                    };
                     assert_eq!(
-                        crate::codec::stored::<Map<String, Value>>(&raw)
+                        crate::codec::stored::<Map<String, Value>>(&raw.properties)
                             .unwrap()
                             .len(),
                         count + 1
@@ -1040,7 +1040,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("field-limit-rollback.db");
         let app = Application::new(Storage::Sqlite(path.clone()));
-        app.migrate().unwrap();
+        app.initialize().unwrap();
         let call = |op: &str, input: Value| app.execute("alice", op, input).unwrap();
         let export = || {
             let mut out = Vec::new();
@@ -1105,7 +1105,7 @@ mod tests {
         db.execute_batch("DROP TRIGGER limit_receipt_failure")
             .unwrap();
         let recovered = Application::new(Storage::Sqlite(dir.path().join("undo.db")));
-        recovered.migrate().unwrap();
+        recovered.initialize().unwrap();
         recovered
             .import_data(&mut std::io::Cursor::new(before))
             .unwrap();

@@ -157,7 +157,12 @@ export function PublishDialog({
       } catch (error) {
         if (
           error instanceof ApiError &&
-          releasePublication(error.status, error.uncertain, !!pending)
+          releasePublication(
+            error.status,
+            error.uncertain,
+            !!pending,
+            error.code,
+          )
         ) {
           sessionStorage.removeItem("gl.publication");
           setPending(undefined);

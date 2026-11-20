@@ -197,8 +197,12 @@ func (w *Workspace) Publish(ctx context.Context, message string) (PublicationRes
 	if err == nil {
 		w.info.Version = r.Version
 		w.info.Status = r.Status
-	} else if e, ok := err.(*Error); ok && !e.Uncertain && (!wasPending || (e.Code != "unauthenticated" && e.Code != "permission_denied" && e.Code != "not_found")) {
-		w.pending = nil
+	} else if e, ok := err.(*Error); ok {
+		// A definite failure of this attempt cannot settle an earlier unknown
+		// publication unless its expected workspace version is permanently stale.
+		if !e.Uncertain && (!wasPending || e.Code == "workspace_version_conflict") {
+			w.pending = nil
+		}
 	}
 	return r, err
 }
@@ -293,7 +297,7 @@ func (m *workspaceMutex) lock(ctx context.Context) error {
 func waitingError(err error) error {
 	code := "cancelled"
 	if err == context.DeadlineExceeded {
-		code = "timeout"
+		code = "deadline_exceeded"
 	}
 	// No RPC has been sent, so this operation's outcome is certain.
 	return &Error{Code: code, Message: err.Error()}

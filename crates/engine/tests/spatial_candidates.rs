@@ -10,7 +10,7 @@ fn bbox_candidates_preserve_history_draft_shadowing_dimensions_and_pagination()
 -> Result<(), Box<dyn std::error::Error>> {
     let dir = tempfile::tempdir()?;
     let app = Application::new(Storage::Sqlite(dir.path().join("spatial.db")));
-    app.migrate()?;
+    app.initialize()?;
     let project =
         app.execute("alice", "create_project", json!({"name":"spatial"}))?["project"].clone();
     let call = |op: &str, mut args: Value| {

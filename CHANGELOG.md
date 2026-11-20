@@ -4,6 +4,28 @@
 
 发布时把 `Unreleased` 改为版本号与日期（与 `Cargo.toml`、`sdk/ts/package.json`、`sdk/python/pyproject.toml` 一致），发布流程从对应段落生成 Release 说明。
 
+## [0.4.0-alpha.1] - 2026-11-18
+
+### Breaking
+
+- Rust SDK 只保留 `Client::connect(endpoint, api_key, ConnectOptions)`，消息限制并入 options，双向默认各 64 MiB；删除为旧调用方式保留的连接入口与无限默认。所有示例、CLI 和仓库调用者同步迁移。
+- Rust SDK/CLI 的动态 JSON、认证请求和 HTTP `info` 严格按当前操作定义解析，拒绝未知字段、缺少必需值和错误类型。API Key 到期时间拒绝闰秒 `:60`，继续标准化为 UTC 毫秒，拒绝标准化后不再处于未来的值，并保留省略/显式 null 的区别。
+- 源表 CHECK、NOT NULL、外键与数值范围明确拒绝使用 `publication_attempt_rejected` + HTTP 400 / gRPC InvalidArgument；低层与工作区调用对本次失败直接返回 `uncertain=false`。已有未知发布的原始 intent 仍按恢复合同保留。
+- 已有未知发布仅在成功回执或可信的 `workspace_version_conflict` 后结案；普通/合并冲突、裸 409/Aborted 与其他错误保留原 intent，防止迟到原请求提交后失去恢复状态。独立当前句柄可通过原子草稿版本推进协助确认旧请求。
+- 错误契约统一为当前结构化 envelope 和 `deadline_exceeded` 业务码；移除旧错误 JSON 形状与别名。没有业务详情的 gRPC OutOfRange 在四语言 SDK 中统一为资源限制及不确定结果。
+- Rust 嵌入 API 使用 `Application::initialize()`；自定义 backend 的 `feature_exists` 必须显式实现键探测。工作区编辑返回 `EditContext`/`DraftState`，schema 仓储方法必须实现，SQL 驱动细节收回内部。`Service` 的限制在构造时设置，移除运行中的 `with_limits`；SDK Error 使用构造器，诊断源不再允许外部 struct literal 初始化。
+- Rust 最低版本提高到 1.89，以采用修复的 rusqlite / SQLite 绑定。完整调用方迁移见 [0.4 迁移说明](docs/migration-0.4.md)。
+
+### Changed
+
+- 删除 alpha.4 源码恢复与 alpha.7 SDK 补发的一次性 workflow/jobs、脚本、专属测试和对应例外；普通 tag 发布、通用 source-release / release-resume 及历史镜像审计保留。
+- chrono 替换为 time，认证时间继续使用统一 UTC 毫秒表示；密码继续验证当前 Argon2id PHC，随机盐与参数不变。
+- gRPC 包仍为 `geoledger.v1`，HTTP 入口仍为 `/api/v1`，存储格式仍为 19；服务端、SDK、CLI 和 Web 按同一发布版本升级。
+
+### Security
+
+- 定向更新 rusqlite / libsqlite3-sys、pulldown-cmark、rustix、Next.js 与 Go 工具链补丁，移除已停止维护的 chrono；保持依赖审计门禁与现有告警策略。
+
 ## [0.3.0-alpha.9] - 2026-11-01
 
 ### Fixed

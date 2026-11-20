@@ -17,12 +17,8 @@ pub trait FeatureRepository: Send {
     fn feature_page(&mut self, query: &FeatureQuery) -> Result<Vec<Row>>;
 
     /// Check the same snapshot, cursor and filters for a match, ignoring the page limit.
-    /// Backends should override this to avoid loading feature payloads for lookahead.
-    fn feature_exists(&mut self, query: &FeatureQuery) -> Result<bool> {
-        let mut query = query.clone();
-        query.limit = 1;
-        Ok(!self.feature_page(&query)?.is_empty())
-    }
+    /// Probe visible keys without materializing unreturned properties or geometry.
+    fn feature_exists(&mut self, query: &FeatureQuery) -> Result<bool>;
 
     fn feature_at(
         &mut self,

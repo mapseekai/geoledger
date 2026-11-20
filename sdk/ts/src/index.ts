@@ -65,21 +65,25 @@ export class GeoLedgerError extends Error {
 const invalid = (message: string) =>
   new GeoLedgerError("invalid_argument", message);
 function failure(error: ServiceError): GeoLedgerError {
-  const uncertain = [1, 2, 4, 8, 13, 14, 15].includes(error.code);
+  const uncertain = [1, 2, 4, 8, 11, 13, 14, 15].includes(error.code);
   try {
     const raw = error.metadata.get("grpc-status-details-bin")[0];
     if (Buffer.isBuffer(raw)) {
-      const detail = wire.RpcStatus.decode(raw).details.find(
+      const envelope = wire.RpcStatus.decode(raw);
+      if (envelope.code !== error.code) throw new Error("Mismatched RPC status");
+      const detail = envelope.details.find(
         (d) => d.typeUrl === "type.googleapis.com/geoledger.v1.ErrorDetail",
       );
       if (detail) {
         const d = wire.ErrorDetail.decode(detail.value);
+        if (!d.code) throw new Error("Missing business error code");
         return new GeoLedgerError(
           d.code,
           d.message,
           d.requestId,
           d.conflicts ? convert.decodeConflicts(d.conflicts) : undefined,
-          uncertain,
+          uncertain || (d.code === "workspace_version_conflict" &&
+            (error.code !== 10 || !d.message.trim() || !d.requestId.trim() || d.conflicts !== undefined)),
         );
       }
     }
@@ -89,14 +93,14 @@ function failure(error: ServiceError): GeoLedgerError {
   const codes: Record<number, string> = {
     1: "cancelled",
     3: "invalid_argument",
-    4: "timeout",
+    4: "deadline_exceeded",
     5: "not_found",
     6: "conflict",
     7: "permission_denied",
     8: "resource_exhausted",
     9: "conflict",
     10: "conflict",
-    11: "invalid_argument",
+    11: "resource_exhausted",
     16: "unauthenticated",
   };
   return new GeoLedgerError(
@@ -104,7 +108,7 @@ function failure(error: ServiceError): GeoLedgerError {
     error.details || "request failed",
     undefined,
     undefined,
-    uncertain,
+    uncertain || [6, 9, 10].includes(error.code),
   );
 }
 export function stringifyJson(value: unknown): string {
@@ -567,6 +571,8 @@ export class Client {
    * Prefer Workspace.publish when the SDK should retain that retry state for you.
    */
   publish(intent: model.Publication): Promise<model.PublicationResult> {
+    const expectedVersion = intent.expectedWorkspaceVersion;
+    const workspace = intent.workspace;
     return this.#call(
       (cb) =>
         this.#rpc.publish(
@@ -576,7 +582,14 @@ export class Client {
           },
           cb,
         ),
-      convert.decodePublicationResult,
+      (reply: wire.PublishReply) => {
+        const result = convert.decodePublicationResult(reply);
+        if (result.workspace !== workspace || result.status !== "published" ||
+          result.revision <= 0n || expectedVersion < 0n || expectedVersion >= 9223372036854775807n ||
+          result.version !== expectedVersion + 1n || result.changes < 0n)
+          throw new Error("Invalid publication receipt");
+        return result;
+      },
     );
   }
   async restore(project: string, version: bigint): Promise<Workspace> {
@@ -881,15 +894,15 @@ export class Workspace {
       try {
         return this.#update(await this.client.publish(this.#pending));
       } catch (e) {
-        if (
-          e instanceof GeoLedgerError &&
-          !e.uncertain &&
-          (!wasPending ||
-            !["unauthenticated", "permission_denied", "not_found"].includes(
-              e.code,
-            ))
-        )
-          this.#pending = undefined;
+        if (e instanceof GeoLedgerError) {
+          // An earlier unknown attempt can only be released by a permanent
+          // workspace-version rejection, not a HEAD-dependent merge conflict.
+          if (
+            !e.uncertain &&
+            (!wasPending || e.code === "workspace_version_conflict")
+          )
+            this.#pending = undefined;
+        }
         throw e;
       }
     });

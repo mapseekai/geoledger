@@ -2,67 +2,46 @@ use super::Row;
 use crate::Result;
 
 /// Dataset metadata and its transaction-local cache.
+///
+/// Schema operations are required even for backends without versioned schemas. Such
+/// backends explicitly return unsupported, dynamic definitions; empty intent/history
+/// and cleanup are valid no-ops, but nonempty schema replacement must be rejected.
+/// A backend reporting `DatasetSchema::supported` must implement the full lifecycle
+/// here and in `PublicationRepository`, on the same atomic transaction.
 pub trait DatasetRepository: Send {
     /// Projection metadata lookup must not infer a schema by scanning feature payloads.
     fn schema_projection(
         &mut self,
-        _project: &str,
-        _dataset: &str,
-        _revision: i64,
-    ) -> Result<crate::DatasetSchema> {
-        Ok(crate::DatasetSchema {
-            dynamic: true,
-            ..Default::default()
-        })
-    }
+        project: &str,
+        dataset: &str,
+        revision: i64,
+    ) -> Result<crate::DatasetSchema>;
     /// Immutable property definitions at a published revision.
     fn schema_at(
         &mut self,
-        _project: &str,
-        _dataset: &str,
-        _revision: i64,
-    ) -> Result<crate::DatasetSchema> {
-        Ok(crate::DatasetSchema {
-            dynamic: true,
-            ..Default::default()
-        })
-    }
+        project: &str,
+        dataset: &str,
+        revision: i64,
+    ) -> Result<crate::DatasetSchema>;
     fn workspace_schemas(
         &mut self,
-        _project: &str,
-        _workspace: &str,
-    ) -> Result<Vec<(String, crate::DatasetSchema)>> {
-        Ok(Vec::new())
-    }
+        project: &str,
+        workspace: &str,
+    ) -> Result<Vec<(String, crate::DatasetSchema)>>;
     /// Replaces the complete schema intent relative to the workspace base.
     fn replace_workspace_schemas(
         &mut self,
-        _project: &str,
-        _workspace: &str,
+        project: &str,
+        workspace: &str,
         definitions: &[(String, crate::DatasetSchema, crate::DatasetSchema)],
-    ) -> Result<()> {
-        if definitions.is_empty() {
-            Ok(())
-        } else {
-            Err(crate::Error::new(
-                400,
-                "storage does not support versioned schemas",
-            ))
-        }
-    }
+    ) -> Result<()>;
     fn published_schema_changes(
         &mut self,
-        _project: &str,
-        _revision: i64,
-    ) -> Result<Vec<(String, crate::DatasetSchema, crate::DatasetSchema)>> {
-        Ok(Vec::new())
-    }
-    fn schema_changed_since(&mut self, _project: &str, _base: i64, _current: i64) -> Result<bool> {
-        Ok(false)
-    }
-    fn clear_workspace_schemas(&mut self, _project: &str, _workspace: &str) -> Result<()> {
-        Ok(())
-    }
+        project: &str,
+        revision: i64,
+    ) -> Result<Vec<(String, crate::DatasetSchema, crate::DatasetSchema)>>;
+    fn schema_changed_since(&mut self, project: &str, base: i64, current: i64) -> Result<bool>;
+    fn clear_workspace_schemas(&mut self, project: &str, workspace: &str) -> Result<()>;
 
     fn dataset_exists(&mut self, project: &str, dataset: &str) -> Result<Option<Row>>;
 

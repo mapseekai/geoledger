@@ -255,7 +255,7 @@ test("definite conflict permits resolution with the unchanged draft version", as
   assert.equal(workspace.info.version, 4n);
 });
 
-for (const code of ["unauthenticated", "permission_denied", "not_found"]) {
+for (const code of ["unauthenticated", "permission_denied", "not_found", "invalid_argument", "conflict", "unknown_business_error"]) {
   test(`retry ${code} preserves original publication`, async () => {
     const sent = [];
     const workspace = new Workspace(
@@ -287,18 +287,19 @@ for (const code of ["unauthenticated", "permission_denied", "not_found"]) {
   });
 }
 
-test("first access failure and retry conflict release intent", async () => {
+test("first access failure and permanent workspace version rejection release intent", async () => {
   for (const code of [
     "unauthenticated",
     "permission_denied",
     "not_found",
-    "conflict",
+    "invalid_argument",
+    "workspace_version_conflict",
   ]) {
     let calls = 0;
     const workspace = new Workspace(
       {
         publish: async () => {
-          if (code === "conflict" && calls++ === 0)
+          if (code === "workspace_version_conflict" && calls++ === 0)
             throw new GeoLedgerError(
               "unavailable",
               "lost",
@@ -312,12 +313,76 @@ test("first access failure and retry conflict release intent", async () => {
       "project",
       { id: "draft", baseRevision: 1n, version: 4n, status: "open" },
     );
-    if (code === "conflict")
+    if (code === "workspace_version_conflict")
       await assert.rejects(workspace.publish("original"));
     await assert.rejects(workspace.publish("original"));
     assert.equal(workspace.pendingPublication, undefined);
   }
 });
+
+test("source rejection is definite for both client levels and permits correction", async () => {
+  const wire = require("../dist/_internal/geoledger/v1/geoledger");
+  const grpc = require("@grpc/grpc-js");
+  const metadata = new grpc.Metadata();
+  metadata.set("grpc-status-details-bin", Buffer.from(wire.RpcStatus.encode({
+    code: grpc.status.INVALID_ARGUMENT,
+    message: "source rejected",
+    details: [{
+      typeUrl: "type.googleapis.com/geoledger.v1.ErrorDetail",
+      value: wire.ErrorDetail.encode({ code: "publication_attempt_rejected", message: "source rejected", requestId: "request" }).finish(),
+    }],
+  }).finish()));
+  const sent = [];
+  const original = wire.GeoLedgerClient.prototype.publish;
+  wire.GeoLedgerClient.prototype.publish = (request, callback) => {
+    sent.push(request);
+    callback(Object.assign(new Error("source rejected"), { code: grpc.status.INVALID_ARGUMENT, metadata }));
+  };
+  const client = new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  try {
+    const intent = { project: "project", workspace: "draft", expectedWorkspaceVersion: 4n, requestId: "request", message: "original" };
+    await assert.rejects(client.publish(intent), (e) => e.code === "publication_attempt_rejected" && !e.uncertain);
+    const workspace = new Workspace(client, "project", { id: "draft", baseRevision: 1n, version: 4n, status: "open" });
+    await assert.rejects(workspace.publish("original"), (e) => e.code === "publication_attempt_rejected" && !e.uncertain && e.requestId === "request");
+    assert.equal(workspace.pendingPublication, undefined);
+    assert.equal(workspace.info.version, 4n);
+    let saves = 0;
+    client.save = async () => { saves++; return { version: 5n, changes: 1n }; };
+    client.publish = async (next) => {
+      assert.notEqual(next.requestId, sent[1].requestId);
+      assert.equal(next.expectedWorkspaceVersion, 5n);
+      return { revision: 2n, version: 6n, status: "published" };
+    };
+    await workspace.delete("dataset", "one");
+    await workspace.publish("corrected");
+    assert.equal(saves, 1);
+  } finally {
+    client.close();
+    wire.GeoLedgerClient.prototype.publish = original;
+  }
+});
+
+for (const uncertain of [false, true]) {
+  test(`source rejection uncertain=${uncertain} preserves an earlier unknown attempt`, async () => {
+    const sent = [];
+    const workspace = new Workspace({
+      publish: async (intent) => {
+        sent.push({ ...intent });
+        if (sent.length === 1)
+          throw new GeoLedgerError("unavailable", "old attempt still queued", undefined, undefined, true);
+        if (sent.length === 2)
+          throw new GeoLedgerError("publication_attempt_rejected", "retry rejected", undefined, undefined, uncertain);
+        return { revision: 2n, version: 5n, status: "published" };
+      },
+    }, "project", { id: "draft", baseRevision: 1n, version: 4n, status: "open" });
+    await assert.rejects(workspace.publish("original"));
+    await assert.rejects(workspace.publish("original"));
+    assert.deepEqual(workspace.pendingPublication, sent[0]);
+    await assert.rejects(workspace.delete("dataset", "one"), /pending publication/);
+    await workspace.publish("original");
+    assert.deepEqual(sent, [sent[0], sent[0], sent[0]]);
+  });
+}
 
 test("schema query and save preserve exact versions and omitted versus empty intent", async () => {
   const wire = require("../dist/_internal/geoledger/v1/geoledger");
@@ -352,4 +417,161 @@ test("schema query and save preserve exact versions and omitted versus empty int
     wire.GeoLedgerClient.prototype.save=originalSave;
     wire.GeoLedgerClient.prototype.schema=originalSchema;
   }
+});
+
+test("deadline and range transport failures use canonical codes and retain publication intent", async () => {
+  const wire = require("../dist/_internal/geoledger/v1/geoledger");
+  const grpc = require("@grpc/grpc-js");
+  const original = wire.GeoLedgerClient.prototype.publish;
+  try {
+    for (const [status, fallback] of [
+      [grpc.status.DEADLINE_EXCEEDED, "deadline_exceeded"],
+      [grpc.status.OUT_OF_RANGE, "resource_exhausted"],
+    ]) {
+      for (const businessCode of [undefined, "business_range"]) {
+        const metadata = new grpc.Metadata();
+        if (businessCode) {
+          metadata.set("grpc-status-details-bin", Buffer.from(wire.RpcStatus.encode({
+            code: status,
+            message: "transport failure",
+            details: [{
+              typeUrl: "type.googleapis.com/geoledger.v1.ErrorDetail",
+              value: wire.ErrorDetail.encode({ code: businessCode, message: "business rejection", requestId: "request" }).finish(),
+            }],
+          }).finish()));
+        }
+        const sent = [];
+        wire.GeoLedgerClient.prototype.publish = (request, callback) => {
+          sent.push({ ...request });
+          callback(Object.assign(new Error("transport failure"), { code: status, metadata }));
+        };
+        const client = new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        try {
+          const workspace = new Workspace(client, "project", { id: "draft", baseRevision: 1n, version: 4n, status: "open" });
+          for (let attempt = 0; attempt < 2; attempt++) {
+            await assert.rejects(workspace.publish("original"), (e) =>
+              e instanceof GeoLedgerError && e.code === (businessCode ?? fallback) && e.uncertain,
+            );
+          }
+          assert(workspace.pendingPublication);
+          assert.deepEqual(sent[0], sent[1]);
+          await assert.rejects(workspace.delete("dataset", "one"), /pending publication/);
+        } finally {
+          client.close();
+        }
+      }
+    }
+  } finally {
+    wire.GeoLedgerClient.prototype.publish = original;
+  }
+});
+
+
+test("conflict-family statuses require a matching current business detail", async () => {
+  const wire = require("../dist/_internal/geoledger/v1/geoledger");
+  const grpc = require("@grpc/grpc-js");
+  const original = wire.GeoLedgerClient.prototype.publish;
+  try {
+    for (const status of [grpc.status.ABORTED, grpc.status.ALREADY_EXISTS, grpc.status.FAILED_PRECONDITION]) {
+      for (const kind of ["absent", "malformed", "mismatched", "empty code", "wrong type"]) {
+        const metadata = new grpc.Metadata();
+        if (kind !== "absent") {
+          const raw = kind === "malformed" ? Buffer.from([255]) : Buffer.from(wire.RpcStatus.encode({
+            code: kind === "mismatched" ? grpc.status.UNAVAILABLE : status,
+            message: "proxy rejection",
+            details: [{
+              typeUrl: kind === "wrong type" ? "type.invalid/geoledger.v1.ErrorDetail" : "type.googleapis.com/geoledger.v1.ErrorDetail",
+              value: wire.ErrorDetail.encode({ code: kind === "empty code" ? "" : "workspace_version_conflict", message: "not trusted", requestId: "request" }).finish(),
+            }],
+          }).finish());
+          metadata.set("grpc-status-details-bin", raw);
+        }
+        const sent = [];
+        wire.GeoLedgerClient.prototype.publish = (request, callback) => {
+          sent.push({ ...request });
+          callback(Object.assign(new Error("proxy rejection"), { code: status, metadata }));
+        };
+        const client = new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        try {
+          const workspace = new Workspace(client, "project", { id: "draft", baseRevision: 1n, version: 4n, status: "open" });
+          for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(workspace.publish("original"), (e) => e.code === "conflict" && e.uncertain);
+          const intent = workspace.pendingPublication;
+          assert(intent);
+          assert.deepEqual(sent[0], sent[1]);
+          await assert.rejects(workspace.delete("dataset", "one"), /pending publication/);
+          client.publish = async (recovered) => {
+            assert.deepEqual(recovered, intent);
+            return { revision: 2n, version: 5n, status: "published", changes: 1n };
+          };
+          await workspace.publish("original");
+          assert.equal(workspace.info.status, "published");
+        } finally { client.close(); }
+      }
+    }
+  } finally { wire.GeoLedgerClient.prototype.publish = original; }
+});
+
+test("workspace version proofs require Aborted and complete non-merge details", async () => {
+  const wire = require("../dist/_internal/geoledger/v1/geoledger");
+  const grpc = require("@grpc/grpc-js");
+  const original = wire.GeoLedgerClient.prototype.publish;
+  const cases = [
+    { name: "valid", status: grpc.status.ABORTED, valid: true },
+    ...[grpc.status.PERMISSION_DENIED, grpc.status.INVALID_ARGUMENT, grpc.status.ALREADY_EXISTS, grpc.status.FAILED_PRECONDITION, grpc.status.UNAVAILABLE].map((status) => ({ name: `status ${status}`, status, valid: false })),
+    { name: "empty message", status: grpc.status.ABORTED, message: "", valid: false },
+    { name: "blank message", status: grpc.status.ABORTED, message: " \t", valid: false },
+    { name: "empty request", status: grpc.status.ABORTED, requestId: "", valid: false },
+    { name: "blank request", status: grpc.status.ABORTED, requestId: " \t", valid: false },
+    { name: "merge metadata", status: grpc.status.ABORTED, conflicts: {}, valid: false },
+  ];
+  try {
+    for (const item of cases) {
+      let failureStatus = grpc.status.UNAVAILABLE;
+      let metadata = new grpc.Metadata();
+      wire.GeoLedgerClient.prototype.publish = (_request, callback) => callback(Object.assign(new Error("public failure"), { code: failureStatus, metadata }));
+      const client = new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      try {
+        const workspace = new Workspace(client, "project", { id: "draft", baseRevision: 1n, version: 4n, status: "open" });
+        await assert.rejects(workspace.publish("original"), (e) => e.uncertain);
+        const intent = workspace.pendingPublication;
+        assert(intent);
+        const detail = wire.ErrorDetail.fromPartial({ code: "workspace_version_conflict", message: "workspace version changed", requestId: "proof", ...item });
+        metadata = new grpc.Metadata();
+        metadata.set("grpc-status-details-bin", Buffer.from(wire.RpcStatus.encode({ code: item.status, message: "public failure", details: [{ typeUrl: "type.googleapis.com/geoledger.v1.ErrorDetail", value: wire.ErrorDetail.encode(detail).finish() }] }).finish()));
+        failureStatus = item.status;
+        await assert.rejects(workspace.publish("original"), (e) => e.code === "workspace_version_conflict" && e.uncertain === !item.valid);
+        if (item.valid) assert.equal(workspace.pendingPublication, undefined, item.name);
+        else assert.deepEqual(workspace.pendingPublication, intent, item.name);
+      } finally { client.close(); }
+    }
+  } finally { wire.GeoLedgerClient.prototype.publish = original; }
+});
+
+test("a malformed publication receipt stays uncertain until the exact original receipt arrives", async () => {
+  const wire = require("../dist/_internal/geoledger/v1/geoledger");
+  const original = wire.GeoLedgerClient.prototype.publish;
+  const valid = { workspace: "draft", status: "published", revision: "2", version: "5", changes: "0" };
+  try {
+    for (const bad of [{}, { ...valid, workspace: "other" }, { ...valid, version: "4" }, { ...valid, status: "open" }, { ...valid, revision: "0" }, { ...valid, changes: "-1" }]) {
+      let receipt = wire.PublishReply.fromPartial(bad);
+      const sent = [];
+      wire.GeoLedgerClient.prototype.publish = (request, callback) => { sent.push({ ...request }); callback(null, receipt); };
+      const client = new Client("http://127.0.0.1:7882", "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      try {
+        const workspace = new Workspace(client, "project", { id: "draft", baseRevision: 1n, version: 4n, status: "open" });
+        await assert.rejects(workspace.publish("original"), (e) => e.code === "invalid_response" && e.uncertain);
+        const intent = workspace.pendingPublication;
+        assert(intent);
+        assert.equal(workspace.info.version, 4n);
+        assert.equal(workspace.info.status, "open");
+        await assert.rejects(workspace.delete("dataset", "one"), /pending publication/);
+        receipt = wire.PublishReply.fromPartial(valid);
+        const result = await workspace.publish("original");
+        assert.equal(result.changes, 0n);
+        assert.equal(workspace.info.status, "published");
+        assert.deepEqual(sent[0], sent[1]);
+        assert.deepEqual(workspace.pendingPublication, intent);
+      } finally { client.close(); }
+    }
+  } finally { wire.GeoLedgerClient.prototype.publish = original; }
 });

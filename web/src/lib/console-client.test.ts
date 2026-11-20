@@ -34,7 +34,8 @@ test("private transport sends only Session header and preserves exact business m
       "test-session",
     );
     assert.equal(requests[0].headers.has("authorization"), false);
-    response = '{"revision":9007199254740994,"version":1,"changes":1}';
+    response =
+      '{"revision":9007199254740994,"workspace":"w","version":9007199254740994,"status":"published","changes":1}';
     const publish = {
       action: "publish",
       project: "p",
@@ -119,7 +120,7 @@ test("private transport sends only Session header and preserves exact business m
     );
     status = 409;
     response =
-      '{"error":"merge conflicts","head":9007199254740993,"version":4,"total":1,"truncated":false,"conflicts":[{"cursor":"d/f","dataset":"d","feature_id":"f","fields":[],"base":null,"current":{"type":"Feature","id":"f","properties":{"exact":18446744073709551615},"geometry":null},"draft":null}]}';
+      '{"error":{"code":"conflict","message":"merge conflicts"},"head":9007199254740993,"version":4,"total":1,"truncated":false,"conflicts":[{"cursor":"d/f","dataset":"d","feature_id":"f","fields":[],"base":null,"current":{"type":"Feature","id":"f","properties":{"exact":18446744073709551615},"geometry":null},"draft":null}]}';
     await assert.rejects(client.conflicts("p", "w"), (error) => {
       assert(error instanceof GeoLedgerError);
       assert.equal(error.conflicts?.head, 9007199254740993n);
@@ -304,8 +305,8 @@ test("HTTP admission and timeout errors match SDK uncertainty and fallback codes
     for (const [status, code] of [
       [413, "resource_exhausted"],
       [429, "resource_exhausted"],
-      [408, "timeout"],
-      [504, "timeout"],
+      [408, "deadline_exceeded"],
+      [504, "deadline_exceeded"],
       [499, "cancelled"],
     ] as const) {
       globalThis.fetch = async () =>
@@ -438,7 +439,14 @@ test("business transport rejects malformed domain envelopes and preserves exact 
         response = JSON.stringify(malformed);
         await assert.rejects(client.conflicts("p", "w"), invalid);
       }
+      response = JSON.stringify({
+        ...malformed,
+        error: { code: "conflict", message: "merge conflicts" },
+      });
+      await assert.rejects(client.conflicts("p", "w"), invalid);
     }
+    response = JSON.stringify(conflicts);
+    await assert.rejects(client.conflicts("p", "w"), invalid);
     status = 200;
     response = JSON.stringify(conflicts);
     const result = await client.conflicts("p", "w");
@@ -456,5 +464,86 @@ test("business transport rejects malformed domain envelopes and preserves exact 
     globalThis.fetch = savedFetch;
     if (savedSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
     else process.env.GL_WEB_SESSION_SECRET = savedSecret;
+  }
+});
+
+test("only the current engine error envelope supplies business details", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSecret = process.env.GL_WEB_SESSION_SECRET;
+  process.env.GL_WEB_SESSION_SECRET = "test-only-session-secret-".repeat(3);
+  try {
+    for (const value of [
+      { code: "old_code", message: "old message" },
+      { error: "old message" },
+      { error: { code: 7, message: "wrong type" } },
+      { error: { code: "old_code", message: ["wrong type"] } },
+      { error: [] },
+    ]) {
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify(value), {
+          status: 429,
+          headers: { "x-request-id": "gateway-request" },
+        });
+      await assert.rejects(
+        consoleClient("test-session").project("p"),
+        (error) => {
+          assert(error instanceof GeoLedgerError);
+          assert.equal(error.code, "resource_exhausted");
+          assert.equal(error.message, "请求失败");
+          assert.equal(error.requestId, "gateway-request");
+          assert.equal(error.uncertain, true);
+          return true;
+        },
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
+    else process.env.GL_WEB_SESSION_SECRET = originalSecret;
+  }
+});
+
+test("upstream 409 needs the current error envelope to provide a definite business result", async () => {
+  const original = globalThis.fetch;
+  const originalSecret = process.env.GL_WEB_SESSION_SECRET;
+  process.env.GL_WEB_SESSION_SECRET = "test-only-session-secret-".repeat(3);
+  try {
+    for (const raw of [
+      "",
+      "proxy conflict",
+      "null",
+      '{"code":"workspace_version_conflict","message":"old shape"}',
+      '{"error":"old shape"}',
+      '{"error":{"code":"","message":"empty code"}}',
+    ]) {
+      globalThis.fetch = async () => new Response(raw, { status: 409 });
+      await assert.rejects(
+        consoleClient("test-session").project("p"),
+        (error) => {
+          assert(error instanceof GeoLedgerError);
+          assert.equal(error.code, "conflict");
+          assert.equal(error.uncertain, true);
+          return true;
+        },
+      );
+    }
+    globalThis.fetch = async () =>
+      new Response(
+        '{"error":{"code":"workspace_version_conflict","message":"workspace version changed","request_id":"request"}}',
+        { status: 409 },
+      );
+    await assert.rejects(
+      consoleClient("test-session").project("p"),
+      (error) => {
+        assert(error instanceof GeoLedgerError);
+        assert.equal(error.code, "workspace_version_conflict");
+        assert.equal(error.uncertain, false);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = original;
+    if (originalSecret === undefined) delete process.env.GL_WEB_SESSION_SECRET;
+    else process.env.GL_WEB_SESSION_SECRET = originalSecret;
   }
 });

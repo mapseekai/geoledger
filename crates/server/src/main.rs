@@ -311,7 +311,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
     };
     let app = application(&args, storage);
     let bootstrap = app.clone();
-    tokio::task::spawn_blocking(move || bootstrap.migrate()).await??;
+    tokio::task::spawn_blocking(move || bootstrap.initialize()).await??;
     let initial = app.clone();
     let username = args.admin_username.clone();
     let data_dir = args.data_dir.clone();
@@ -332,7 +332,7 @@ async fn run(args: Args) -> Result<(), BoxError> {
         request_memory_bytes: args.request_memory_bytes,
         response_memory_bytes: args.response_memory_bytes,
     };
-    let service = Service::new(app).with_limits(limits);
+    let service = Service::new_with_limits(app, limits);
     // Bind both before reporting readiness. A failed listener leaves no half-started service.
     let http = tokio::net::TcpListener::bind(args.http).await?;
     let grpc = tokio::net::TcpListener::bind(args.grpc).await?;
@@ -611,7 +611,7 @@ mod tests {
         std::fs::create_dir_all(&root)?;
         let dir = tempfile::tempdir_in(root)?;
         let app = Application::new(Storage::Sqlite(dir.path().join("db.sqlite3")));
-        app.migrate()?;
+        app.initialize()?;
         Ok((dir, app))
     }
     #[test]

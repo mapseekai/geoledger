@@ -129,13 +129,9 @@ impl Application {
         Self::with_options(storage, StorageOptions::default())
     }
     pub fn with_options(storage: Storage, options: StorageOptions) -> Self {
-        Self::with_backend(std::sync::Arc::new(session::SqlStorage {
-            storage,
-            pool: std::sync::Arc::new(session::postgres::Pool::new(StorageOptions {
-                pool_size: options.pool_size.max(1),
-                ..options
-            })),
-        }))
+        Self::with_backend(std::sync::Arc::new(session::SqlStorage::new(
+            storage, options,
+        )))
     }
     pub fn pool_stats(&self) -> Option<PoolStats> {
         self.storage.pool_stats()
@@ -198,7 +194,9 @@ impl Application {
     pub fn backend(&self) -> &'static str {
         self.storage.name()
     }
-    pub fn migrate(&self) -> Result<()> {
+    /// Initialize a fresh current-format database or validate an existing one.
+    /// Other storage formats are rejected; initialization never upgrades them.
+    pub fn initialize(&self) -> Result<()> {
         self.storage.initialize(self.timeout)
     }
     pub fn check_schema(&self) -> Result<()> {
@@ -224,23 +222,7 @@ impl Application {
         text(subject, 128)?;
         let input = codec::parse(&codec::encode(&input)?)?;
         let command: Command = decode(json!({"operation":operation,"input":input}))?;
-        let read_only = matches!(
-            operation,
-            "list_projects"
-                | "get_project"
-                | "list_datasets"
-                | "list_workspaces"
-                | "get_workspace"
-                | "features"
-                | "schema"
-                | "diff"
-                | "workspace_summary"
-                | "commit_summary"
-                | "history"
-                | "audit"
-                | "commit"
-                | "list_members"
-        );
+        let read_only = command.read_only();
         let policy = self.policy.as_ref();
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
@@ -440,6 +422,45 @@ enum Command {
     Publish(Publish),
     Rebase(Rebase),
     Restore(Restore),
+}
+impl Command {
+    /// Classify the decoded command; adding a command must choose its transaction mode.
+    fn read_only(&self) -> bool {
+        match self {
+            Self::ListProjects(_)
+            | Self::GetProject(_)
+            | Self::ListMembers(_)
+            | Self::ListDatasets(_)
+            | Self::ListWorkspaces(_)
+            | Self::GetWorkspace(_)
+            | Self::Features(_)
+            | Self::Schema(_)
+            | Self::WorkspaceSummary(_)
+            | Self::CommitSummary(_)
+            | Self::Diff(_)
+            | Self::History(_)
+            | Self::Audit(_)
+            | Self::Commit(_) => true,
+            Self::CreateProject(_)
+            | Self::SetMember(_)
+            | Self::RemoveMember(_)
+            | Self::ArchiveProject(_)
+            | Self::DeleteProject(_)
+            | Self::RenameProject(_)
+            | Self::RenameDataset(_)
+            | Self::DeleteDataset(_)
+            | Self::CreateDataset(_)
+            | Self::CreateWorkspace(_)
+            | Self::Save(_)
+            | Self::Discard(_)
+            // Conflict queries maintain a persistent derived cache.
+            | Self::Conflicts(_)
+            | Self::Resolve(_)
+            | Self::Publish(_)
+            | Self::Rebase(_)
+            | Self::Restore(_) => false,
+        }
+    }
 }
 
 pub fn parse_json(bytes: &[u8]) -> Result<Value> {

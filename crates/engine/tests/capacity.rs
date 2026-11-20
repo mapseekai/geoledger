@@ -33,7 +33,7 @@ fn million_features_twenty_distinct_writers() -> Result<(), Box<dyn std::error::
     };
     let mut cleanup = ResetPostgis(postgres.then(|| dsn.clone()).flatten());
     let app = Application::new(storage);
-    app.migrate()?;
+    app.initialize()?;
     let p = app.execute("capacity-0", "create_project", json!({"name":"capacity"}))?["project"]
         .as_str()
         .ok_or("project")?

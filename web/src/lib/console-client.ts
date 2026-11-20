@@ -1,3 +1,4 @@
+import { invalidVersionProof, matchesPublicationReceipt } from "./publication";
 import { httpCode, uncertainStatus } from "./http-status";
 import type { Client, Edit, WorkspaceInfo } from "@geoledger/client";
 import { stringifyJson, GeoLedgerError } from "@geoledger/client";
@@ -86,27 +87,43 @@ async function request<T>(
   if (!response.ok) {
     let value: Record<string, unknown> = {};
     try {
-      const parsed = decode(parseLosslessJson(raw));
+      const parsed = parseLosslessJson(raw);
       if (parsed && typeof parsed === "object")
         value = parsed as Record<string, unknown>;
     } catch {
       // Proxies may reject admission with a plain-text response.
     }
-    const detail =
-      value.error && typeof value.error === "object"
-        ? (value.error as Record<string, unknown>)
-        : value;
+    const detail = errorDetail(value.error);
+    const rawDetail = (
+      value.error && typeof value.error === "object" ? value.error : {}
+    ) as Record<string, unknown>;
+    if (value.conflicts !== undefined && !detail)
+      throw new GeoLedgerError(
+        "invalid_response",
+        "Invalid business response",
+        undefined,
+        undefined,
+        true,
+      );
     throw Object.assign(
       new GeoLedgerError(
-        String(detail.code ?? httpCode(response.status)),
-        String(
-          detail.message ??
-            (typeof value.error === "string" ? value.error : "请求失败"),
-        ),
-        response.headers.get("x-request-id") ??
-          (typeof detail.requestId === "string" ? detail.requestId : undefined),
-        value.conflicts === undefined ? undefined : decodeConflicts(value),
-        uncertainStatus(response.status),
+        detail?.code ?? httpCode(response.status),
+        detail?.message ?? "请求失败",
+        response.headers.get("x-request-id") ?? detail?.requestId,
+        detail && value.conflicts !== undefined
+          ? decodeConflicts(decode(value))
+          : undefined,
+        uncertainStatus(response.status) ||
+          (response.status === 409 && !detail) ||
+          invalidVersionProof(
+            response.status,
+            rawDetail.code,
+            rawDetail.message,
+            rawDetail.request_id,
+            value.conflicts === undefined
+              ? rawDetail.conflicts
+              : value.conflicts,
+          ),
       ),
       { status: response.status },
     );
@@ -116,6 +133,26 @@ async function request<T>(
       ? validateBusinessResponse(operation, decode(parseLosslessJson(raw)))
       : JSON.parse(raw)
   ) as T;
+}
+/** Recognize the current engine envelope; unrelated HTTP bodies stay transport errors. */
+function errorDetail(
+  value: unknown,
+): { code: string; message: string; requestId?: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const row = value as Record<string, unknown>;
+  if (
+    typeof row.code !== "string" ||
+    row.code.length === 0 ||
+    typeof row.message !== "string"
+  )
+    return;
+  return {
+    code: row.code,
+    message: row.message,
+    ...(typeof row.request_id === "string"
+      ? { requestId: row.request_id }
+      : {}),
+  };
 }
 /** Convert protocol metadata only; feature properties and audit detail remain exact JSON. */
 function decode(value: unknown, key = ""): unknown {
@@ -194,6 +231,22 @@ export function consoleClient(sid: string): ConsoleClient {
     const value = await request<
       Record<string, unknown> | Record<string, unknown>[]
     >("api", op, snake(input), sid, true);
+    if (
+      op === "publish" &&
+      !matchesPublicationReceipt(
+        value,
+        input.workspace,
+        input.expectedWorkspaceVersion,
+      )
+    ) {
+      throw new GeoLedgerError(
+        "invalid_response",
+        "Invalid publication receipt",
+        undefined,
+        undefined,
+        true,
+      );
+    }
     if (op === "features" && !Array.isArray(value)) {
       if (value.type === "Feature") {
         const { crs, revision, workspaceVersion, ...feature } = value;

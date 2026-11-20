@@ -36,7 +36,7 @@ async fn call(
 async fn passwords_sessions_keys_and_transport_invalidation() -> TestResult {
     let dir = common::tempdir()?;
     let app = Application::new(Storage::Sqlite(dir.path().join("auth.db")));
-    app.migrate()?;
+    app.initialize()?;
     assert!(app.bootstrap_admin("Admin", INITIAL)?);
     let service = Service::new(app.clone());
     let router = geoledger_server::router(service.clone());
@@ -96,7 +96,7 @@ async fn passwords_sessions_keys_and_transport_invalidation() -> TestResult {
         &router,
         "create_api_key",
         Some(key_session),
-        json!({"name":"escalate"}),
+        json!({"name":"escalate","current_password":"incorrect-password"}),
     )
     .await?;
     assert_eq!(denied, 403);
@@ -108,7 +108,7 @@ async fn passwords_sessions_keys_and_transport_invalidation() -> TestResult {
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
             .await
     });
-    let client = geoledger_client::Client::connect(endpoint, api_key).await?;
+    let client = geoledger_client::Client::connect(endpoint, api_key, Default::default()).await?;
     assert!(client.info().await?.platform_admin);
     client.create_project("authenticated project").await?;
     let (status, _) = call(
@@ -136,7 +136,7 @@ async fn passwords_sessions_keys_and_transport_invalidation() -> TestResult {
 async fn login_rate_limit_and_duplicate_headers() -> TestResult {
     let dir = common::tempdir()?;
     let app = Application::new(Storage::Sqlite(dir.path().join("auth.db")));
-    app.migrate()?;
+    app.initialize()?;
     let router = geoledger_server::router(Service::new(app));
     let mut accepted = 0;
     for index in 0..200 {
@@ -175,7 +175,7 @@ async fn password_limits_normalize_names_and_isolate_accounts_at_one_peer() -> T
     let dir = common::tempdir()?;
     let path = dir.path().join("password-peer.db");
     let app = Application::new(Storage::Sqlite(path.clone()));
-    app.migrate()?;
+    app.initialize()?;
     app.bootstrap_admin("admin", INITIAL)?;
     for index in 0..20 {
         common::seed(
@@ -266,7 +266,7 @@ async fn sensitive_limits_isolate_users_sharing_one_console_peer() -> TestResult
     let dir = common::tempdir()?;
     let path = dir.path().join("shared-peer.db");
     let app = Application::new(Storage::Sqlite(path.clone()));
-    app.migrate()?;
+    app.initialize()?;
     let second_key = format!("glk_{}", "b".repeat(64));
     common::seed(
         &path,

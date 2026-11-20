@@ -2,7 +2,7 @@
 //! No database content or remote request controls the library path.
 use parking_lot::{RwLock, RwLockReadGuard};
 use rusqlite::{Connection as SqliteConnection, LoadExtensionGuard, Result};
-use std::{ops::Deref, path::Path};
+use std::{ffi::c_int, ops::Deref, path::Path};
 
 // SpatiaLite 5.1 calls libxml2's process-global xmlCleanupParser from its
 // per-connection destructor. That routine cannot overlap another native call.
@@ -22,11 +22,12 @@ static LIFECYCLE: RwLock<()> = RwLock::new(());
 /// Native ownership remains inside this wrapper; a mutable access guard must
 /// never allow a safe caller to replace the loaded connection.
 ///
-/// ```compile_fail,E0599
+/// ```compile_fail,E0596
 /// use geoledger_spatialite::Connection;
 /// fn move_native_out(connection: &mut Connection) -> rusqlite::Result<rusqlite::Connection> {
 ///     let replacement = rusqlite::Connection::open_in_memory()?;
-///     Ok(std::mem::replace(&mut *connection.write()?, replacement))
+///     let mut access = connection.read()?;
+///     Ok(std::mem::replace(&mut *access, replacement))
 /// }
 /// ```
 pub struct Connection {
@@ -52,6 +53,33 @@ impl Connection {
             connection: self.inner.as_ref().ok_or(rusqlite::Error::InvalidQuery)?,
             _native: native,
         })
+    }
+
+    /// Configure cancellation without exposing mutable native ownership.
+    /// A callback returning true interrupts the query; num_ops below 1 disables it.
+    pub fn progress_handler<F>(&mut self, num_ops: c_int, handler: Option<F>) -> Result<()>
+    where
+        F: FnMut() -> bool + Send + 'static,
+    {
+        let _native = LIFECYCLE.read_recursive();
+        self.inner
+            .as_mut()
+            .ok_or(rusqlite::Error::InvalidQuery)?
+            .progress_handler(num_ops, handler)
+    }
+
+    /// Configure statement authorization while retaining native connection ownership.
+    pub fn authorizer<F>(&mut self, handler: Option<F>) -> Result<()>
+    where
+        F: for<'r> FnMut(rusqlite::hooks::AuthContext<'r>) -> rusqlite::hooks::Authorization
+            + Send
+            + 'static,
+    {
+        let _native = LIFECYCLE.read_recursive();
+        self.inner
+            .as_mut()
+            .ok_or(rusqlite::Error::InvalidQuery)?
+            .authorizer(handler)
     }
 }
 impl Drop for Connection {
@@ -200,6 +228,49 @@ mod tests {
         assert_eq!(kind, "blob");
         assert_eq!(srid, 4326);
         assert_eq!(z, 123.45678901234567);
+        Ok(())
+    }
+
+    #[test]
+    fn progress_cancellation_can_be_cleared_before_rollback_and_close() -> Result<()> {
+        let mut connection = load_configured(SqliteConnection::open_in_memory()?)?;
+        connection.read()?.execute_batch(
+            "CREATE TABLE cancellation_probe(value INTEGER); BEGIN; INSERT INTO cancellation_probe VALUES(1);",
+        )?;
+        connection.progress_handler(1, Some(|| true))?;
+        let error = connection
+            .read()?
+            .query_row::<i64, _, _>(
+                "WITH RECURSIVE numbers(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM numbers WHERE value<1000) SELECT sum(value) FROM numbers",
+                [],
+                |row| row.get(0),
+            )
+            .err();
+        assert!(error.is_some_and(|e| {
+            e.sqlite_error_code() == Some(rusqlite::ErrorCode::OperationInterrupted)
+        }));
+        connection.progress_handler(0, None::<fn() -> bool>)?;
+        {
+            let access = connection.read()?;
+            if !access.is_autocommit() {
+                access.execute_batch("ROLLBACK")?;
+            }
+            assert_eq!(
+                access.query_row("SELECT count(*) FROM cancellation_probe", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                0
+            );
+            loading_disabled(&access);
+        }
+        drop(connection);
+        let next = load_configured(SqliteConnection::open_in_memory()?)?;
+        let version = next
+            .read()?
+            .query_row("SELECT spatialite_version()", [], |row| {
+                row.get::<_, String>(0)
+            })?;
+        assert!(!version.is_empty());
         Ok(())
     }
 

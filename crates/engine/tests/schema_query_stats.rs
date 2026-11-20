@@ -16,7 +16,7 @@ fn postgis_save_schema_query_counts_are_request_scoped() {
     db.batch_execute("CREATE EXTENSION pg_stat_statements")
         .unwrap();
     let app = Application::new(Storage::Postgis(dsn));
-    app.migrate().unwrap();
+    app.initialize().unwrap();
     let actor = uuid::Uuid::new_v4().to_string();
     let project = app
         .execute(

@@ -51,7 +51,7 @@ func failure(err error) error {
 	s := status.Convert(err)
 	uncertain := false
 	switch s.Code() {
-	case codes.Canceled, codes.Unknown, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Internal, codes.Unavailable, codes.DataLoss:
+	case codes.Canceled, codes.Unknown, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Internal, codes.Unavailable, codes.DataLoss, codes.OutOfRange:
 		uncertain = true
 	}
 	code := "unavailable"
@@ -64,28 +64,42 @@ func failure(err error) error {
 		code = "not_found"
 	case codes.Aborted, codes.AlreadyExists, codes.FailedPrecondition:
 		code = "conflict"
-	case codes.InvalidArgument, codes.OutOfRange:
+	case codes.InvalidArgument:
 		code = "invalid_argument"
 	case codes.DeadlineExceeded:
-		code = "timeout"
+		code = "deadline_exceeded"
 	case codes.Canceled:
 		code = "cancelled"
-	case codes.ResourceExhausted:
+	case codes.ResourceExhausted, codes.OutOfRange:
 		code = "resource_exhausted"
 	}
 	result := &Error{Code: code, Message: s.Message(), Uncertain: uncertain}
-	for _, item := range s.Details() {
-		if detail, ok := item.(*pb.ErrorDetail); ok {
-			result.Code = detail.Code
-			result.Message = detail.Message
-			result.RequestID = detail.RequestId
-			if detail.Conflicts != nil {
-				var conflicts Conflicts
-				if decode(detail.Conflicts, &conflicts) == nil {
-					result.Conflicts = &conflicts
-				}
+	// grpc-go validates RpcStatus.code against the header status before exposing
+	// this proto. Only a current, nonempty business detail is authoritative.
+	for _, item := range s.Proto().Details {
+		if item.TypeUrl != "type.googleapis.com/geoledger.v1.ErrorDetail" {
+			continue
+		}
+		detail := new(pb.ErrorDetail)
+		if proto.Unmarshal(item.Value, detail) != nil || detail.Code == "" {
+			continue
+		}
+		result.Code = detail.Code
+		result.Message = detail.Message
+		result.RequestID = detail.RequestId
+		if detail.Code == "workspace_version_conflict" && (s.Code() != codes.Aborted || strings.TrimSpace(detail.Message) == "" || strings.TrimSpace(detail.RequestId) == "" || detail.Conflicts != nil) {
+			result.Uncertain = true
+		}
+		if detail.Conflicts != nil {
+			var conflicts Conflicts
+			if decode(detail.Conflicts, &conflicts) == nil {
+				result.Conflicts = &conflicts
 			}
 		}
+		return result
+	}
+	if s.Code() == codes.Aborted || s.Code() == codes.AlreadyExists || s.Code() == codes.FailedPrecondition {
+		result.Uncertain = true
 	}
 	return result
 }
@@ -522,6 +536,9 @@ func (c *Client) Audit(ctx context.Context, project string, after, n int64) (Aud
 func (c *Client) Publish(ctx context.Context, intent Publication) (PublicationResult, error) {
 	var r PublicationResult
 	e := call(c, ctx, c.rpc.Publish, &pb.PublishRequest{Project: intent.Project, Workspace: intent.Workspace, ExpectedWorkspaceVersion: intent.ExpectedWorkspaceVersion, RequestId: intent.RequestID, Message: intent.Message}, &r)
+	if e == nil && (r.Workspace != intent.Workspace || r.Status != "published" || r.Revision <= 0 || intent.ExpectedWorkspaceVersion < 0 || intent.ExpectedWorkspaceVersion == math.MaxInt64 || r.Version != intent.ExpectedWorkspaceVersion+1) {
+		return PublicationResult{}, &Error{Code: "invalid_response", Message: "invalid publication receipt received from server", Uncertain: true}
+	}
 	return r, e
 }
 func (c *Client) Restore(ctx context.Context, project string, revision int64) (*Workspace, error) {

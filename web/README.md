@@ -6,6 +6,16 @@ GeoLedger Console 提供空间数据的协作管理界面：项目与数据集�
 
 桌面与手机操作见 [控制台教程](../docs/console.md)。[浏览器验证](../docs/development.md#控制台浏览器验证) 可生成登录页、项目页和手机布局截图，输出到 `--screenshots` 指定目录。
 
+## 当前接口与发布恢复
+
+控制台需要与当前版本的 GeoLedger 服务同步升级。认证操作逐项校验 JSON 字段；未知字段、缺少必填值和类型错误返回 `invalid_argument`。更新 API Key 时，省略 `expires_at` 保留原到期时间，显式 `null` 清除到期时间。
+
+源表明确拒绝某次发布时，服务返回 HTTP 400 / `publication_attempt_rejected`，本次结果为 `uncertain=false`。首次发布被拒绝后可以在同一工作区保存修正。若此前已有超时、断链或丢响应的发布，当前拒绝不能终结以前的尝试；控制台继续保留原请求 ID、草稿版本与说明，锁定编辑，并通过原请求确认回执。普通合并冲突依赖当前 HEAD，不能终结以前的未知尝试；只有当前可信业务回复的 `workspace_version_conflict` 能证明原 expected version 永久失效并释放待确认状态。没有有效当前错误详情的 409 始终保守处理。不要手工清除 `gl.publication` 来放弃未知结果。
+
+恢复时若原请求反复遇到合并冲突，应保留其全部字段，通过独立的当前工作区句柄检查并执行原子的 save、resolve 或 rebase，以明确推进工作区版本；然后再次提交原请求，取得已提交回执或永久版本冲突证明，最后刷新原句柄再进行新编辑。这一操作没有自动放弃或取消未知发布。
+
+BFF 只读取当前引擎的 `{error:{code,message,request_id}}` 错误 envelope。代理的空、HTML 或文本错误仍保留 HTTP 状态与保守的发布恢复语义。超时业务码统一为 `deadline_exceeded`；取消、消息或响应预算等故障不能据此假定写入没有完成。
+
 ## 获取代码
 
 按照 [仓库克隆说明](../README.md#获取代码) 获取完整仓库。以下命令均从仓库根目录执行；`web/` 通过本地包依赖使用 `sdk/ts`。

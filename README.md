@@ -6,7 +6,7 @@ GeoLedger 是空间要素的版本管理与协作编辑服务。团队用项目�
 
 仓库包含 Rust 服务端 `geoledger-server`、远程命令行工具 `gl`、Web 控制台，以及 Rust、Go、TypeScript / Node.js 和 Python SDK。服务端管理 SQLite + SpatiaLite 或 PostGIS 中的数据，HTTP 与 gRPC 入口调用同一个业务引擎。
 
-当前源码版本为 `0.3.0-alpha.9`，存储格式为 19，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。
+当前源码版本为 `0.4.0-alpha.1`，存储格式为 19，分别定义于 [Cargo.toml](Cargo.toml) 和 [engine](crates/engine/src/lib.rs)。 本次版本收紧 Rust API 与 JSON/错误契约，升级前阅读 [0.4 迁移说明](docs/migration-0.4.md)。
 
 自建数据集在创建时就拥有独立的物理表和空间索引；同一数据库中的道路、建筑、兴趣点等数据各自存储，版本与发布保持事务一致。
 
@@ -37,11 +37,11 @@ cd geoledger
 
 | 场景 | 工具与依赖 |
 |---|---|
-| Rust 构建 | Rust 1.88+、Cargo、protoc、C 工具链和 CMake；Linux/macOS 还需 pkg-config 与 OpenSSL 开发库。CI 的常规 Rust 检查使用 1.92.0。 |
+| Rust 构建 | Rust 1.89+、Cargo、protoc、C 工具链和 CMake；Linux/macOS 还需 pkg-config 与 OpenSSL 开发库。CI 的常规 Rust 检查使用 1.92.0。 |
 | SQLite 服务 | SpatiaLite 原生扩展及其依赖；`GL_SPATIALITE_EXTENSION` 可指定扩展路径。仓库 Dockerfile 包含对应运行环境。 |
 | PostGIS 服务 | 启用 PostGIS 扩展的 PostgreSQL 数据库及服务账号。 |
 | Web 与 TypeScript SDK | Node.js 22 与 npm。 |
-| Go SDK | Go 1.27.3+，见 [go.mod](sdk/go/go.mod)。 |
+| Go SDK | Go 1.27.4+，见 [go.mod](sdk/go/go.mod)。 |
 | Python SDK | Python 3.10+，见 [pyproject.toml](sdk/python/pyproject.toml)。 |
 | 仓库检查 | Python 3.11+、Bash、rustfmt、Clippy；浏览器验证使用 Python Playwright 和可启用沙箱的 Chromium/Chrome。 |
 | 容器运行 | Docker、Docker Compose，以及用于生成会话密钥的 OpenSSL。 |

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestRegisterTablePreservesCreateDatasetWireContract(t *testing.T) {
@@ -165,5 +166,180 @@ func TestSchemaCollectionsMarshalAsEmptyArrays(t *testing.T) {
 	raw, err = json.Marshal(diff)
 	if err != nil || !strings.Contains(string(raw), `"before":[]`) || !strings.Contains(string(raw), `"after":[]`) {
 		t.Fatalf("schema change arrays became null: %s %v", raw, err)
+	}
+}
+
+func TestTransportDeadlineAndRangeErrorsKeepCanonicalCodesAndUncertainty(t *testing.T) {
+	for _, test := range []struct {
+		status codes.Code
+		code   string
+	}{
+		{codes.DeadlineExceeded, "deadline_exceeded"},
+		{codes.OutOfRange, "resource_exhausted"},
+	} {
+		requireBusinessError(t, failure(status.Error(test.status, "transport failure")), test.code, true)
+		detailed, err := status.New(test.status, "transport failure").WithDetails(&pb.ErrorDetail{
+			Code: "business_range", Message: "business rejection", RequestId: "request",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireBusinessError(t, failure(detailed.Err()), "business_range", true)
+	}
+}
+
+func TestUndetailedConflictFamilyCannotClaimWorkspaceVersionProof(t *testing.T) {
+	for _, code := range []codes.Code{codes.Aborted, codes.AlreadyExists, codes.FailedPrecondition} {
+		for _, kind := range []string{"absent", "malformed", "empty code", "wrong type"} {
+			t.Run(code.String()+"/"+kind, func(t *testing.T) {
+				envelope := status.New(code, "proxy rejection").Proto()
+				if kind != "absent" {
+					detail := &pb.ErrorDetail{Code: "workspace_version_conflict", Message: "not a trusted detail", RequestId: "request"}
+					if kind == "empty code" {
+						detail.Code = ""
+					}
+					value, err := proto.Marshal(detail)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if kind == "malformed" {
+						value = []byte{255}
+					}
+					typeURL := "type.googleapis.com/geoledger.v1.ErrorDetail"
+					if kind == "wrong type" {
+						typeURL = "type.invalid/geoledger.v1.ErrorDetail"
+					}
+					envelope.Details = []*anypb.Any{{TypeUrl: typeURL, Value: value}}
+				}
+				rpc := &contractRPC{publishError: status.Error(codes.Unavailable, "original request is queued")}
+				w := draftWith(rpc)
+				ctx := context.Background()
+				if _, err := w.Publish(ctx, "original"); err == nil {
+					t.Fatal("expected unknown")
+				}
+				original := *w.PendingPublication()
+				rpc.publishError = status.FromProto(envelope).Err()
+				_, err := w.Publish(ctx, "original")
+				requireBusinessError(t, err, "conflict", true)
+				if pending := w.PendingPublication(); pending == nil || *pending != original {
+					t.Fatal("proxy error lost original intent")
+				}
+				if _, err = w.Delete(ctx, "dataset", "one"); err == nil {
+					t.Fatal("proxy error enabled edits")
+				}
+				if _, err = w.Publish(ctx, "original"); err != nil {
+					t.Fatal(err)
+				}
+				for _, request := range rpc.publications {
+					if !proto.Equal(request, rpc.publications[0]) {
+						t.Fatal("recovery changed intent")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestWorkspaceVersionProofRequiresItsExactTransportAndDetail(t *testing.T) {
+	cases := []struct {
+		name      string
+		status    codes.Code
+		message   string
+		requestID string
+		conflicts *pb.ConflictsReply
+		valid     bool
+	}{
+		{"valid", codes.Aborted, "workspace version changed", "proof", nil, true},
+		{"permission denied", codes.PermissionDenied, "workspace version changed", "proof", nil, false},
+		{"invalid argument", codes.InvalidArgument, "workspace version changed", "proof", nil, false},
+		{"already exists", codes.AlreadyExists, "workspace version changed", "proof", nil, false},
+		{"failed precondition", codes.FailedPrecondition, "workspace version changed", "proof", nil, false},
+		{"unavailable", codes.Unavailable, "workspace version changed", "proof", nil, false},
+		{"empty message", codes.Aborted, "", "proof", nil, false},
+		{"blank message", codes.Aborted, " \t", "proof", nil, false},
+		{"empty request", codes.Aborted, "workspace version changed", "", nil, false},
+		{"blank request", codes.Aborted, "workspace version changed", " \t", nil, false},
+		{"merge metadata", codes.Aborted, "workspace version changed", "proof", &pb.ConflictsReply{}, false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			s, err := status.New(test.status, "public failure").WithDetails(&pb.ErrorDetail{Code: "workspace_version_conflict", Message: test.message, RequestId: test.requestID, Conflicts: test.conflicts})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireBusinessError(t, failure(s.Err()), "workspace_version_conflict", !test.valid)
+			rpc := &contractRPC{publishError: status.Error(codes.Unavailable, "original request remains queued")}
+			w := draftWith(rpc)
+			ctx := context.Background()
+			if _, err = w.Publish(ctx, "original"); err == nil {
+				t.Fatal("expected unknown outcome")
+			}
+			original := *w.PendingPublication()
+			rpc.publishError = s.Err()
+			_, err = w.Publish(ctx, "original")
+			requireBusinessError(t, err, "workspace_version_conflict", !test.valid)
+			if test.valid {
+				if w.PendingPublication() != nil {
+					t.Fatal("valid version proof retained intent")
+				}
+			} else if pending := w.PendingPublication(); pending == nil || *pending != original {
+				t.Fatal("incomplete or mismatched proof discarded unknown intent")
+			}
+		})
+	}
+}
+
+type publicationReplyRPC struct {
+	pb.GeoLedgerClient
+	reply    *pb.PublishReply
+	requests []*pb.PublishRequest
+}
+
+func (s *publicationReplyRPC) Publish(_ context.Context, request *pb.PublishRequest, _ ...grpc.CallOption) (*pb.PublishReply, error) {
+	s.requests = append(s.requests, proto.Clone(request).(*pb.PublishRequest))
+	return s.reply, nil
+}
+
+func TestInvalidPublicationReceiptRetainsIntentUntilAnExactReceipt(t *testing.T) {
+	valid := &pb.PublishReply{Revision: 2, Version: 5, Workspace: "draft", Status: "published", Changes: 0}
+	for _, test := range []struct {
+		name  string
+		reply *pb.PublishReply
+	}{
+		{"empty", &pb.PublishReply{}},
+		{"wrong workspace", &pb.PublishReply{Revision: 2, Version: 5, Workspace: "other", Status: "published"}},
+		{"wrong version", &pb.PublishReply{Revision: 2, Version: 4, Workspace: "draft", Status: "published"}},
+		{"wrong status", &pb.PublishReply{Revision: 2, Version: 5, Workspace: "draft", Status: "open"}},
+		{"zero revision", &pb.PublishReply{Revision: 0, Version: 5, Workspace: "draft", Status: "published"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rpc := &publicationReplyRPC{reply: test.reply}
+			w := &Workspace{client: &Client{rpc: rpc}, project: "project", info: WorkspaceInfo{ID: "draft", BaseRevision: 1, Version: 4, Status: "open"}}
+			ctx := context.Background()
+			_, err := w.Publish(ctx, "original")
+			requireBusinessError(t, err, "invalid_response", true)
+			pending := w.PendingPublication()
+			if pending == nil || w.Info().Version != 4 || w.Info().Status != "open" {
+				t.Fatal("invalid receipt lost original state")
+			}
+			original := *pending
+			if _, err = w.Delete(ctx, "dataset", "one"); err == nil {
+				t.Fatal("invalid receipt permitted edits")
+			}
+			rpc.reply = valid
+			result, err := w.Publish(ctx, "original")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Changes != 0 || result.Version != 5 || w.Info().Status != "published" {
+				t.Fatal("valid zero-change receipt was rejected")
+			}
+			if len(rpc.requests) != 2 || !proto.Equal(rpc.requests[0], rpc.requests[1]) {
+				t.Fatal("receipt recovery changed original intent")
+			}
+			if current := w.PendingPublication(); current == nil || *current != original {
+				t.Fatal("successful receipt changed retained intent")
+			}
+		})
 	}
 }

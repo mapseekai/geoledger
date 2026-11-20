@@ -3,9 +3,9 @@ members = ["crates/spatialite", "crates/core", "crates/engine", "crates/server",
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0-alpha.9"
+version = "0.4.0-alpha.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT"
 
 [workspace.dependencies]
@@ -15,7 +15,7 @@ serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 thiserror = "2"
 blake3 = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+time = { version = "0.3.55", features = ["parsing"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 

@@ -21,9 +21,9 @@ const TOKEN: &str = "glk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 fn service(db: &std::path::Path, limits: Limits) -> Result<Service, BoxError> {
     let app = Application::new(Storage::Sqlite(db.to_owned()));
-    app.migrate()?;
+    app.initialize()?;
     common::seed(db, &[("ops", TOKEN, true)])?;
-    Ok(Service::new(app).with_limits(limits))
+    Ok(Service::new_with_limits(app, limits))
 }
 async fn send(
     router: &axum::Router,

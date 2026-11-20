@@ -108,19 +108,28 @@ def _error(error):
     codes = {_grpc.StatusCode.UNAUTHENTICATED: "unauthenticated", _grpc.StatusCode.PERMISSION_DENIED: "permission_denied",
              _grpc.StatusCode.NOT_FOUND: "not_found", _grpc.StatusCode.ABORTED: "conflict", _grpc.StatusCode.ALREADY_EXISTS: "conflict",
              _grpc.StatusCode.FAILED_PRECONDITION: "conflict", _grpc.StatusCode.INVALID_ARGUMENT: "invalid_argument",
-             _grpc.StatusCode.OUT_OF_RANGE: "invalid_argument", _grpc.StatusCode.DEADLINE_EXCEEDED: "timeout",
+             _grpc.StatusCode.OUT_OF_RANGE: "resource_exhausted", _grpc.StatusCode.DEADLINE_EXCEEDED: "deadline_exceeded",
              _grpc.StatusCode.CANCELLED: "cancelled", _grpc.StatusCode.RESOURCE_EXHAUSTED: "resource_exhausted"}
     uncertain = error.code() in (_grpc.StatusCode.DEADLINE_EXCEEDED, _grpc.StatusCode.CANCELLED, _grpc.StatusCode.UNAVAILABLE,
-                                _grpc.StatusCode.UNKNOWN, _grpc.StatusCode.INTERNAL, _grpc.StatusCode.DATA_LOSS, _grpc.StatusCode.RESOURCE_EXHAUSTED)
+                                _grpc.StatusCode.UNKNOWN, _grpc.StatusCode.INTERNAL, _grpc.StatusCode.DATA_LOSS, _grpc.StatusCode.RESOURCE_EXHAUSTED, _grpc.StatusCode.OUT_OF_RANGE)
     try:
         for key, value in error.trailing_metadata() or []:
             if key == "grpc-status-details-bin":
-                for item in _pb.RpcStatus.FromString(value).details:
+                envelope = _pb.RpcStatus.FromString(value)
+                if envelope.code != error.code().value[0]:
+                    raise ValueError("mismatched RPC status")
+                for item in envelope.details:
                     if item.type_url == "type.googleapis.com/geoledger.v1.ErrorDetail":
                         detail = _decode(_pb.ErrorDetail.FromString(item.value))
-                        return GeoLedgerError(detail["code"], detail["message"], request_id=detail["request_id"], conflicts=detail["conflicts"], uncertain=uncertain)
+                        if not detail["code"]:
+                            raise ValueError("missing business error code")
+                        business_uncertain = uncertain or (detail["code"] == "workspace_version_conflict" and
+                            (error.code() != _grpc.StatusCode.ABORTED or not detail["message"].strip() or
+                             not detail["request_id"].strip() or detail["conflicts"] is not None))
+                        return GeoLedgerError(detail["code"], detail["message"], request_id=detail["request_id"], conflicts=detail["conflicts"], uncertain=business_uncertain)
     except Exception:
         pass  # Malformed optional metadata must not hide the original failure.
+    uncertain = uncertain or error.code() in (_grpc.StatusCode.ABORTED, _grpc.StatusCode.ALREADY_EXISTS, _grpc.StatusCode.FAILED_PRECONDITION)
     return GeoLedgerError(codes.get(error.code(), "unavailable"), error.details() or "request failed", uncertain=uncertain)
 
 _REQUESTS = {"RenameProject": "RenameProjectRequest", "RenameDataset": "RenameDatasetRequest", "DeleteDataset": "DeleteDatasetRequest", "Info": "Empty", "CreateProject": "NameRequest", "ListProjects": "PageRequest", "GetProject": "ProjectRequest",
@@ -298,7 +307,14 @@ class Client:
 
     def publish(self, publication: Publication) -> dict[str, Any]:
         """Retry a persisted publication without changing its identity or payload."""
-        return self._call("Publish", **asdict(publication))
+        intent = asdict(publication)
+        result = self._call("Publish", **intent)
+        expected = intent["expected_workspace_version"]
+        if (result["workspace"] != intent["workspace"] or result["status"] != "published" or
+            result["revision"] <= 0 or not 0 <= expected < 9223372036854775807 or
+            result["version"] != expected + 1 or result["changes"] < 0):
+            raise GeoLedgerError("invalid_response", "invalid publication receipt received from server", uncertain=True)
+        return result
 
     def restore(self, project: str, revision: int) -> Workspace:
         return Workspace(self, project, WorkspaceInfo(**self._call("Restore", project=project, revision=revision)))
@@ -385,7 +401,9 @@ class Workspace:
             try:
                 return self._update(self._client.publish(self._pending))
             except GeoLedgerError as e:
-                if not e.uncertain and (not was_pending or e.code not in ("unauthenticated", "permission_denied", "not_found")):
+                # Only a permanent workspace-version rejection can settle a
+                # previously unknown request; HEAD-dependent conflicts cannot.
+                if not e.uncertain and (not was_pending or e.code == "workspace_version_conflict"):
                     self._pending = None
                 raise
 

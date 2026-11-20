@@ -226,7 +226,7 @@ fn check_imported(app: &Application, seed: &Seed, expected: &DataSummary) -> Tes
 fn sqlite_export_import_round_trip_preserves_everything() -> TestResult {
     let dir = tempfile::tempdir()?;
     let source = Application::new(Storage::Sqlite(dir.path().join("source.sqlite3")));
-    source.migrate()?;
+    source.initialize()?;
     let seed = seed(&source)?;
     bulk(&source, &seed)?;
     let (bytes, summary) = export(&source)?;
@@ -286,7 +286,7 @@ fn sqlite_export_import_round_trip_preserves_everything() -> TestResult {
 fn sqlite_export_import_preserves_dataset_and_project_page_boundaries() -> TestResult {
     let dir = tempfile::tempdir()?;
     let source = Application::new(Storage::Sqlite(dir.path().join("source.sqlite3")));
-    source.migrate()?;
+    source.initialize()?;
     let mut datasets = Vec::new();
     for name in ["first", "second"] {
         let project = source.execute("alice", "create_project", json!({"name":name}))?["project"]
@@ -377,7 +377,7 @@ fn sqlite_export_import_preserves_dataset_and_project_page_boundaries() -> TestR
 fn damaged_exports_are_rejected_without_partial_writes() -> TestResult {
     let dir = tempfile::tempdir()?;
     let source = Application::new(Storage::Sqlite(dir.path().join("source.sqlite3")));
-    source.migrate()?;
+    source.initialize()?;
     seed(&source)?;
     let (bytes, summary) = export(&source)?;
     let text = String::from_utf8(bytes.clone())?;
@@ -422,7 +422,7 @@ fn sqlite_online_backup_is_consistent_and_verified() -> TestResult {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("live.sqlite3");
     let app = Application::new(Storage::Sqlite(path));
-    app.migrate()?;
+    app.initialize()?;
     seed(&app)?;
     let target = dir.path().join("backup.sqlite3");
     app.backup(&target)?;
@@ -433,7 +433,7 @@ fn sqlite_online_backup_is_consistent_and_verified() -> TestResult {
     );
     Application::verify_sqlite_file(&target, std::time::Duration::from_secs(10))?;
     let restored = Application::new(Storage::Sqlite(target));
-    restored.migrate()?;
+    restored.initialize()?;
     assert_eq!(restored.data_summary()?, app.data_summary()?);
     #[cfg(unix)]
     {
@@ -474,7 +474,7 @@ fn postgis_and_sqlite_exchange_exports_both_ways() -> TestResult {
         drop(db);
         let dir = tempfile::tempdir()?;
         let sqlite = Application::new(Storage::Sqlite(dir.path().join("source.sqlite3")));
-        sqlite.migrate()?;
+        sqlite.initialize()?;
         let seed = seed(&sqlite)?;
         bulk(&sqlite, &seed)?;
         let (bytes, summary) = export(&sqlite)?;

@@ -181,8 +181,8 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y cmake protobuf-compiler pkg-config libssl-dev libsqlite3-mod-spatialite
-          rustup toolchain install 1.88.0 --profile minimal
-          cargo +1.88.0 check --workspace --all-targets --locked
+          rustup toolchain install 1.89.0 --profile minimal
+          cargo +1.89.0 check --workspace --all-targets --locked
   windows:
     needs: source
     runs-on: windows-2022

@@ -35,10 +35,13 @@ async fn main() -> Result<(), Failure> {
         .ok_or("usage: large_data FILE [REPORT]")?;
     let report_path = std::env::args().nth(2).ok_or("report path required")?;
     let api_key = std::fs::read_to_string(std::env::var("GL_API_KEY_FILE")?)?;
-    let client = Client::connect_with_timeout(
+    let client = Client::connect(
         std::env::var("GL_ENDPOINT")?,
         api_key.trim(),
-        Duration::from_secs(600),
+        geoledger_client::ConnectOptions {
+            timeout: Duration::from_secs(600),
+            ..Default::default()
+        },
     )
     .await?;
     let started = Instant::now();

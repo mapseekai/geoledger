@@ -7,7 +7,7 @@ fn sqlite_lock_deadline_rolls_back_and_restart_retains_committed_data()
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("state.db");
     let app = Application::new(Storage::Sqlite(path.clone()));
-    app.migrate()?;
+    app.initialize()?;
     let p =
         app.execute("alice", "create_project", json!({"name":"persistent"}))?["project"].clone();
     let blocker = rusqlite::Connection::open(&path)?;
@@ -24,7 +24,7 @@ fn sqlite_lock_deadline_rolls_back_and_restart_retains_committed_data()
     blocker.execute_batch("ROLLBACK")?;
     drop(app);
     let reopened = Application::new(Storage::Sqlite(path));
-    reopened.migrate()?;
+    reopened.initialize()?;
     let projects = reopened.execute("alice", "list_projects", json!({}))?;
     assert_eq!(projects.as_array().ok_or("projects")?.len(), 1);
     assert_eq!(projects[0]["project"], p);
@@ -36,7 +36,7 @@ fn sqlite_commit_failure_preserves_atomic_history_and_original_request_can_retry
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("state.db");
     let app = Application::new(Storage::Sqlite(path.clone()));
-    app.migrate()?;
+    app.initialize()?;
     let p = app.execute("alice", "create_project", json!({"name":"atomic"}))?["project"].clone();
     let d = app.execute(
         "alice",
@@ -98,9 +98,9 @@ fn sqlite_lock_wait_does_not_hold_native_lifecycle_across_databases()
     let dir = tempfile::tempdir()?;
     let locked_path = dir.path().join("locked.sqlite3");
     let waiting = Application::new(Storage::Sqlite(locked_path.clone()));
-    waiting.migrate()?;
+    waiting.initialize()?;
     let independent = Application::new(Storage::Sqlite(dir.path().join("independent.sqlite3")));
-    independent.migrate()?;
+    independent.initialize()?;
     let blocker = rusqlite::Connection::open(&locked_path)?;
     blocker.execute_batch("BEGIN IMMEDIATE")?;
     let (started_tx, started_rx) = std::sync::mpsc::channel();

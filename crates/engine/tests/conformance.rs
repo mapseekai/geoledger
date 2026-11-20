@@ -9,6 +9,94 @@ use uuid::Uuid;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn a_future_open_workspace_version_is_not_a_permanent_publication_fence() -> TestResult {
+    let f = Fixture::new()?;
+    let w = f.ws(&f.alice);
+    let request = json!({"workspace":w,"expected_workspace_version":1,"request_id":Uuid::new_v4().to_string(),"message":"future version"});
+    let early = f.call(&f.alice, "publish", request.clone()).unwrap_err();
+    assert_eq!(early.status, 409);
+    assert_eq!(early.body["error"]["code"], "conflict");
+    f.save(&f.alice, &w, 0, json!({"value":1}), Value::Null)?;
+    let receipt = f.call(&f.alice, "publish", request.clone())?;
+    assert_eq!(receipt["version"], 2);
+    assert_eq!(receipt, f.call(&f.alice, "publish", request)?);
+    let closed = f.call(&f.alice, "publish", json!({"workspace":w,"expected_workspace_version":10,"request_id":Uuid::new_v4().to_string(),"message":"closed"})).unwrap_err();
+    assert_eq!(closed.body["error"]["code"], "workspace_version_conflict");
+    Ok(())
+}
+
+#[test]
+fn edit_context_preserves_raw_drafts_and_distinguishes_deleted_from_untouched() -> TestResult {
+    let f = Fixture::new()?;
+    let seed = f.ws(&f.alice);
+    let remove = |workspace: &str, version: i64| {
+        f.call(&f.alice, "save", json!({"workspace":workspace,"expected_workspace_version":version,"edits":[{"dataset":f.d,"feature_id":"one","feature":null}]}))
+    };
+    // No base and no draft: deleting a missing feature must remain a no-op delta.
+    assert_eq!(remove(&seed, 0)?["changes"], 0);
+    let hidden = geoledger_engine::parse_json(
+        br#"{"integer":18446744073709551615,"decimal":0.12345678901234567890123456789}"#,
+    )?;
+    let baseline = json!({"keep":0,"hidden":hidden});
+    f.save(&f.alice, &seed, 1, baseline.clone(), Value::Null)?;
+    f.publish(&f.alice, &seed, 2)?;
+
+    let workspace = f.ws(&f.alice);
+    let schema = |version: i64, edits: Value| {
+        f.call(&f.alice, "save", json!({"workspace":workspace,"expected_workspace_version":version,"schema_edits":edits}))
+    };
+    let drop_hidden = json!([{"dataset":f.d,"drop":["hidden"]}]);
+    // An untouched feature borrows hidden values from its original base.
+    f.call(&f.alice, "save", json!({"workspace":workspace,"expected_workspace_version":0,"schema_edits":drop_hidden,"edits":[f.edit("one",json!({"keep":1}),Value::Null)]}))?;
+    assert!(
+        f.get(&f.alice, Some(&workspace))["properties"]
+            .get("hidden")
+            .is_none()
+    );
+    schema(1, json!([]))?;
+    assert_eq!(
+        f.get(&f.alice, Some(&workspace))["properties"]["hidden"],
+        hidden
+    );
+
+    // A later projected save must retain the raw draft value, not replace it with the base.
+    let edited_hidden = json!({"integer":9007199254740993_u64,"source":"draft"});
+    f.save(
+        &f.alice,
+        &workspace,
+        2,
+        json!({"keep":2,"hidden":edited_hidden}),
+        Value::Null,
+    )?;
+    schema(3, drop_hidden.clone())?;
+    f.save(&f.alice, &workspace, 4, json!({"keep":3}), Value::Null)?;
+    schema(5, json!([]))?;
+    assert_eq!(
+        f.get(&f.alice, Some(&workspace))["properties"]["hidden"],
+        edited_hidden
+    );
+
+    // A deletion is an existing draft: recreating under a drop must not revive base values.
+    remove(&workspace, 6)?;
+    schema(7, drop_hidden)?;
+    f.save(&f.alice, &workspace, 8, json!({"keep":4}), Value::Null)?;
+    schema(9, json!([]))?;
+    assert_eq!(
+        f.get(&f.alice, Some(&workspace))["properties"],
+        json!({"keep":4})
+    );
+
+    // Restoring the exact base removes the unpinned delta, including its large JSON numbers.
+    assert_eq!(
+        f.save(&f.alice, &workspace, 10, baseline.clone(), Value::Null)?["changes"],
+        0
+    );
+    assert_eq!(f.get(&f.alice, Some(&workspace))["properties"], baseline);
+    assert_eq!(f.publish(&f.alice, &workspace, 11)?["changes"], 0);
+    Ok(())
+}
+
+#[test]
 fn large_feature_save_publish_merge_and_history_have_no_16k_limit() -> TestResult {
     let f = Fixture::new()?;
     let seed = f.ws(&f.alice);
@@ -465,8 +553,8 @@ impl Fixture {
             Storage::Sqlite(dir.path().join("geoledger.db"))
         };
         let app = Application::new(storage);
-        app.migrate()?;
-        app.migrate()?;
+        app.initialize()?;
+        app.initialize()?;
         let alice = Uuid::new_v4().to_string();
         let bob = Uuid::new_v4().to_string();
         let viewer = Uuid::new_v4().to_string();

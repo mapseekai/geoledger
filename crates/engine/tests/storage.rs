@@ -12,7 +12,7 @@ fn scenario(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 fn inner(app: &Application) -> Result<(), Box<dyn std::error::Error>> {
-    app.migrate()?;
+    app.initialize()?;
     let p = app.execute("alice", "create_project", json!({"name":"conformance"}))?["project"]
         .as_str()
         .ok_or("project")?
@@ -217,7 +217,7 @@ fn deletion_rolls_back_with_audit_and_purges_storage_atomically()
     let dir = tempfile::tempdir()?;
     let db = dir.path().join("purge.sqlite3");
     let app = Application::new(Storage::Sqlite(db.clone()));
-    app.migrate()?;
+    app.initialize()?;
     let p = app.execute("alice", "create_project", json!({"name":"purge"}))?["project"]
         .as_str()
         .ok_or("project")?

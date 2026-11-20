@@ -3,7 +3,12 @@ use serde_json::json;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let api_key = std::fs::read_to_string(std::env::var("GL_API_KEY_FILE")?)?;
-    let client = Client::connect(std::env::var("GL_ENDPOINT")?, api_key.trim()).await?;
+    let client = Client::connect(
+        std::env::var("GL_ENDPOINT")?,
+        api_key.trim(),
+        Default::default(),
+    )
+    .await?;
     let member_id = std::env::var("GL_TEST_MEMBER_ID")?;
     let project = client
         .create_project(&format!("rust-{}", uuid::Uuid::new_v4()))
@@ -15,7 +20,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     assert_eq!(dataset.crs, "EPSG:3857");
     let feature = json!({"type":"Feature","id":"one","properties":{"exact":18446744073709551615u64,"nested":{"geojson":"hello"},"detail_json":"plain"},"geometry":{"type":"Point","coordinates":[500000,3500000,3]}});
     assert_eq!(draft.save(&dataset.id, feature.clone()).await?.version, 1);
+    let mut stale = client.workspace(&project.id, draft.id()).await?;
     assert_eq!(draft.save(&dataset.id, feature.clone()).await?.version, 2);
+    let stale_error = stale
+        .publish("stale workspace version")
+        .await
+        .err()
+        .ok_or("stale workspace accepted")?;
+    assert_eq!(stale_error.code, "workspace_version_conflict");
+    assert!(!stale_error.uncertain);
+    assert!(stale.pending_publication().is_none());
     assert_eq!(
         draft
             .features(&dataset.id, FeatureQuery::default())
@@ -84,6 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .await
         .err()
         .ok_or("mismatch accepted")?;
+    // Receipt-payload mismatch is a generic conflict, not a workspace-version proof.
     assert_eq!(error.code, "conflict");
     assert!(!error.uncertain);
     assert_eq!(

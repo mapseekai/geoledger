@@ -47,6 +47,17 @@ for path,payload in [('/api/auth',{'action':'me'}),('/api/console',{'action':'pr
     b.call(path,payload,403,origin='https://invalid.example')
 b.call('/api/session',{},403,origin='https://invalid.example',method='DELETE')
 assert b.auth('me')['id']==user_id
+# Current authentication shapes reject unknown fields before forwarding a write.
+keys_before=b.auth('list_api_keys')
+for action, fields in [
+    ('me', {'extra': True}),
+    ('list_users', {'current_password': admin['password']}),
+    ('create_api_key', {'name': 'rejected-shape', 'current_password': admin['password'], 'extra': True}),
+    ('update_user', {'user_id': user_id, 'current_password': admin['password'], 'is_admin': 'false'}),
+]:
+    rejected=b.auth(action,400,**fields)
+    assert rejected['error']['code']=='invalid_argument'
+assert b.auth('list_api_keys')==keys_before
 b.call('/api/console',{'action':'projects'},400,headers={'Authorization':'Bearer invalid'})
 b.call('/api/console',{'action':'projects'},401,headers={'Cookie':'gl_session=invalid; gl_session=invalid2'})
 
@@ -104,7 +115,8 @@ issued=b.auth('create_api_key',name='source-session-test',current_password=admin
 assert isinstance(issued['api_key'],str) and issued['api_key'].startswith('glk_')
 assert 'digest' not in issued['credential']
 key_browser=Browser();key_browser.call('/api/session',{'api_key':issued['api_key']})
-key_browser.auth('create_api_key',403,name='requires-password')
+key_browser.auth('create_api_key',400,name='requires-password')
+key_browser.auth('create_api_key',403,name='requires-password',current_password='incorrect-password')
 b.auth('revoke_api_key',key_id=issued['credential']['id'],current_password=admin['password'])
 key_browser.business('projects',401)
 b.auth('delete_api_key',key_id=issued['credential']['id'],current_password=admin['password'])

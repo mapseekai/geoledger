@@ -16,7 +16,7 @@ fn fresh_initialization_process() -> TestResult {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     let app = Application::new(Storage::Sqlite(path.into()));
-    app.migrate()?;
+    app.initialize()?;
     app.bootstrap_admin("admin", "fresh-process-test-password")?;
     Ok(())
 }
@@ -59,10 +59,10 @@ fn initialization_preserves_current_data() -> TestResult {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("current.db");
     let app = Application::new(Storage::Sqlite(path.clone()));
-    app.migrate()?;
+    app.initialize()?;
     let project =
         app.execute("alice", "create_project", json!({"name":"roads"}))?["project"].clone();
-    app.migrate()?;
+    app.initialize()?;
     app.check_schema()?;
     assert_eq!(
         app.execute("alice", "get_project", json!({"project":project}))?["state"],
@@ -86,7 +86,7 @@ fn other_formats_are_rejected_without_modifying_data() -> TestResult {
         db.execute("INSERT INTO gl_format VALUES(true, ?1)", [version])?;
         let app = Application::new(Storage::Sqlite(path));
         assert_eq!(
-            app.migrate()
+            app.initialize()
                 .err()
                 .ok_or("unexpected format accepted")?
                 .status,

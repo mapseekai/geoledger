@@ -19,7 +19,7 @@ impl Fixture {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("auth.db");
         let app = Application::new(Storage::Sqlite(path.clone()));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("Admin", INITIAL)?;
         let first = app.auth_operation(
             None,
@@ -43,7 +43,9 @@ impl Fixture {
         })
     }
     fn call(&self, op: &str, mut input: Value) -> geoledger_engine::Result<Value> {
-        input["current_password"] = json!(PASSWORD);
+        if !matches!(op, "me" | "logout" | "list_users" | "list_api_keys") {
+            input["current_password"] = json!(PASSWORD);
+        }
         self.app.auth_operation(Some(&self.admin), op, input)
     }
     fn user(
@@ -417,7 +419,7 @@ fn concurrent_bootstrap_and_last_admin_are_serialized() -> TestResult {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("bootstrap.db");
     let app = Application::new(Storage::Sqlite(path.clone()));
-    app.migrate()?;
+    app.initialize()?;
     let barrier = Arc::new(Barrier::new(4));
     let mut tasks = vec![];
     for _ in 0..4 {
@@ -645,7 +647,7 @@ fn postgis_source_session_touch_and_key_delete_have_one_lock_order() -> TestResu
     db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis")?;
     let result = (|| -> TestResult {
         let app = Application::new(Storage::Postgis(target.clone()));
-        app.migrate()?;
+        app.initialize()?;
         app.bootstrap_admin("admin", INITIAL)?;
         let first = app.auth_operation(
             None,
@@ -667,8 +669,17 @@ fn postgis_source_session_touch_and_key_delete_have_one_lock_order() -> TestResu
         let key_id = key["credential"]["id"].as_str().ok_or("key id")?;
         let login = app.auth_operation(None, "login_api_key", json!({"api_key":key["api_key"]}))?;
         let session = login["session"].as_str().ok_or("session")?.to_owned();
-        let stamp = (chrono::Utc::now() - chrono::Duration::minutes(6))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let before = time::OffsetDateTime::now_utc() - time::Duration::minutes(6);
+        let stamp = format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+            before.year(),
+            u8::from(before.month()),
+            before.day(),
+            before.hour(),
+            before.minute(),
+            before.second(),
+            before.millisecond()
+        );
         db.execute(
             "UPDATE gl_api_keys SET last_used_at=$1 WHERE id=$2",
             &[&stamp, &key_id],
@@ -739,7 +750,7 @@ fn postgis_authentication_parity_and_atomicity() -> TestResult {
     db.batch_execute("CREATE EXTENSION IF NOT EXISTS postgis")?;
     let result = (|| -> TestResult {
         let app = Application::new(Storage::Postgis(target.clone()));
-        app.migrate()?;
+        app.initialize()?;
         let barrier = Arc::new(Barrier::new(4));
         let mut threads = vec![];
         for _ in 0..4 {
@@ -770,7 +781,9 @@ fn postgis_authentication_parity_and_atomicity() -> TestResult {
         )?;
         let admin = app.authenticate_session(login["session"].as_str().ok_or("session")?)?;
         let call = |op: &str, mut input: Value| {
-            input["current_password"] = json!(PASSWORD);
+            if !matches!(op, "me" | "logout" | "list_users" | "list_api_keys") {
+                input["current_password"] = json!(PASSWORD);
+            }
             app.auth_operation(Some(&admin), op, input)
         };
         let key = call("create_api_key", json!({"name":"postgis"}))?;
@@ -910,5 +923,50 @@ fn user_listing_pages_public_fields_and_uses_status_index() -> TestResult {
     assert_eq!(all[0].as_object().ok_or("user")?.len(), 7);
     let plan: String = db.query_row("EXPLAIN QUERY PLAN SELECT id,username,display_name,status,is_admin,must_change_password,created_at FROM gl_users WHERE status=?3 AND id>?1 ORDER BY id LIMIT ?2", rusqlite::params!["",1,"disabled"], |r| r.get(3))?;
     assert!(plan.contains("gl_users_status_id"), "{plan}");
+    Ok(())
+}
+
+#[test]
+fn auth_input_shape_errors_do_not_write_credentials_or_audit() -> TestResult {
+    let f = Fixture::new()?;
+    let db = rusqlite::Connection::open(&f.path)?;
+    let snapshot = || -> Result<Vec<i64>, rusqlite::Error> {
+        ["gl_users", "gl_api_keys", "gl_sessions", "gl_auth_audit"]
+            .iter()
+            .map(|table| {
+                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+            })
+            .collect()
+    };
+    let before = snapshot()?;
+    for (operation, input) in [
+        (
+            "create_user",
+            json!({"current_password":PASSWORD,"username":"rejected","password":INITIAL,"typo":true}),
+        ),
+        (
+            "create_api_key",
+            json!({"current_password":PASSWORD,"name":"rejected","typo":true}),
+        ),
+        (
+            "update_user",
+            json!({"current_password":PASSWORD,"user_id":f.admin.user.id,"is_admin":"false"}),
+        ),
+        ("list_users", json!({"current_password":PASSWORD})),
+        ("me", json!({"typo":true})),
+        ("create_api_key", json!({"name":"missing password"})),
+    ] {
+        let error = f
+            .app
+            .auth_operation(Some(&f.admin), operation, input)
+            .err()
+            .ok_or("invalid auth request was accepted")?;
+        assert_eq!(error.status, 400, "{operation}");
+        assert_eq!(error.body["error"]["code"], "invalid_argument");
+        assert_eq!(snapshot()?, before, "{operation}");
+    }
+    assert_eq!(f.call("list_api_keys", json!({}))?, json!([]));
     Ok(())
 }
