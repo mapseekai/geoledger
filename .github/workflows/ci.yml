@@ -60,7 +60,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: sdk/go/go.mod
           cache-dependency-path: sdk/go/go.sum
@@ -192,7 +192,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@06da6279cdbca41027908073e81a4544dc79c06b
+      - uses: actions/setup-python@5043d30437de73e5e7500b5c41676e0c30aa54f2
         with:
           python-version: '3.12'
       - name: Spatial runtime (checksum-pinned, isolated)
@@ -232,7 +232,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           # Audit using the exact patched toolchain required by the module.
           go-version-file: sdk/go/go.mod
