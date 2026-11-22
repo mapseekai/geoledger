@@ -81,7 +81,7 @@ func failure(err error) error {
 			continue
 		}
 		detail := new(pb.ErrorDetail)
-		if proto.Unmarshal(item.Value, detail) != nil || detail.Code == "" {
+		if proto.Unmarshal(item.Value, detail) != nil || strings.TrimSpace(detail.Code) == "" {
 			continue
 		}
 		result.Code = detail.Code

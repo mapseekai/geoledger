@@ -115,17 +115,12 @@ impl WorkspaceRepository for SqlTransaction {
             .transpose()?
             .flatten();
         let draft = self.query_opt(&format!("SELECT properties,geometry_json,resolved_head IS NOT NULL FROM {} WHERE project=$1 AND workspace=$2 AND dataset=$3 AND feature_id=$4",self.workspace_key_table()), &[&project,&workspace,&dataset,&key])?;
-        let resolved = draft
-            .as_ref()
-            .map(|r| r.get::<_, bool>(2usize))
-            .transpose()?
-            .unwrap_or(false);
-        let draft = match draft {
-            None => DraftState::NoDraft,
-            Some(row) => match feature(&row)? {
-                None => DraftState::Deleted,
-                Some(value) => DraftState::Value(value),
-            },
+        let (resolved, draft) = match draft {
+            None => (false, DraftState::NoDraft),
+            Some(row) => (
+                row.get::<_, bool>(2usize)?,
+                feature(&row)?.map_or(DraftState::Deleted, DraftState::Value),
+            ),
         };
         Ok(EditContext {
             resolved,

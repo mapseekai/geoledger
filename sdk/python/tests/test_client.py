@@ -289,11 +289,12 @@ class ContractTests(unittest.TestCase):
 
     def test_conflict_family_requires_a_matching_current_business_detail(self):
         for status in (grpc.StatusCode.ABORTED, grpc.StatusCode.ALREADY_EXISTS, grpc.StatusCode.FAILED_PRECONDITION):
-            for kind in ("absent", "malformed", "mismatched", "empty code", "wrong type"):
+            for kind in ("absent", "malformed", "mismatched", "empty code", "blank code", "wrong type"):
                 with self.subTest(status=status, kind=kind):
                     metadata = []
                     if kind != "absent":
-                        detail = wire.ErrorDetail(code="" if kind == "empty code" else "workspace_version_conflict", message="not trusted", request_id="request")
+                        code = {"empty code": "", "blank code": " \t"}.get(kind, "workspace_version_conflict")
+                        detail = wire.ErrorDetail(code=code, message="not trusted", request_id="request")
                         envelope = wire.RpcStatus(code=14 if kind == "mismatched" else status.value[0], message="proxy rejection")
                         envelope.details.add(type_url="type.invalid/geoledger.v1.ErrorDetail" if kind == "wrong type" else "type.googleapis.com/geoledger.v1.ErrorDetail", value=detail.SerializeToString())
                         metadata = [("grpc-status-details-bin", b"\xff" if kind == "malformed" else envelope.SerializeToString())]

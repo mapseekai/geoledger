@@ -515,6 +515,7 @@ test("upstream 409 needs the current error envelope to provide a definite busine
       '{"code":"workspace_version_conflict","message":"old shape"}',
       '{"error":"old shape"}',
       '{"error":{"code":"","message":"empty code"}}',
+      '{"error":{"code":" \\t","message":"blank code"}}',
     ]) {
       globalThis.fetch = async () => new Response(raw, { status: 409 });
       await assert.rejects(
@@ -530,13 +531,14 @@ test("upstream 409 needs the current error envelope to provide a definite busine
     globalThis.fetch = async () =>
       new Response(
         '{"error":{"code":"workspace_version_conflict","message":"workspace version changed","request_id":"request"}}',
-        { status: 409 },
+        { status: 409, headers: { "x-request-id": "" } },
       );
     await assert.rejects(
       consoleClient("test-session").project("p"),
       (error) => {
         assert(error instanceof GeoLedgerError);
         assert.equal(error.code, "workspace_version_conflict");
+        assert.equal(error.requestId, "request");
         assert.equal(error.uncertain, false);
         return true;
       },

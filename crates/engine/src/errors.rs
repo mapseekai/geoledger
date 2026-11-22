@@ -72,8 +72,6 @@ impl Error {
             ]
             .contains(code)
         }) {
-            // This status settles this attempt only; clients must retain any
-            // earlier publication whose outcome is still unknown.
             self.status = 400;
             self.body["error"]["code"] = json!("publication_attempt_rejected");
             self.body["error"]["message"] =

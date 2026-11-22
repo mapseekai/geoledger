@@ -36,11 +36,7 @@ struct LoginApiKey {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Me {}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Logout {}
+struct EmptyInput {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,24 +162,13 @@ struct UpdateApiKey {
     dead_code,
     reason = "shape-only validation retains the original JSON and its field presence"
 )]
-struct RevokeApiKey {
-    current_password: String,
-    key_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-#[expect(
-    dead_code,
-    reason = "shape-only validation retains the original JSON and its field presence"
-)]
-struct DeleteApiKey {
+struct ApiKeyMutation {
     current_password: String,
     key_id: String,
 }
 
 fn shape<T: DeserializeOwned>(input: &Value) -> Result<()> {
-    serde_json::from_value::<T>(input.clone())
+    T::deserialize(input)
         .map(|_| ())
         .map_err(Error::invalid_json)
 }
@@ -195,8 +180,7 @@ pub(super) fn validate(operation: &str, input: &Value) -> Result<()> {
     match operation {
         "login_password" => shape::<LoginPassword>(input),
         "login_api_key" => shape::<LoginApiKey>(input),
-        "me" => shape::<Me>(input),
-        "logout" => shape::<Logout>(input),
+        "me" | "logout" => shape::<EmptyInput>(input),
         "list_users" => shape::<ListUsers>(input),
         "create_user" => shape::<CreateUser>(input),
         "update_user" => shape::<UpdateUser>(input),
@@ -205,8 +189,7 @@ pub(super) fn validate(operation: &str, input: &Value) -> Result<()> {
         "list_api_keys" => shape::<ListApiKeys>(input),
         "create_api_key" => shape::<CreateApiKey>(input),
         "update_api_key" => shape::<UpdateApiKey>(input),
-        "revoke_api_key" => shape::<RevokeApiKey>(input),
-        "delete_api_key" => shape::<DeleteApiKey>(input),
+        "revoke_api_key" | "delete_api_key" => shape::<ApiKeyMutation>(input),
         _ => Err(Error::new(400, "unknown authentication operation")),
     }
 }

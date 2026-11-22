@@ -121,7 +121,7 @@ def _error(error):
                 for item in envelope.details:
                     if item.type_url == "type.googleapis.com/geoledger.v1.ErrorDetail":
                         detail = _decode(_pb.ErrorDetail.FromString(item.value))
-                        if not detail["code"]:
+                        if not detail["code"].strip():
                             raise ValueError("missing business error code")
                         business_uncertain = uncertain or (detail["code"] == "workspace_version_conflict" and
                             (error.code() != _grpc.StatusCode.ABORTED or not detail["message"].strip() or
