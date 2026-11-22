@@ -22,12 +22,12 @@ Crate Rust sources are unmodified.
   lockfile even though the binaries did not build them. Only its manifest is
   patched; unrelated features are preserved.
 
-The server/CLI builds use the workspace patch, including in Docker. The
-separate fuzz workspace mirrors it explicitly. This is not a downstream
-crates.io patch.
+The server/CLI builds use the workspace patches, including in Docker. The
+separate fuzz workspace and the downstream API compile probes declare the
+same patches in their own manifests. The patches apply only to this repository.
 
 See [upstream tracking issue #273](https://github.com/georust/rstar/issues/273).
-Remove the backports, Docker copies, release license copy, and fuzz overrides
-together once published
-compatible dependencies resolve with Rust 1.89, old heapless versions are gone
-from the regenerated lockfiles, and the existing audit and CI pass.
+Remove the backports, Docker copies, release license copy, fuzz overrides,
+and downstream API probe overrides together once published compatible
+dependencies resolve with Rust 1.89, old heapless versions are gone from the
+regenerated lockfiles, and the existing audit and CI pass.
