@@ -76,7 +76,7 @@ function failure(error: ServiceError): GeoLedgerError {
       );
       if (detail) {
         const d = wire.ErrorDetail.decode(detail.value);
-        if (!d.code) throw new Error("Missing business error code");
+        if (!d.code.trim()) throw new Error("Missing business error code");
         return new GeoLedgerError(
           d.code,
           d.message,

@@ -450,11 +450,6 @@ impl Client {
         for key in ["edits", "resolutions"] {
             if let Some(edits) = value.get_mut(key).and_then(Value::as_array_mut) {
                 for edit in edits {
-                    if edit.get("feature").is_none() {
-                        return Err(Error::invalid(
-                            "edit requires an explicit feature; use null for deletion",
-                        ));
-                    }
                     if let Some(feature) = edit.get_mut("feature")
                         && !feature.is_null()
                     {
@@ -467,9 +462,6 @@ impl Client {
             && let Some(schema) = value.get_mut("schema_edits")
             && !schema.is_null()
         {
-            if !schema.is_array() {
-                return Err(Error::invalid("schema_edits must be an array"));
-            }
             let edits = schema.take();
             *schema = json!({"edits":edits});
         }

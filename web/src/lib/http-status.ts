@@ -1,3 +1,14 @@
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export function errorEnvelope(value: unknown) {
+  const body = object(value);
+  return { body, detail: object(body.error) };
+}
+
 /** Admission failures cannot settle the result of an earlier publication attempt. */
 export function uncertainStatus(status: number): boolean {
   return status === 0 || [408, 413, 429, 499].includes(status) || status >= 500;

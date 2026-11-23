@@ -190,13 +190,16 @@ func TestTransportDeadlineAndRangeErrorsKeepCanonicalCodesAndUncertainty(t *test
 
 func TestUndetailedConflictFamilyCannotClaimWorkspaceVersionProof(t *testing.T) {
 	for _, code := range []codes.Code{codes.Aborted, codes.AlreadyExists, codes.FailedPrecondition} {
-		for _, kind := range []string{"absent", "malformed", "empty code", "wrong type"} {
+		for _, kind := range []string{"absent", "malformed", "empty code", "blank code", "wrong type"} {
 			t.Run(code.String()+"/"+kind, func(t *testing.T) {
 				envelope := status.New(code, "proxy rejection").Proto()
 				if kind != "absent" {
 					detail := &pb.ErrorDetail{Code: "workspace_version_conflict", Message: "not a trusted detail", RequestId: "request"}
-					if kind == "empty code" {
+					switch kind {
+					case "empty code":
 						detail.Code = ""
+					case "blank code":
+						detail.Code = " \t"
 					}
 					value, err := proto.Marshal(detail)
 					if err != nil {

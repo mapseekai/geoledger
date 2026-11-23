@@ -134,6 +134,7 @@ test("bare or invalid 409 details cannot claim a permanent workspace rejection",
       '{"error":{"code":"workspace_version_conflict","message":"missing certainty"}}',
       '{"error":{"code":"workspace_version_conflict","message":"wrong certainty","uncertain":"false"}}',
       '{"error":{"code":"","message":"missing code","uncertain":false}}',
+      '{"error":{"code":" \\t","message":"blank code","uncertain":false}}',
     ]) {
       globalThis.fetch = async () => new Response(raw, { status: 409 });
       await assert.rejects(send("/api/console", "POST", {}), (error) => {

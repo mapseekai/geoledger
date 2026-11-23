@@ -473,7 +473,14 @@ test("conflict-family statuses require a matching current business detail", asyn
   const original = wire.GeoLedgerClient.prototype.publish;
   try {
     for (const status of [grpc.status.ABORTED, grpc.status.ALREADY_EXISTS, grpc.status.FAILED_PRECONDITION]) {
-      for (const kind of ["absent", "malformed", "mismatched", "empty code", "wrong type"]) {
+      for (const [kind, detailCode = "workspace_version_conflict"] of [
+        ["absent"],
+        ["malformed"],
+        ["mismatched"],
+        ["empty code", ""],
+        ["blank code", " \t"],
+        ["wrong type"],
+      ]) {
         const metadata = new grpc.Metadata();
         if (kind !== "absent") {
           const raw = kind === "malformed" ? Buffer.from([255]) : Buffer.from(wire.RpcStatus.encode({
@@ -481,7 +488,7 @@ test("conflict-family statuses require a matching current business detail", asyn
             message: "proxy rejection",
             details: [{
               typeUrl: kind === "wrong type" ? "type.invalid/geoledger.v1.ErrorDetail" : "type.googleapis.com/geoledger.v1.ErrorDetail",
-              value: wire.ErrorDetail.encode({ code: kind === "empty code" ? "" : "workspace_version_conflict", message: "not trusted", requestId: "request" }).finish(),
+              value: wire.ErrorDetail.encode({ code: detailCode, message: "not trusted", requestId: "request" }).finish(),
             }],
           }).finish());
           metadata.set("grpc-status-details-bin", raw);

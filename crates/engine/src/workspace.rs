@@ -585,12 +585,12 @@ fn draft_delta(
         geometry: v.and_then(|x| x.geometry.clone()),
     })
 }
-fn stored_edit(value: Option<&repository::RawFeature>) -> Result<Option<Stored>> {
+fn stored_edit(value: Option<repository::RawFeature>) -> Result<Option<Stored>> {
     value
         .map(|value| {
             Ok(Stored {
                 properties: codec::stored(&value.properties)?,
-                geometry: value.geometry.clone(),
+                geometry: value.geometry,
             })
         })
         .transpose()
@@ -670,21 +670,23 @@ pub(super) fn save(
             let previous = if definition.dropped.is_empty() {
                 None
             } else {
-                match &context.draft {
-                    repository::DraftState::NoDraft => stored_edit(context.base.as_ref())?,
+                let raw = match &context.draft {
+                    repository::DraftState::NoDraft => context.base.as_ref(),
                     repository::DraftState::Deleted => None,
-                    repository::DraftState::Value(raw) => stored_edit(Some(raw))?,
-                }
+                    repository::DraftState::Value(raw) => Some(raw),
+                };
+                raw.map(|value| codec::stored::<Map<String, Value>>(&value.properties))
+                    .transpose()?
             };
             for name in &definition.dropped {
                 if !value.properties.contains_key(name)
-                    && let Some(old) = previous.as_ref().and_then(|p| p.properties.get(name))
+                    && let Some(old) = previous.as_ref().and_then(|p| p.get(name))
                 {
                     value.properties.insert(name.clone(), old.clone());
                 }
             }
         }
-        if !context.resolved && value == stored_edit(context.base.as_ref())? {
+        if !context.resolved && value == stored_edit(context.base)? {
             t.remove_delta(&r.project, &r.workspace, &e.dataset, &e.feature_id)?;
         } else {
             let delta = draft_delta(t, &r.project, &e.dataset, &e.feature_id, value.as_ref())?;

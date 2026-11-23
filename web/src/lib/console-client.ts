@@ -1,5 +1,5 @@
 import { invalidVersionProof, matchesPublicationReceipt } from "./publication";
-import { httpCode, uncertainStatus } from "./http-status";
+import { errorEnvelope, httpCode, uncertainStatus } from "./http-status";
 import type { Client, Edit, WorkspaceInfo } from "@geoledger/client";
 import { stringifyJson, GeoLedgerError } from "@geoledger/client";
 import { parseLosslessJson } from "./conflicts";
@@ -85,19 +85,19 @@ async function request<T>(
   );
   const raw = await response.text();
   if (!response.ok) {
-    let value: Record<string, unknown> = {};
+    let value: unknown;
     try {
-      const parsed = parseLosslessJson(raw);
-      if (parsed && typeof parsed === "object")
-        value = parsed as Record<string, unknown>;
+      value = parseLosslessJson(raw);
     } catch {
       // Proxies may reject admission with a plain-text response.
     }
-    const detail = errorDetail(value.error);
-    const rawDetail = (
-      value.error && typeof value.error === "object" ? value.error : {}
-    ) as Record<string, unknown>;
-    if (value.conflicts !== undefined && !detail)
+    const { body, detail } = errorEnvelope(value);
+    const { code, message, request_id: requestId, conflicts } = detail;
+    const currentDetail =
+      typeof code === "string" &&
+      code.trim() !== "" &&
+      typeof message === "string";
+    if (body.conflicts !== undefined && !currentDetail)
       throw new GeoLedgerError(
         "invalid_response",
         "Invalid business response",
@@ -107,22 +107,23 @@ async function request<T>(
       );
     throw Object.assign(
       new GeoLedgerError(
-        detail?.code ?? httpCode(response.status),
-        detail?.message ?? "请求失败",
-        response.headers.get("x-request-id") ?? detail?.requestId,
-        detail && value.conflicts !== undefined
-          ? decodeConflicts(decode(value))
+        currentDetail ? code : httpCode(response.status),
+        currentDetail ? message : "请求失败",
+        response.headers.get("x-request-id") ||
+          (currentDetail && typeof requestId === "string"
+            ? requestId
+            : undefined),
+        currentDetail && body.conflicts !== undefined
+          ? decodeConflicts(decode(body))
           : undefined,
         uncertainStatus(response.status) ||
-          (response.status === 409 && !detail) ||
+          (response.status === 409 && !currentDetail) ||
           invalidVersionProof(
             response.status,
-            rawDetail.code,
-            rawDetail.message,
-            rawDetail.request_id,
-            value.conflicts === undefined
-              ? rawDetail.conflicts
-              : value.conflicts,
+            code,
+            message,
+            requestId,
+            body.conflicts === undefined ? conflicts : body.conflicts,
           ),
       ),
       { status: response.status },
@@ -133,26 +134,6 @@ async function request<T>(
       ? validateBusinessResponse(operation, decode(parseLosslessJson(raw)))
       : JSON.parse(raw)
   ) as T;
-}
-/** Recognize the current engine envelope; unrelated HTTP bodies stay transport errors. */
-function errorDetail(
-  value: unknown,
-): { code: string; message: string; requestId?: string } | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const row = value as Record<string, unknown>;
-  if (
-    typeof row.code !== "string" ||
-    row.code.length === 0 ||
-    typeof row.message !== "string"
-  )
-    return;
-  return {
-    code: row.code,
-    message: row.message,
-    ...(typeof row.request_id === "string"
-      ? { requestId: row.request_id }
-      : {}),
-  };
 }
 /** Convert protocol metadata only; feature properties and audit detail remain exact JSON. */
 function decode(value: unknown, key = ""): unknown {

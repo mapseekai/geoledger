@@ -1,5 +1,5 @@
 import { invalidVersionProof, matchesPublicationReceipt } from "./publication";
-import { uncertainStatus } from "./http-status";
+import { errorEnvelope, uncertainStatus } from "./http-status";
 import { stringify } from "lossless-json";
 import { parseLosslessJson } from "./conflicts";
 import { featureItemsUrl } from "./feature-links";
@@ -14,6 +14,48 @@ export class ApiError extends Error {
     super(message);
   }
 }
+async function readError(response: Response): Promise<ApiError> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await response.text());
+  } catch {
+    // Gateways can return a non-JSON body or interrupt it.
+  }
+  const { body, detail } = errorEnvelope(value);
+  const { code, message, requestId, uncertain, conflicts } = detail;
+  const { status } = response;
+  const transportUncertain = uncertainStatus(status);
+  if (
+    typeof code !== "string" ||
+    !code.trim() ||
+    typeof message !== "string" ||
+    typeof uncertain !== "boolean"
+  ) {
+    return new ApiError(
+      "请求失败",
+      status,
+      transportUncertain ||
+        status === 409 ||
+        code === "workspace_version_conflict",
+    );
+  }
+  return new ApiError(
+    message,
+    status,
+    transportUncertain ||
+      uncertain ||
+      invalidVersionProof(
+        status,
+        code,
+        message,
+        requestId,
+        body.conflicts === undefined ? conflicts : body.conflicts,
+      ),
+    typeof requestId === "string" ? requestId : undefined,
+    code,
+  );
+}
+
 /** Caller cancellation preserves its reason; it does not imply a write was rolled back. */
 export async function call<T>(
   payload: Record<string, unknown>,
@@ -52,54 +94,7 @@ export async function send<T>(
       ) {
         window.location.replace("/login?expired=1");
       }
-      let detail: Record<string, unknown> = {};
-      let currentDetail = false;
-      let invalidProof = false;
-      try {
-        const value: unknown = JSON.parse(await response.text());
-        if (value && typeof value === "object" && !Array.isArray(value)) {
-          const candidate = (value as Record<string, unknown>).error;
-          if (
-            candidate &&
-            typeof candidate === "object" &&
-            !Array.isArray(candidate)
-          ) {
-            const row = candidate as Record<string, unknown>;
-            const outer = value as Record<string, unknown>;
-            invalidProof =
-              invalidVersionProof(
-                response.status,
-                row.code,
-                row.message,
-                row.requestId,
-                outer.conflicts === undefined ? row.conflicts : outer.conflicts,
-              ) ||
-              (row.code === "workspace_version_conflict" &&
-                typeof row.uncertain !== "boolean");
-            if (
-              typeof row.code === "string" &&
-              row.code.length > 0 &&
-              typeof row.message === "string" &&
-              typeof row.uncertain === "boolean"
-            ) {
-              detail = row;
-              currentDetail = true;
-            }
-          }
-        }
-      } catch {
-        // Gateway bodies may be empty, non-JSON or interrupted; the HTTP status is still known.
-      }
-      throw new ApiError(
-        typeof detail.message === "string" ? detail.message : "请求失败",
-        response.status,
-        detail.uncertain === true ||
-          uncertainStatus(response.status) ||
-          (response.status === 409 && !currentDetail) ||
-          invalidProof,
-        typeof detail.requestId === "string" ? detail.requestId : undefined,
-        typeof detail.code === "string" ? detail.code : undefined,
-      );
+      throw await readError(response);
     }
     const raw = await response.text();
     requestSignal.throwIfAborted();
