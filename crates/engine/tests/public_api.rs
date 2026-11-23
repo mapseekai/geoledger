@@ -1,4 +1,32 @@
 //! Compile a downstream default dependency separately from dev-feature unification.
+use std::path::Path;
+
+fn write_probe_manifest(dir: &Path, name: &str, engine: &Path) -> std::io::Result<()> {
+    let vendor = engine.join("../../vendor");
+    let rstar = vendor.join("rstar-0.12.2");
+    let geo_types = vendor.join("geo-types-0.7.20");
+    // Each probe is a separate workspace and needs the same Cargo patches.
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "{name}"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+geoledger-engine = {{ path = {engine:?} }}
+
+[patch.crates-io]
+rstar = {{ path = {rstar:?} }}
+geo-types = {{ path = {geo_types:?} }}
+"#
+        ),
+    )
+}
+
 #[test]
 fn default_build_has_no_subject_execution_entry() -> Result<(), Box<dyn std::error::Error>> {
     let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -6,13 +34,7 @@ fn default_build_has_no_subject_execution_entry() -> Result<(), Box<dyn std::err
     std::fs::create_dir_all(&root)?;
     let dir = tempfile::tempdir_in(&root)?;
     std::fs::create_dir(dir.path().join("src"))?;
-    std::fs::write(
-        dir.path().join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"default-api-probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\ngeoledger-engine = {{ path = {:?} }}\n",
-            engine
-        ),
-    )?;
+    write_probe_manifest(dir.path(), "default-api-probe", engine)?;
     let source = dir.path().join("src/main.rs");
     let check = || {
         std::process::Command::new(env!("CARGO"))
@@ -65,13 +87,7 @@ fn downstream_backend_must_implement_schema_and_key_only_feature_probes()
     std::fs::create_dir_all(&root)?;
     let dir = tempfile::tempdir_in(&root)?;
     std::fs::create_dir(dir.path().join("src"))?;
-    std::fs::write(
-        dir.path().join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"backend-api-probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\ngeoledger-engine = {{ path = {:?} }}\n",
-            engine
-        ),
-    )?;
+    write_probe_manifest(dir.path(), "backend-api-probe", engine)?;
     std::fs::write(
         dir.path().join("src/main.rs"),
         "mod backend; fn main() { let backend = std::sync::Arc::new(backend::SchemaLessBackend::default()); let _ = backend.modes(); let _ = geoledger_engine::Application::with_backend(backend); }",
